@@ -67,7 +67,7 @@ with tabs[2]:
         difficulty=st.selectbox("난이도",["기본","적당히 어려움","어려움"],index=1)
         circuit_policy=st.selectbox("회로 문제",["완전 제외","최대한 제외","허용"],index=1)
         seed=st.number_input("랜덤 시드(재현용)",min_value=0,value=20260829,step=1)
-    st.caption("기본값은 '적당히 어려움 + 회로 최대한 제외'입니다. 4점은 최소 2단계 사고를 요구하고, 계산형은 약 25%로 제한하며, 목차·제목 맞히기형 문항은 제외합니다.")
+    st.caption("기본값은 '적당히 어려움 + 회로 최대한 제외'입니다. 계산형은 섹션당 약 20%로 제한합니다. 4점은 실제 임용형 자료·작성방법 구조를 우선하고, AI가 실패하면 원문 검증형 4점 문항으로 자동 대체하여 전체 생성이 중단되지 않게 했습니다.")
     key=api_key()
     if use_ai and not key:
         st.warning("OPENAI_API_KEY가 없어 이번 생성은 AI 없이 안전모드로 동작합니다.")
@@ -82,7 +82,8 @@ with tabs[2]:
                 b_stats=B.get("generation_stats",{})
                 st.caption(
                     f"생성 통계 · 계산형 {a_stats.get('formula_questions',0)+b_stats.get('formula_questions',0)}문항 · "
-                    f"AI 호출 {a_stats.get('ai_calls',0)+b_stats.get('ai_calls',0)}회"
+                    f"AI 호출 {a_stats.get('ai_calls',0)+b_stats.get('ai_calls',0)}회 · "
+                    f"안전 폴백 {a_stats.get('safe_fallbacks',0)+b_stats.get('safe_fallbacks',0)}문항"
                 )
             except Exception as e:
                 st.error(str(e))
