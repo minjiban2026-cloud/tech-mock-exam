@@ -1,0 +1,217 @@
+{
+  "db": {
+    "sources": 27,
+    "pages": 2137,
+    "anchors": 1322
+  },
+  "anchors_by_domain": [
+    [
+      "건설기술",
+      121
+    ],
+    [
+      "기술교육론",
+      113
+    ],
+    [
+      "발명",
+      4
+    ],
+    [
+      "생명기술",
+      87
+    ],
+    [
+      "수송기술",
+      221
+    ],
+    [
+      "재료역학",
+      48
+    ],
+    [
+      "전기·전자",
+      191
+    ],
+    [
+      "제조기술",
+      277
+    ],
+    [
+      "통신기술",
+      260
+    ]
+  ],
+  "A": {
+    "count": 12,
+    "points": 40
+  },
+  "B": {
+    "count": 11,
+    "points": 40
+  },
+  "sources": [
+    {
+      "name": "[건설기술] 기출 문제 풀이_이진혁 (1).pdf",
+      "kind": "past_exam",
+      "domain": "건설기술",
+      "pages": 70
+    },
+    {
+      "name": "[기술교육론] 기출 문제 풀이_이진혁.pdf",
+      "kind": "past_exam",
+      "domain": "기술교육론",
+      "pages": 164
+    },
+    {
+      "name": "[생명기술] 기출 문제 풀이_이진혁.pdf",
+      "kind": "past_exam",
+      "domain": "생명기술",
+      "pages": 54
+    },
+    {
+      "name": "[수송기술] 기출 문제 풀이_이진혁 (1).pdf",
+      "kind": "past_exam",
+      "domain": "수송기술",
+      "pages": 98
+    },
+    {
+      "name": "[재료역학] 기출 문제 풀이_이진혁.pdf",
+      "kind": "past_exam",
+      "domain": "재료역학",
+      "pages": 41
+    },
+    {
+      "name": "[전기·전자] 기출 문제 풀이_이진혁 (1).pdf",
+      "kind": "past_exam",
+      "domain": "전기·전자",
+      "pages": 65
+    },
+    {
+      "name": "[제조기술] 기출 문제 풀이_이진혁.pdf",
+      "kind": "past_exam",
+      "domain": "제조기술",
+      "pages": 87
+    },
+    {
+      "name": "[통신기술] 기출 문제 풀이_이진혁.pdf",
+      "kind": "past_exam",
+      "domain": "통신기술",
+      "pages": 72
+    },
+    {
+      "name": "[모의고사] 2026학년도 중등 기술 임용 대비 4회 (문제) (1).pdf",
+      "kind": "style",
+      "domain": "스타일",
+      "pages": 16
+    },
+    {
+      "name": "[모의고사] 2026학년도 중등 기술 임용 대비 4회 (문제) (2).pdf",
+      "kind": "style",
+      "domain": "스타일",
+      "pages": 16
+    },
+    {
+      "name": "[모의고사] 2026학년도 중등 기술 임용 대비 5회 (문제) (1).pdf",
+      "kind": "style",
+      "domain": "스타일",
+      "pages": 16
+    },
+    {
+      "name": "[모의고사] 2026학년도 중등 기술 임용 대비 6회 (문제) (1).pdf",
+      "kind": "style",
+      "domain": "스타일",
+      "pages": 16
+    },
+    {
+      "name": "[모의고사] 2026학년도 중등 기술 임용 대비 7회 (문제) (1).pdf",
+      "kind": "style",
+      "domain": "스타일",
+      "pages": 16
+    },
+    {
+      "name": "[모의고사] 2026학년도 중등 기술 임용 대비 7회 (문제).pdf",
+      "kind": "style",
+      "domain": "스타일",
+      "pages": 16
+    },
+    {
+      "name": "[모의고사] 2026학년도 중등 기술 임용 대비 8회 (문제).pdf",
+      "kind": "style",
+      "domain": "스타일",
+      "pages": 16
+    },
+    {
+      "name": "건설기술 서브노트_조효준.pdf",
+      "kind": "subnote",
+      "domain": "건설기술",
+      "pages": 215
+    },
+    {
+      "name": "기술교육론 서브노트_강지현.pdf",
+      "kind": "subnote",
+      "domain": "기술교육론",
+      "pages": 191
+    },
+    {
+      "name": "생명 교과서 정리_jio_ning.pdf",
+      "kind": "subnote",
+      "domain": "생명기술",
+      "pages": 59
+    },
+    {
+      "name": "[역학] Part1 열역학 (1).pdf",
+      "kind": "subnote",
+      "domain": "수송기술",
+      "pages": 10
+    },
+    {
+      "name": "[역학] Part2 유체역학 (1).pdf",
+      "kind": "subnote",
+      "domain": "수송기술",
+      "pages": 2
+    },
+    {
+      "name": "자동차-에너지서브노트(효준) (2).pdf",
+      "kind": "subnote",
+      "domain": "수송기술",
+      "pages": 244
+    },
+    {
+      "name": "[역학] Part3 재료역학 (2).pdf",
+      "kind": "subnote",
+      "domain": "재료역학",
+      "pages": 12
+    },
+    {
+      "name": "전기전자 서브노트_김규식.pdf",
+      "kind": "subnote",
+      "domain": "전기·전자",
+      "pages": 93
+    },
+    {
+      "name": "제조기술 서브노트_조효준.pdf",
+      "kind": "subnote",
+      "domain": "제조기술",
+      "pages": 288
+    },
+    {
+      "name": "2026 기술임용 서브노트(정보통신)_김수호.pdf",
+      "kind": "subnote",
+      "domain": "통신기술",
+      "pages": 89
+    },
+    {
+      "name": "2026 기술임용 서브노트(정보통신)_손연진.pdf",
+      "kind": "subnote",
+      "domain": "통신기술",
+      "pages": 49
+    },
+    {
+      "name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+      "kind": "subnote",
+      "domain": "통신기술",
+      "pages": 122
+    }
+  ]
+}

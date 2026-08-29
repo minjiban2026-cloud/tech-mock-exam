@@ -1,0 +1,306 @@
+{
+  "exam_title": "기술 임용 모의고사 전공 A",
+  "section": "A",
+  "total_points": 40,
+  "questions": [
+    {
+      "domain": "통신기술",
+      "topic": "IPv4 단편화",
+      "points": 2,
+      "verifier": "python",
+      "intro": "다음은 IPv4 데이터그램이 MTU가 더 작은 네트워크를 통과하는 상황이다.",
+      "passage": "IPv4 데이터그램의 전체 길이는 5000 byte이고 헤더는 20 byte이다. 통과해야 하는 네트워크의 MTU는 1000 byte이다.",
+      "conditions": [
+        "각 단편에 IPv4 헤더 20 byte가 붙는다.",
+        "마지막 단편을 제외한 데이터 부분은 8 byte의 배수로 한다."
+      ],
+      "tasks": [
+        "생성되는 단편의 개수를 구할 것.",
+        "두 번째 단편의 Fragment Offset 값을 구할 것.",
+        "마지막 단편의 전체 길이[byte]를 구할 것."
+      ],
+      "answer": [
+        "6개",
+        "122",
+        "120 byte"
+      ],
+      "solution": [
+        "단편당 최대 데이터=976 byte, 원 데이터=4980 byte → 6개",
+        "두 번째 offset=976/8=122",
+        "마지막 데이터=100 byte, 전체=100+20=120 byte"
+      ],
+      "source_basis": "통신기술 기출/서브노트의 IPv4 단편화",
+      "fingerprint": "c7e0cbed6e7b85175b79",
+      "number": 1
+    },
+    {
+      "domain": "수송기술",
+      "topic": "정수압",
+      "points": 2,
+      "verifier": "python",
+      "intro": "다음은 정지한 물속 한 지점의 압력에 관한 자료이다.",
+      "passage": "물의 밀도는 1000 kg/m³, 중력가속도는 9.8 m/s²이다. 수면 아래 3 m 지점의 계기압력을 구하려 한다.",
+      "conditions": [
+        "대기압은 제외한다."
+      ],
+      "tasks": [
+        "정수압[Pa]을 풀이 과정과 함께 구할 것."
+      ],
+      "answer": [
+        "29400 Pa"
+      ],
+      "solution": [
+        "p=ρgh=1000×9.8×3=29400 Pa"
+      ],
+      "source_basis": "유체역학 서브노트의 정수압 p=ρgh",
+      "fingerprint": "4567c73e27d865a1b301",
+      "number": 2
+    },
+    {
+      "domain": "재료역학",
+      "topic": "훅의 법칙과 변형량",
+      "points": 4,
+      "verifier": "python",
+      "intro": "다음은 탄성영역에서 축방향 하중을 받는 봉에 관한 자료이다.",
+      "passage": "길이 200 mm, 단면적 200 mm², 탄성계수 100 GPa인 봉에 25 kN의 인장하중이 작용한다.",
+      "conditions": [
+        "σ=Eε의 관계가 성립하는 범위로 가정한다."
+      ],
+      "tasks": [
+        "봉의 수직응력[MPa]을 구할 것.",
+        "봉의 길이 방향 변형량[mm]을 풀이 과정과 함께 구할 것."
+      ],
+      "answer": [
+        "125 MPa",
+        "0.25 mm"
+      ],
+      "solution": [
+        "σ=P/A=25000/200=125 MPa",
+        "δ=PL/(AE)=25000×200/(200×100000)=0.25 mm"
+      ],
+      "source_basis": "재료역학 서브노트의 훅의 법칙과 δ=PL/AE",
+      "fingerprint": "cc971c4fa0879c407126",
+      "number": 3
+    },
+    {
+      "domain": "재료역학",
+      "topic": "스프링 병렬 연결",
+      "points": 4,
+      "verifier": "python",
+      "intro": "다음은 두 스프링으로 구성된 탄성계에 관한 자료이다.",
+      "passage": "스프링 상수 k₁=30 N/mm, k₂=30 N/mm인 두 스프링을 병렬로 연결하고 전체에 120 N의 하중을 가하였다.",
+      "conditions": [
+        "스프링은 선형 탄성범위에서 작동한다."
+      ],
+      "tasks": [
+        "등가 스프링 상수[N/mm]를 구할 것.",
+        "전체 변형량[mm]을 구할 것."
+      ],
+      "answer": [
+        "60 N/mm",
+        "2 mm"
+      ],
+      "solution": [
+        "k=k₁+k₂ → k=60 N/mm",
+        "δ=P/k=120/60=2 mm"
+      ],
+      "source_basis": "재료역학 서브노트의 스프링 직렬·병렬 합성",
+      "fingerprint": "0b4d1b3d5e6dafaf1292",
+      "number": 4
+    },
+    {
+      "domain": "건설기술",
+      "topic": "단위용적중량",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "- ㉠ : 1,500kg/m3",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "단위용적중량"
+      ],
+      "solution": [
+        "정답은 단위용적중량이다."
+      ],
+      "evidence": "- 단위용적중량 : 1,500kg/m3",
+      "source_name": "건설기술 서브노트_조효준.pdf",
+      "page_no": 96,
+      "source_basis": "건설기술 서브노트_조효준.pdf p.96",
+      "fingerprint": "bd560b370664cc494be4",
+      "number": 5
+    },
+    {
+      "domain": "발명",
+      "topic": "기술과발명",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "□㉠ \u0001 ∙ 아이디어의구상 \u0001 ∙ 발명기법과실제 □정보통신기술",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "기술과발명"
+      ],
+      "solution": [
+        "정답은 기술과발명이다."
+      ],
+      "evidence": "□기술과발명 \u0001 ∙ 아이디어의구상 \u0001 ∙ 발명기법과실제 □정보통신기술",
+      "source_name": "기술교육론 서브노트_강지현.pdf",
+      "page_no": 59,
+      "source_basis": "기술교육론 서브노트_강지현.pdf p.59",
+      "fingerprint": "8d931dd9d9c9c9938679",
+      "number": 6
+    },
+    {
+      "domain": "수송기술",
+      "topic": "화력 발전",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "- ㉠: 연소에 의한 화학에너지는 원자나 분자간의 결합에너지가 방출되어 물질핵자들의 배열만 변화",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "화력 발전"
+      ],
+      "solution": [
+        "정답은 화력 발전이다."
+      ],
+      "evidence": "- 화력 발전: 연소에 의한 화학에너지는 원자나 분자간의 결합에너지가 방출되어 물질핵자들의 배열만 변화",
+      "source_name": "자동차-에너지서브노트(효준) (2).pdf",
+      "page_no": 232,
+      "source_basis": "자동차-에너지서브노트(효준) (2).pdf p.232",
+      "fingerprint": "06b826576218ce03939e",
+      "number": 7
+    },
+    {
+      "domain": "통신기술",
+      "topic": "· 사설망",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "㉠ : 외부에 노출되지 않는 네트워크",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "· 사설망"
+      ],
+      "solution": [
+        "정답은 · 사설망이다."
+      ],
+      "evidence": "· 사설망 : 외부에 노출되지 않는 네트워크",
+      "source_name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+      "page_no": 52,
+      "source_basis": "2026 기술임용 서브노트(통신기술)_이성민.pdf p.52",
+      "fingerprint": "8ba732133cf4322b6665",
+      "number": 8
+    },
+    {
+      "domain": "발명",
+      "topic": "구성주의교수·학습환경요약",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "- ㉠:\u0001 구체적\u0001상황,\u0001 협동적\u0001학습환경,\u0001 문제해결력,\u0001 창조와\u0001구성,\u0001 학습과\u0001 통합된\u0001 다양한\u0001과정지향\u0001평가",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "구성주의교수·학습환경요약"
+      ],
+      "solution": [
+        "정답은 구성주의교수·학습환경요약이다."
+      ],
+      "evidence": "- 구성주의교수·학습환경요약:\u0001 구체적\u0001상황,\u0001 협동적\u0001학습환경,\u0001 문제해결력,\u0001 창조와\u0001구성,\u0001 학습과\u0001 통합된\u0001 다양한\u0001과정지향\u0001평가",
+      "source_name": "기술교육론 서브노트_강지현.pdf",
+      "page_no": 80,
+      "source_basis": "기술교육론 서브노트_강지현.pdf p.80",
+      "fingerprint": "9dea0fcf9a411b0d4ca4",
+      "number": 9
+    },
+    {
+      "domain": "전기·전자",
+      "topic": "· 위상차",
+      "points": 2,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "㉠ : 전류 I는 전압 V보다 위상이 90° 뒤진다",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "· 위상차"
+      ],
+      "solution": [
+        "정답은 · 위상차이다."
+      ],
+      "evidence": "· 위상차 : 전류 I는 전압 V보다 위상이 90° 뒤진다",
+      "source_name": "전기전자 서브노트_김규식.pdf",
+      "page_no": 29,
+      "source_basis": "전기전자 서브노트_김규식.pdf p.29",
+      "fingerprint": "790200fea4f33966a6db",
+      "number": 10
+    },
+    {
+      "domain": "제조기술",
+      "topic": "목적",
+      "points": 2,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "- ㉠: 중심거리를 자유로이 조절 / 이의강도개선 / 언더컷방지 / 물림룰 증가",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "목적"
+      ],
+      "solution": [
+        "정답은 목적이다."
+      ],
+      "evidence": "- 목적: 중심거리를 자유로이 조절 / 이의강도개선 / 언더컷방지 / 물림룰 증가",
+      "source_name": "제조기술 서브노트_조효준.pdf",
+      "page_no": 90,
+      "source_basis": "제조기술 서브노트_조효준.pdf p.90",
+      "fingerprint": "dee559012cf6db468912",
+      "number": 11
+    },
+    {
+      "domain": "전기·전자",
+      "topic": "· 응용",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "㉠ : 스캐너, 물체 측정, 레이저 가공 및 용접 등",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "· 응용"
+      ],
+      "solution": [
+        "정답은 · 응용이다."
+      ],
+      "evidence": "· 응용 : 스캐너, 물체 측정, 레이저 가공 및 용접 등",
+      "source_name": "전기전자 서브노트_김규식.pdf",
+      "page_no": 73,
+      "source_basis": "전기전자 서브노트_김규식.pdf p.73",
+      "fingerprint": "4d0d7ca62c9463192eb4",
+      "number": 12
+    }
+  ],
+  "verified": true,
+  "verification_note": "계산형은 Python 정답, 개념형은 원문 evidence/source/page 자동검증 통과"
+}

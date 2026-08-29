@@ -1,0 +1,282 @@
+{
+  "exam_title": "기술 임용 모의고사 전공 B",
+  "section": "B",
+  "total_points": 40,
+  "questions": [
+    {
+      "domain": "재료역학",
+      "topic": "얇은 원통 내압",
+      "points": 4,
+      "verifier": "python",
+      "intro": "다음은 내압을 받는 얇은 원통 용기에 관한 자료이다.",
+      "passage": "안지름이 400 mm인 얇은 원통에 1 N/mm²의 내압이 작용한다. 재료의 허용 원주응력은 80 N/mm²이다.",
+      "conditions": [
+        "원주방향 응력을 기준으로 설계한다.",
+        "얇은 원통으로 가정한다."
+      ],
+      "tasks": [
+        "원주방향 응력식을 쓸 것.",
+        "필요한 최소 두께[mm]를 구할 것."
+      ],
+      "answer": [
+        "σₕ=pD/(2t)",
+        "2.5 mm"
+      ],
+      "solution": [
+        "σₕ=pD/(2t)",
+        "t=pD/(2σₕ)=1×400/(2×80)=2.5 mm"
+      ],
+      "source_basis": "재료역학 서브노트의 원통 내압 원주방향 응력",
+      "fingerprint": "ad8efbe9184f770bff50",
+      "number": 1
+    },
+    {
+      "domain": "수송기술",
+      "topic": "파스칼의 원리",
+      "points": 4,
+      "verifier": "python",
+      "intro": "다음은 서로 다른 크기의 피스톤을 가진 유압장치에 관한 자료이다.",
+      "passage": "작은 피스톤의 지름은 10 cm, 큰 피스톤의 지름은 40 cm이다. 작은 피스톤에 10 N의 힘을 가한다.",
+      "conditions": [
+        "유체 손실과 피스톤 마찰은 무시한다."
+      ],
+      "tasks": [
+        "두 피스톤에서 동일하게 전달되는 물리량의 명칭을 쓸 것.",
+        "큰 피스톤에서 얻는 힘[N]을 구할 것."
+      ],
+      "answer": [
+        "압력",
+        "160 N"
+      ],
+      "solution": [
+        "밀폐된 유체에 가한 압력은 모든 방향으로 동일하게 전달된다.",
+        "F₂=F₁(A₂/A₁)=F₁(d₂/d₁)²=160 N"
+      ],
+      "source_basis": "유체역학 서브노트의 파스칼 원리",
+      "fingerprint": "a3c07d617e9c77d07799",
+      "number": 2
+    },
+    {
+      "domain": "재료역학",
+      "topic": "스프링 직렬 연결",
+      "points": 2,
+      "verifier": "python",
+      "intro": "다음은 두 스프링으로 구성된 탄성계에 관한 자료이다.",
+      "passage": "스프링 상수 k₁=10 N/mm, k₂=40 N/mm인 두 스프링을 직렬로 연결하고 전체에 100 N의 하중을 가하였다.",
+      "conditions": [
+        "스프링은 선형 탄성범위에서 작동한다."
+      ],
+      "tasks": [
+        "등가 스프링 상수[N/mm]를 구할 것.",
+        "전체 변형량[mm]을 구할 것."
+      ],
+      "answer": [
+        "8 N/mm",
+        "12.5 mm"
+      ],
+      "solution": [
+        "1/k=1/k₁+1/k₂ → k=8 N/mm",
+        "δ=P/k=100/8=12.5 mm"
+      ],
+      "source_basis": "재료역학 서브노트의 스프링 직렬·병렬 합성",
+      "fingerprint": "c058a11556cd1a268aa1",
+      "number": 3
+    },
+    {
+      "domain": "수송기술",
+      "topic": "연속방정식",
+      "points": 4,
+      "verifier": "python",
+      "intro": "다음은 정상상태로 흐르는 비압축성 유체의 관로에 관한 자료이다.",
+      "passage": "원형 관의 지름이 40 mm에서 40 mm로 감소한다. 지름 40 mm 구간의 평균 유속은 3 m/s이다.",
+      "conditions": [
+        "밀도는 일정하고 누설은 없다."
+      ],
+      "tasks": [
+        "적용되는 보존 법칙을 쓸 것.",
+        "지름 {d2} mm 구간의 평균 유속[m/s]을 구할 것."
+      ],
+      "answer": [
+        "질량 보존 법칙",
+        "3 m/s"
+      ],
+      "solution": [
+        "비압축성 유체에서 A₁V₁=A₂V₂이다.",
+        "V₂=V₁(d₁/d₂)²=3×(40/40)²=3 m/s"
+      ],
+      "source_basis": "유체역학 서브노트의 연속방정식",
+      "fingerprint": "c54aedfe69c68377df62",
+      "number": 4
+    },
+    {
+      "domain": "발명",
+      "topic": "표준10",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "㉠:\u0001 고장문제해결,\u0001 연구,\u0001 개발,\u0001 발명,\u0001 혁신,",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "표준10"
+      ],
+      "solution": [
+        "정답은 표준10이다."
+      ],
+      "evidence": "표준10:\u0001 고장문제해결,\u0001 연구,\u0001 개발,\u0001 발명,\u0001 혁신,",
+      "source_name": "기술교육론 서브노트_강지현.pdf",
+      "page_no": 70,
+      "source_basis": "기술교육론 서브노트_강지현.pdf p.70",
+      "fingerprint": "f9af9b821532e5b4b45b",
+      "number": 5
+    },
+    {
+      "domain": "전기·전자",
+      "topic": "· LCD TV",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "㉠ : 액정 디스플레이에 사용되는 액정 물질은 일정 온도",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "· LCD TV"
+      ],
+      "solution": [
+        "정답은 · LCD TV이다."
+      ],
+      "evidence": "· LCD TV : 액정 디스플레이에 사용되는 액정 물질은 일정 온도",
+      "source_name": "전기전자 서브노트_김규식.pdf",
+      "page_no": 72,
+      "source_basis": "전기전자 서브노트_김규식.pdf p.72",
+      "fingerprint": "181c5b74815df56e3e29",
+      "number": 6
+    },
+    {
+      "domain": "생명기술",
+      "topic": "쌀겨",
+      "points": 2,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "- ㉠ : 탈곡 후의 잔여물로, 재(ash)",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "쌀겨"
+      ],
+      "solution": [
+        "정답은 쌀겨이다."
+      ],
+      "evidence": "- 쌀겨 : 탈곡 후의 잔여물로, 재(ash)",
+      "source_name": "생명 교과서 정리_jio_ning.pdf",
+      "page_no": 44,
+      "source_basis": "생명 교과서 정리_jio_ning.pdf p.44",
+      "fingerprint": "80337b44e4806008c8d7",
+      "number": 7
+    },
+    {
+      "domain": "기술교육론",
+      "topic": "통로",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "- ㉠:\u0001 타인에게방해를주지않으면서이동하도록인간의최대신체폭에25cm\u0001 이상여유준다.\u0001",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "통로"
+      ],
+      "solution": [
+        "정답은 통로이다."
+      ],
+      "evidence": "- 통로:\u0001 타인에게방해를주지않으면서이동하도록인간의최대신체폭에25cm\u0001 이상여유준다.\u0001",
+      "source_name": "기술교육론 서브노트_강지현.pdf",
+      "page_no": 184,
+      "source_basis": "기술교육론 서브노트_강지현.pdf p.184",
+      "fingerprint": "00605de19d0c163455e9",
+      "number": 8
+    },
+    {
+      "domain": "재료역학",
+      "topic": "단면 1차 모멘트",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "▶ ㉠ 특정 축에 대해 면적이 어떻게 분포되었는지 나타내는 값 ※ 주로 도심을 계산하는데 사용됨 ⓵ ㉠의 단위는 길이의 세제곱",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "단면 1차 모멘트"
+      ],
+      "solution": [
+        "정답은 단면 1차 모멘트이다."
+      ],
+      "evidence": "▶ 단면 1차 모멘트 특정 축에 대해 면적이 어떻게 분포되었는지 나타내는 값 ※ 주로 도심을 계산하는데 사용됨 ⓵ 단면 1차 모멘트의 단위는 길이의 세제곱",
+      "source_name": "[역학] Part3 재료역학 (2).pdf",
+      "page_no": 5,
+      "source_basis": "[역학] Part3 재료역학 (2).pdf p.5",
+      "fingerprint": "50f1ed15d92e2867ede5",
+      "number": 9
+    },
+    {
+      "domain": "생명기술",
+      "topic": "3) 석유 먹는 미생물",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "㉠ : 탄화수소를 먹음",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "3) 석유 먹는 미생물"
+      ],
+      "solution": [
+        "정답은 3) 석유 먹는 미생물이다."
+      ],
+      "evidence": "3) 석유 먹는 미생물 : 탄화수소를 먹음",
+      "source_name": "생명 교과서 정리_jio_ning.pdf",
+      "page_no": 41,
+      "source_basis": "생명 교과서 정리_jio_ning.pdf p.41",
+      "fingerprint": "86fa4753e8a2947516b8",
+      "number": 10
+    },
+    {
+      "domain": "통신기술",
+      "topic": "· 수동식 전화 교환 시스템",
+      "points": 4,
+      "verifier": "source",
+      "intro": "다음은 기술 관련 개념에 관한 자료이다.",
+      "passage": "㉠ :거미줄처럼 얽힌 전화망을 교환원이 전선을 바",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어를 쓸 것."
+      ],
+      "answer": [
+        "· 수동식 전화 교환 시스템"
+      ],
+      "solution": [
+        "정답은 · 수동식 전화 교환 시스템이다."
+      ],
+      "evidence": "· 수동식 전화 교환 시스템 :거미줄처럼 얽힌 전화망을 교환원이 전선을 바",
+      "source_name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+      "page_no": 47,
+      "source_basis": "2026 기술임용 서브노트(통신기술)_이성민.pdf p.47",
+      "fingerprint": "0205ca6d76f379e6aeea",
+      "number": 11
+    }
+  ],
+  "verified": true,
+  "verification_note": "계산형은 Python 정답, 개념형은 원문 evidence/source/page 자동검증 통과"
+}
