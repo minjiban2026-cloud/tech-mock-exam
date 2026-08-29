@@ -61,13 +61,21 @@
   "generation_policy": {
     "default_difficulty": "적당히 어려움",
     "default_circuit_policy": "최대한 제외",
-    "formula_ratio_per_section": 0.2,
-    "four_point_rule": "실제 임용형 자료+작성방법, 최소 2개 작성 요구",
-    "reject_title_like_anchors": true,
-    "ai_calls_per_4pt_slot": 1,
-    "two_point_ai": false,
     "default_model": "gpt-5.6-luna",
-    "fallback": "AI 실패 시 동일 영역의 두 원문 앵커를 이용한 검증형 4점 문제",
-    "ab_duplicate_control": true
+    "blueprint_types": [
+      "개념 판별·적용",
+      "자료 해석·근거",
+      "비교·구분",
+      "과정·순서",
+      "오류 판단·수정",
+      "원인·효과 설명",
+      "계산·판단",
+      "도식·구조 해석"
+    ],
+    "2pt_rule": "단순 원문 빈칸 금지, 한 단계 자료 해석/적용",
+    "4pt_rule": "같은 자료 기반 연결된 2개 이상 작성 요구",
+    "max_ai_attempts_per_slot": 3,
+    "electronics_circuit_default": "exclude",
+    "bad_heading_answer_filter": true
   }
 }

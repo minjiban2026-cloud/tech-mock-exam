@@ -13,7 +13,7 @@ DB=ROOT/"knowledge.db"
 
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
-st.caption("서브노트는 출제범위·정답 근거, 기출은 출제 방식, Python은 계산 검산, AI는 문항 표현만 담당합니다.")
+st.caption("서브노트는 정답 근거, 기출·기존 모의고사는 출제 청사진, Python은 계산 검산, AI는 청사진에 맞춘 문항 표현만 담당합니다.")
 
 def api_key():
     try: return st.secrets["OPENAI_API_KEY"]
@@ -67,7 +67,7 @@ with tabs[2]:
         difficulty=st.selectbox("난이도",["기본","적당히 어려움","어려움"],index=1)
         circuit_policy=st.selectbox("회로 문제",["완전 제외","최대한 제외","허용"],index=1)
         seed=st.number_input("랜덤 시드(재현용)",min_value=0,value=20260829,step=1)
-    st.caption("기본값은 '적당히 어려움 + 회로 최대한 제외'입니다. 계산형은 섹션당 약 20%로 제한합니다. 4점은 실제 임용형 자료·작성방법 구조를 우선하고, AI가 실패하면 원문 검증형 4점 문항으로 자동 대체하여 전체 생성이 중단되지 않게 했습니다.")
+    st.caption("기본값은 '적당히 어려움 + 회로 최대한 제외'입니다. 실제 기출·모의고사에서 보이는 개념 적용, 자료 해석, 비교, 과정, 오류 수정, 계산, 도식 해석 유형을 청사진으로 먼저 배정합니다. 단순 서브노트 빈칸형은 사용하지 않습니다.")
     key=api_key()
     if use_ai and not key:
         st.warning("OPENAI_API_KEY가 없어 이번 생성은 AI 없이 안전모드로 동작합니다.")
@@ -83,7 +83,7 @@ with tabs[2]:
                 st.caption(
                     f"생성 통계 · 계산형 {a_stats.get('formula_questions',0)+b_stats.get('formula_questions',0)}문항 · "
                     f"AI 호출 {a_stats.get('ai_calls',0)+b_stats.get('ai_calls',0)}회 · "
-                    f"안전 폴백 {a_stats.get('safe_fallbacks',0)+b_stats.get('safe_fallbacks',0)}문항"
+                    f"품질저하 폴백 {a_stats.get('degraded',0)+b_stats.get('degraded',0)}문항"
                 )
             except Exception as e:
                 st.error(str(e))

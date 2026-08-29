@@ -1,113 +1,53 @@
-
 import re
 
-CIRCUIT_KEYWORDS=[
-    "회로","키르히호프","테브난","노튼","밀만","rlc","rc회로","rl회로",
-    "정류","다이오드","트랜지스터","mosfet","op amp","연산증폭기",
-    "논리회로","논리 게이트","플립플롭","브리지 정류"
-]
-
-BAD_ANCHOR_TOKENS=[
-    "아이디어의구상","발명기법과실제","정보통신기술",
-    "서브노트","교과서 정리","part1","part2","part3"
-]
+CIRCUIT_KEYWORDS=["회로","키르히호프","테브난","노튼","밀만","rlc","rc회로","rl회로","정류","다이오드","트랜지스터","mosfet","op amp","연산증폭기","논리회로","논리 게이트","플립플롭","브리지 정류"]
+BAD_ANSWER_TOKENS=["요약","정리","단원","목차","개요","서브노트","교과서","part","내용체계","학습목표"]
+BAD_ANCHOR_TOKENS=["아이디어의구상","발명기법과실제","정보통신기술"]+BAD_ANSWER_TOKENS
 
 def _text(q):
-    return " ".join([
-        str(q.get("domain","")),str(q.get("topic","")),
-        str(q.get("intro","")),str(q.get("passage","")),
-        " ".join(q.get("conditions",[])),
-        " ".join(q.get("tasks",[]))
-    ]).lower()
+    return " ".join([str(q.get("domain","")),str(q.get("topic","")),str(q.get("intro","")),str(q.get("passage",""))," ".join(q.get("conditions",[]))," ".join(q.get("tasks",[]))]).lower()
 
 def is_circuit_question(q):
-    t=_text(q)
-    return any(k.lower() in t for k in CIRCUIT_KEYWORDS)
+    t=_text(q); return any(k.lower() in t for k in CIRCUIT_KEYWORDS)
 
-def circuit_allowed(q, policy):
-    if not is_circuit_question(q):
-        return True
-    # 사용자가 기본값으로 회로 최소화를 원하므로 '최대한 제외'도 실제 생성에서는 제외 처리.
-    return policy=="허용"
+def circuit_allowed(q,policy):
+    return not is_circuit_question(q) if policy in ("완전 제외","최대한 제외") else True
 
-def looks_like_bad_anchor(anchor):
-    if not anchor:
-        return True
-    topic=str(anchor.get("topic","")).strip()
-    ans=str(anchor.get("answer","")).strip()
-    ev=str(anchor.get("evidence","")).strip()
-    whole=f"{topic} {ans} {ev}".lower()
-
-    if len(ans)<2 or len(ans)>45:
-        return True
-    if len(ev)<18:
-        return True
-    if any(tok.lower() in whole for tok in BAD_ANCHOR_TOKENS):
-        return True
-    if topic in {"단원","영역","내용","목차","개요","정리","특징","종류","분류"}:
-        return True
-    if re.fullmatch(r"\s*[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ0-9]+[.)]?\s*",topic):
-        return True
-
-    # 목차/표제 조각처럼 기호 비율이 과도한 정답 제거
+def looks_like_bad_anchor(a):
+    if not a:return True
+    topic=str(a.get("topic","")).strip(); ans=str(a.get("answer","")).strip(); ev=str(a.get("evidence","")).strip(); whole=f"{topic} {ans} {ev}".lower()
+    if len(ans)<2 or len(ans)>36 or len(ev)<18:return True
+    if any(x.lower() in (topic+" "+ans).lower() for x in BAD_ANSWER_TOKENS):return True
+    if any(x.lower() in whole for x in BAD_ANCHOR_TOKENS):return True
+    if topic in {"단원","영역","내용","목차","개요","정리","특징","종류","분류"}:return True
+    if re.fullmatch(r"\s*[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ0-9]+[.)]?\s*",topic):return True
     sym=sum(1 for ch in ans if not(ch.isalnum() or ch.isspace() or ('가'<=ch<='힣')))
-    if sym/max(1,len(ans))>0.35:
-        return True
-    return False
+    return sym/max(1,len(ans))>.30
 
-def formula_quality(q, points):
+def formula_quality(q,points):
+    if points==2:return len(q.get("tasks",[])) in (1,2)
+    return len(q.get("tasks",[]))>=2 and "=" in " ".join(q.get("solution",[]))
+
+def concept_quality(q,points,difficulty="적당히 어려움",pattern_type=None):
+    passage=str(q.get("passage","")); tasks=q.get("tasks",[]); conds=q.get("conditions",[])
+    if not passage or not tasks:return False
     if points==2:
-        return len(q.get("tasks",[]))>=1
-    # 4점은 최소 2개 하위 요구 + 풀이가 실제로 두 단계 이상
-    solution=" ".join(q.get("solution",[]))
-    return len(q.get("tasks",[]))>=2 and solution.count("=")>=2
-
-def concept_quality(q, points, difficulty="적당히 어려움"):
-    passage=str(q.get("passage",""))
-    tasks=q.get("tasks",[])
-    conds=q.get("conditions",[])
-
-    if not passage or not tasks:
-        return False
-
+        # 단순 원문 가리기형은 허용하지 않음. 상황/자료가 있어야 함.
+        if len(passage)<80:return False
+        if len(tasks)>2:return False
     if points==4:
-        # 4점은 2개의 작성 요구를 기본으로 한다.
-        if len(tasks)<2:
-            return False
-        # 제목 하나 맞히기/짧은 빈칸 문제 차단
-        if len(passage)<90 and len(conds)==0:
-            return False
-    else:
-        if len(tasks)>2:
-            return False
-
-    if difficulty=="적당히 어려움":
-        # 너무 긴 지문·조건 남발도 차단
-        if len(passage)>1200 or len(tasks)>3 or len(conds)>5:
-            return False
+        if len(tasks)<2:return False
+        if len(passage)<110 and not conds:return False
+    if difficulty=="적당히 어려움" and (len(passage)>1300 or len(tasks)>4 or len(conds)>6):return False
     return True
 
-def target_instruction(difficulty, points):
-    if difficulty=="기본":
-        base="핵심 개념을 직접 확인하는 수준으로 구성한다."
-    elif difficulty=="적당히 어려움":
-        base=(
-            "실제 중등 기술 임용 대비에서 중간~중상 정도로 구성한다. "
-            "단순 정의 암기보다는 제시된 자료·상황에서 핵심 개념 1~2개를 연결해 판단하게 한다. "
-            "교재 범위를 벗어난 지엽적 심화지식, 함정 위주 조건, 과도하게 긴 계산은 피한다."
-        )
+def target_instruction(difficulty,points,pattern_label="자료 해석"):
+    base=("실제 중등 기술 임용 대비의 중간~중상 난이도로 한다. 배운 범위를 벗어난 지엽적 지식으로 어렵게 하지 말고, "
+          "제시 자료를 읽고 핵심 개념을 연결하는 사고로 변별한다. ")
+    if difficulty=="기본": base="핵심 개념을 정확히 확인하는 수준으로 한다. "
+    elif difficulty=="어려움": base="원자료 범위 안에서 복합 적용을 허용하되 근거 없는 심화지식은 금지한다. "
+    if points==2:
+        base += f"2점이며 문제 유형은 '{pattern_label}'이다. 단순 정의 한 줄 가리기 대신 한 단계의 자료 해석/적용을 요구한다."
     else:
-        base="원자료 범위 안에서 복합 적용과 높은 변별력을 허용한다."
-
-    if points==4:
-        base += (
-            " 4점 문항은 작성 요구를 원칙적으로 2개 제시한다. "
-            "두 요구는 같은 자료를 바탕으로 서로 연결되어야 하며 최소 두 단계의 사고가 필요해야 한다. "
-            "단순 공식 1회 대입, 목차·단원 제목 맞히기, 원문 한 줄을 그대로 가린 빈칸 문제는 금지한다."
-        )
-    else:
-        base += (
-            " 2점 문항은 하나의 핵심 개념을 정확히 확인하거나 한 단계 적용하도록 한다. "
-            "불필요하게 어려운 복합 추론은 요구하지 않는다."
-        )
+        base += f"4점이며 문제 유형은 '{pattern_label}'이다. 같은 자료를 바탕으로 서로 연결된 두 가지 이상 작성 요구를 두고 최소 두 단계 사고를 요구한다."
     return base
