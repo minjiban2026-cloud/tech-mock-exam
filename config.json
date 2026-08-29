@@ -60,16 +60,11 @@
   ],
   "generation_policy": {
     "default_difficulty": "적당히 어려움",
-    "difficulty_levels": [
-      "기본",
-      "적당히 어려움",
-      "어려움"
-    ],
     "default_circuit_policy": "최대한 제외",
-    "circuit_policies": [
-      "완전 제외",
-      "최대한 제외",
-      "허용"
-    ]
+    "formula_ratio_target": 0.25,
+    "four_point_rule": "최소 2단계 판단/계산",
+    "reject_title_like_anchors": true,
+    "max_ai_calls_per_question": 2,
+    "default_model": "gpt-5.6-luna"
   }
 }
