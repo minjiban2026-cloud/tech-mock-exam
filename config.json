@@ -92,5 +92,19 @@
     ],
     "answer_rubric": "정답 PDF에 하위요소별 [1점]/[2점]/[3점] 표시",
     "circuit_policy": "회로 자유생성 금지; 검증된 전용 템플릿이 없으면 출제하지 않음"
+  },
+  "archive": {
+    "backend": "Supabase REST",
+    "table": "generated_exams",
+    "auto_save": true,
+    "refresh_persistent": true,
+    "crud": [
+      "create",
+      "read",
+      "update",
+      "delete"
+    ],
+    "manual_edit_policy": "수동 수정 시 verified=False 및 manually_edited=True",
+    "recommended_secret": "SUPABASE_SERVICE_ROLE_KEY"
   }
 }

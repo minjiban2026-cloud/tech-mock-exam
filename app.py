@@ -1,23 +1,40 @@
 
-import os, json, sqlite3, tempfile, shutil, hashlib
+import os, json, sqlite3, copy
 from pathlib import Path
-import streamlit as st
-import fitz
+from datetime import datetime
 
-from exam_builder import make_ab, make_section, DOMAINS
+import streamlit as st
+
+from exam_builder import make_ab, DOMAINS
 from pdf_export import export_pdf
 from retrieval import search_pages
+from archive_store import (
+    is_configured as archive_is_configured,
+    ping as archive_ping,
+    list_exams, get_exam, create_exam, update_exam, delete_exam
+)
 
 ROOT=Path(__file__).parent
 DB=ROOT/"knowledge.db"
 
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
-st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당. 실패 문항은 자동 폐기합니다.")
+st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
+
+def secret(name, default=""):
+    try:
+        return st.secrets[name]
+    except Exception:
+        return os.getenv(name,default)
 
 def api_key():
-    try: return st.secrets["OPENAI_API_KEY"]
-    except Exception: return os.getenv("OPENAI_API_KEY","")
+    return secret("OPENAI_API_KEY","")
+
+def archive_credentials():
+    url=secret("SUPABASE_URL","")
+    service_key=secret("SUPABASE_SERVICE_ROLE_KEY","")
+    fallback=secret("SUPABASE_KEY","")
+    return url, (service_key or fallback), bool(service_key), bool(fallback and not service_key)
 
 def db_stats():
     con=sqlite3.connect(DB)
@@ -28,7 +45,76 @@ def db_stats():
     con.close()
     return a,p,an,kinds
 
-tabs=st.tabs(["① DB 상태","② 출제범위 검색","③ A/B 생성","④ 검증 원리","⑤ 기출 구조"])
+def default_archive_title(seed):
+    return f"{datetime.now().strftime('%Y-%m-%d %H:%M')} · seed {seed}"
+
+def save_generated_to_archive(A,B,model,seed,domains):
+    url,key,has_service,_=archive_credentials()
+    if not archive_is_configured(url,key):
+        return None, "Supabase 보관소가 설정되지 않아 이번 결과는 현재 세션에만 남습니다."
+    if not has_service:
+        return None, "SUPABASE_SERVICE_ROLE_KEY가 없어 자동 저장하지 않았습니다. 보관소에는 Service Role Key 사용을 권장합니다."
+    rec={
+        "title":default_archive_title(seed),
+        "note":"",
+        "model":model,
+        "seed":int(seed),
+        "domains":list(domains),
+        "exam_a":A,
+        "exam_b":B,
+        "manually_edited":False,
+    }
+    saved=create_exam(url,key,rec)
+    return saved, None
+
+def exam_editor(exam,prefix):
+    edited=copy.deepcopy(exam)
+    for q in edited.get("questions",[]):
+        qn=q.get("number","?")
+        with st.expander(f"{qn}번 · {q.get('domain','')} · {q.get('points','')}점"):
+            q["intro"]=st.text_input(
+                "문항 안내",value=str(q.get("intro","")),
+                key=f"{prefix}_{qn}_intro"
+            )
+            q["passage"]=st.text_area(
+                "지문",value=str(q.get("passage","")),height=150,
+                key=f"{prefix}_{qn}_passage"
+            )
+            cond_text=st.text_area(
+                "조건 (한 줄에 하나)",value="\n".join(map(str,q.get("conditions",[]))),
+                height=80,key=f"{prefix}_{qn}_conditions"
+            )
+            q["conditions"]=[x.strip() for x in cond_text.splitlines() if x.strip()]
+            task_text=st.text_area(
+                "작성 방법 (한 줄에 하나)",value="\n".join(map(str,q.get("tasks",[]))),
+                height=100,key=f"{prefix}_{qn}_tasks"
+            )
+            q["tasks"]=[x.strip() for x in task_text.splitlines() if x.strip()]
+            ans_text=st.text_area(
+                "정답 요소 (한 줄에 하나)",value="\n".join(map(str,q.get("answer",[]))),
+                height=90,key=f"{prefix}_{qn}_answer"
+            )
+            q["answer"]=[x.strip() for x in ans_text.splitlines() if x.strip()]
+            sol_text=st.text_area(
+                "해설 요소 (한 줄에 하나)",value="\n".join(map(str,q.get("solution",[]))),
+                height=110,key=f"{prefix}_{qn}_solution"
+            )
+            q["solution"]=[x.strip() for x in sol_text.splitlines() if x.strip()]
+            sp_text=st.text_input(
+                "부분점수 (예: 1,1,2)",
+                value=",".join(map(str,q.get("subpoints",[]))),
+                key=f"{prefix}_{qn}_subpoints"
+            )
+            try:
+                q["subpoints"]=[int(x.strip()) for x in sp_text.split(",") if x.strip()]
+            except Exception:
+                st.warning(f"{qn}번 부분점수는 숫자를 쉼표로 구분해 입력하세요.")
+    edited["verified"]=False
+    edited["manually_edited"]=True
+    edited["verification_note"]="보관소에서 수동 수정됨: 원래의 자동검증 상태를 그대로 보장하지 않음"
+    return edited
+
+tabs=st.tabs(["① DB 상태","② 출제범위 검색","③ A/B 생성","④ 모의고사 보관소","⑤ 검증 원리","⑥ 기출 구조"])
 
 with tabs[0]:
     s,p,a,k=db_stats()
@@ -41,7 +127,7 @@ with tabs[0]:
     rows=con.execute("select name,kind,domain,page_count from sources order by kind,domain,name").fetchall()
     con.close()
     st.dataframe([{"파일":r[0],"유형":r[1],"영역":r[2],"쪽수":r[3]} for r in rows],use_container_width=True)
-    st.info("배포 버전에는 PDF 원본을 넣지 않고, 이 SQLite 지식 DB만 포함합니다. 따라서 매번 PDF를 다시 올릴 필요가 없습니다.")
+    st.info("배포 버전에는 PDF 원본을 넣지 않고 SQLite 지식 DB만 포함합니다.")
 
 with tabs[1]:
     c1,c2=st.columns([1,2])
@@ -64,18 +150,35 @@ with tabs[2]:
         use_ai=st.toggle("AI로 임용형 문장 재구성",value=True)
         model=st.text_input("OpenAI 모델",value="gpt-5.6-terra")
     with c3:
-        seed=st.number_input("랜덤 시드(재현용)",min_value=0,value=20260829,step=1)
-    st.caption("엄격모드: 실제 기출형 부분점수 → 영역/자료형 청사진 → 원문 전제 잠금 → 계산 검산 → concept-family A/B 중복 차단 순으로 생성합니다. 기본 모델은 GPT-5.6 Terra입니다.")
+        seed=st.number_input("랜덤 시드(재현용)",min_value=0,value=20260830,step=1)
+
+    st.caption("엄격모드: 부분점수 → 영역/자료형 청사진 → 원문 전제 잠금 → 계산 검산 → concept-family A/B 중복 차단 순으로 생성합니다.")
     key=api_key()
     if use_ai and not key:
         st.warning("OPENAI_API_KEY가 없어 이번 생성은 AI 없이 안전모드로 동작합니다.")
+
+    url,skey,has_service,fallback=archive_credentials()
+    if archive_is_configured(url,skey) and has_service:
+        st.success("모의고사 보관소 연결됨: 생성 완료 시 Supabase에 자동 저장됩니다.")
+    elif fallback:
+        st.warning("SUPABASE_KEY는 발견했지만 보관소 자동 저장에는 SUPABASE_SERVICE_ROLE_KEY 사용을 권장합니다.")
+    else:
+        st.info("Supabase 보관소를 연결하면 새로고침 후에도 생성 결과가 유지됩니다.")
+
     if st.button("전공 A + B 생성",type="primary",use_container_width=True):
-        with st.spinner("정답 고정 → 문항 생성 → 근거 대조 → 중복 검사 → A/B 편성 중..."):
+        with st.spinner("정답 고정 → 문항 생성 → 근거 대조 → 중복 검사 → A/B 편성 → 보관 중..."):
             try:
                 A,B=make_ab(DB,domains=domains,api_key=key,model=model,
                             ai_enabled=bool(use_ai and key),seed=int(seed))
-                st.session_state["A"]=A; st.session_state["B"]=B
-                st.success("A/B 모두 자동검증을 통과했습니다.")
+                st.session_state["A"]=A
+                st.session_state["B"]=B
+                saved,warn=save_generated_to_archive(A,B,model,int(seed),domains)
+                if saved:
+                    st.session_state["current_archive_id"]=saved.get("id")
+                    st.success("A/B 자동검증 통과 + 보관소 자동 저장 완료.")
+                else:
+                    st.success("A/B 모두 자동검증을 통과했습니다.")
+                    if warn: st.warning(warn)
                 astat=A.get("generation_stats",{}); bstat=B.get("generation_stats",{})
                 st.caption(
                     f"AI 호출 {astat.get('ai_calls',0)+bstat.get('ai_calls',0)}회 · "
@@ -84,15 +187,17 @@ with tabs[2]:
                 )
             except Exception as e:
                 st.error(str(e))
+
     if "A" in st.session_state and "B" in st.session_state:
         for sec in ["A","B"]:
             exam=st.session_state[sec]
             st.markdown(f"### 전공 {sec}")
+            if exam.get("manually_edited"):
+                st.warning("이 시험은 보관소에서 수동 수정되었습니다. 수정 후에는 기존 자동검증을 그대로 보장하지 않습니다.")
             for q in exam["questions"]:
                 badge="🧮 Python 검산" if q.get("verifier")=="python" else "📚 원문 근거검증"
                 with st.expander(f"{q['number']}번 · {q['domain']} · {q.get('question_type','')} · {q['points']}점({'+'.join(map(str,q.get('subpoints',[])))}) · {badge}"):
                     st.caption(f"주제: {q['topic']}")
-                    st.caption(f"자료형: {q.get('material_form','-')} · 부분점수: {'+'.join(map(str,q.get('subpoints',[])))} · 개념군: {', '.join(q.get('concept_families',[]))}")
                     st.write(q["passage"])
                     if q.get("conditions"):
                         st.markdown("**<조건>**")
@@ -111,6 +216,128 @@ with tabs[2]:
             c2.download_button(f"전공 {sec} 정답·해설 PDF",apdf,file_name=f"전공_{sec}_정답해설.pdf",mime="application/pdf",use_container_width=True)
 
 with tabs[3]:
+    st.subheader("📚 모의고사 보관소")
+    url,skey,has_service,fallback=archive_credentials()
+
+    if not archive_is_configured(url,skey):
+        st.error("보관소가 아직 연결되지 않았습니다.")
+        st.code(
+            'SUPABASE_URL = "https://xxxx.supabase.co"\n'
+            'SUPABASE_SERVICE_ROLE_KEY = "서비스 역할 키"\n',
+            language="toml"
+        )
+        st.write("그리고 프로젝트에 포함된 `supabase_archive_schema.sql`을 Supabase SQL Editor에서 한 번 실행하세요.")
+    else:
+        try:
+            archive_ping(url,skey)
+            if not has_service:
+                st.warning("현재 Service Role Key가 아닌 키를 사용 중입니다. RLS 설정에 따라 저장/수정/삭제가 막힐 수 있습니다.")
+            records=list_exams(url,skey,100)
+            st.caption(f"보관된 모의고사: {len(records)}개")
+
+            if not records:
+                st.info("아직 저장된 모의고사가 없습니다. A/B를 새로 생성하면 자동 저장됩니다.")
+            else:
+                labels={}
+                for r in records:
+                    edited=" · ✏️수정됨" if r.get("manually_edited") else ""
+                    label=f"{r.get('title','제목 없음')}{edited} · {str(r.get('created_at',''))[:16]}"
+                    labels[label]=r["id"]
+
+                selected_label=st.selectbox("불러올 모의고사",list(labels.keys()))
+                exam_id=labels[selected_label]
+                rec=get_exam(url,skey,exam_id)
+
+                if rec:
+                    c1,c2,c3=st.columns(3)
+                    with c1:
+                        if st.button("현재 화면으로 불러오기",use_container_width=True):
+                            st.session_state["A"]=rec["exam_a"]
+                            st.session_state["B"]=rec["exam_b"]
+                            st.session_state["current_archive_id"]=rec["id"]
+                            st.success("불러왔습니다. ③ A/B 생성 탭에서도 확인할 수 있습니다.")
+                    with c2:
+                        edit_mode=st.toggle("수정 모드",value=False,key=f"edit_{exam_id}")
+                    with c3:
+                        delete_mode=st.toggle("삭제 모드",value=False,key=f"delete_{exam_id}")
+
+                    st.markdown("#### 보관 정보")
+                    if not edit_mode:
+                        st.write("**제목:**",rec.get("title",""))
+                        st.write("**메모:**",rec.get("note","") or "-")
+                        st.write("**모델:**",rec.get("model",""))
+                        st.write("**시드:**",rec.get("seed",""))
+                        st.write("**영역:**",", ".join(rec.get("domains") or []))
+                        if rec.get("manually_edited"):
+                            st.warning("수동 수정된 시험입니다. 자동검증 통과 당시의 원본과 내용이 달라질 수 있습니다.")
+
+                    if edit_mode:
+                        st.warning("문제·정답을 직접 수정하면 자동검증 보장은 해제됩니다. 저장 후 '수정됨' 표시가 붙습니다.")
+                        title=st.text_input("제목",value=rec.get("title",""),key=f"title_{exam_id}")
+                        note=st.text_area("메모",value=rec.get("note",""),key=f"note_{exam_id}",height=80)
+                        st.markdown("##### 전공 A 수정")
+                        edited_A=exam_editor(rec["exam_a"],f"{exam_id}_A")
+                        st.markdown("##### 전공 B 수정")
+                        edited_B=exam_editor(rec["exam_b"],f"{exam_id}_B")
+                        if st.button("수정 내용 저장",type="primary",use_container_width=True):
+                            # 최소 구조 안전검사
+                            errors=[]
+                            for sec,ex in [("A",edited_A),("B",edited_B)]:
+                                for q in ex.get("questions",[]):
+                                    if len(q.get("tasks",[])) != len(q.get("answer",[])):
+                                        errors.append(f"{sec} {q.get('number')}번: 작성 방법 수와 정답 요소 수가 다릅니다.")
+                                    if sum(q.get("subpoints",[])) != q.get("points",0):
+                                        errors.append(f"{sec} {q.get('number')}번: 부분점수 합이 배점과 다릅니다.")
+                            if errors:
+                                for e in errors: st.error(e)
+                            else:
+                                update_exam(url,skey,exam_id,{
+                                    "title":title.strip() or rec.get("title","제목 없음"),
+                                    "note":note,
+                                    "exam_a":edited_A,
+                                    "exam_b":edited_B,
+                                    "manually_edited":True,
+                                })
+                                st.session_state["A"]=edited_A
+                                st.session_state["B"]=edited_B
+                                st.success("보관소 내용을 수정했습니다.")
+                                st.rerun()
+
+                    if delete_mode:
+                        st.error("삭제하면 보관소에서 완전히 제거됩니다.")
+                        confirm=st.checkbox("이 모의고사를 삭제하는 것에 동의합니다.",key=f"confirm_{exam_id}")
+                        if st.button("선택한 모의고사 영구 삭제",disabled=not confirm,use_container_width=True):
+                            delete_exam(url,skey,exam_id)
+                            if st.session_state.get("current_archive_id")==exam_id:
+                                st.session_state.pop("current_archive_id",None)
+                            st.success("삭제했습니다.")
+                            st.rerun()
+
+                    st.markdown("#### 저장본 바로 다운로드")
+                    for sec,keyname in [("A","exam_a"),("B","exam_b")]:
+                        ex=rec[keyname]
+                        c1,c2=st.columns(2)
+                        c1.download_button(
+                            f"보관본 전공 {sec} 문제지 PDF",
+                            export_pdf(ex,False),
+                            file_name=f"보관본_전공_{sec}_문제지.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key=f"arch_q_{exam_id}_{sec}"
+                        )
+                        c2.download_button(
+                            f"보관본 전공 {sec} 정답·해설 PDF",
+                            export_pdf(ex,True),
+                            file_name=f"보관본_전공_{sec}_정답해설.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key=f"arch_a_{exam_id}_{sec}"
+                        )
+        except Exception as e:
+            st.error(str(e))
+            st.info("`supabase_archive_schema.sql` 실행 여부와 Streamlit Secrets의 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY를 확인하세요.")
+
+with tabs[4]:
     st.markdown("""
 ### 자동검증이 하는 일
 
@@ -120,21 +347,21 @@ with tabs[3]:
 3. AI가 계산한 값은 정답으로 채택하지 않습니다.
 
 **개념형**
-1. DB에서 원문 정답(anchor)과 근거문장(evidence)을 먼저 뽑습니다.
-2. AI에는 정답을 바꾸지 못하도록 고정값으로 전달합니다.
-3. 생성 후 정답이 evidence 안에 있는지, evidence가 실제 해당 PDF 페이지에 있는지 다시 검사합니다.
+1. DB에서 원문 정답과 근거문장을 먼저 뽑습니다.
+2. 사실 지문은 원문 근거로 잠그고 AI가 바꾸지 못하게 합니다.
+3. 생성 후 정답·근거·출처를 다시 검사합니다.
 4. 정답 용어가 문제 지문에 노출되면 폐기합니다.
-5. AI 생성이 실패하면 원문 기반 보수적 문항으로 자동 대체합니다.
 
 **A/B**
-- 같은 topic/fingerprint가 A와 B에 중복되지 않도록 검사합니다.
-- 검증을 통과하지 못한 문항은 시험지에 들어가지 않습니다.
+- 동일 원리·공식은 concept-family로 묶어 A/B 중복을 막습니다.
+- 4점 계산형은 단순 공식 대입만으로 끝나지 않도록 최소 3개 채점요소를 갖습니다.
 
-> 이 구조는 오류 가능성을 크게 줄이지만, 자연어 문항의 '완전한 무오류'를 수학적으로 보장할 수는 없습니다.
-> 대신 AI가 정답을 새로 만들어내는 권한을 최소화했습니다.
+**보관소 수동 수정**
+- 사람이 저장본을 직접 수정하면 해당 저장본에는 '수정됨' 표시가 붙습니다.
+- 수동 수정 이후에는 생성 당시의 자동검증을 그대로 보장하지 않습니다.
 """)
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("실제 기출 기반 문항 구조")
     con=sqlite3.connect(DB)
     pats=con.execute("select id,points,name,verbs,visual,calc,provenance from exam_patterns order by points,id").fetchall()
@@ -143,4 +370,4 @@ with tabs[4]:
     con.close()
     st.write(f"실제 기출 원본 {len(off)}개가 구조 참고 자료로 별도 색인되어 있습니다. 발명 직접 앵커: {inv}개")
     st.dataframe([{"ID":r[0],"배점":r[1],"구조":r[2],"요구행동":r[3],"그림":bool(r[4]),"계산":bool(r[5])} for r in pats],use_container_width=True)
-    st.warning("현재 그림형 패턴은 분석 DB에는 포함했지만, 안전한 도식 템플릿이 없는 유형은 자동 생성에 사용하지 않습니다. AI 자유그림은 금지합니다.")
+    st.warning("검증된 도식 템플릿이 없는 기술 그림과 회로는 AI가 자유 생성하지 않습니다.")

@@ -63,3 +63,13 @@ streamlit run app.py
 8. 정답·해설 PDF에는 부분점수별 채점 기준이 표시된다.
 9. 전체 영역 선택 시 한 영역이 과도하게 반복되지 않도록 청사진 단계부터 균등 배치한다.
 10. 검증된 그림 템플릿이 없는 회로/도면/기술그림은 AI가 자유 생성하지 않는다.
+
+
+# 모의고사 보관소
+- Supabase `generated_exams` 테이블에 생성된 A/B 전체 JSON을 자동 저장합니다.
+- 새로고침/Streamlit 재부팅 후에도 불러올 수 있습니다.
+- 제목·메모·문항 지문·조건·작성방법·정답·해설·부분점수를 수정할 수 있습니다.
+- 저장본을 영구 삭제할 수 있습니다.
+- 수동 수정 시 자동검증 상태를 해제하여 `수정됨`으로 표시합니다.
+- `supabase_archive_schema.sql`을 Supabase SQL Editor에서 최초 1회 실행해야 합니다.
+- Streamlit Secrets에는 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`를 설정하세요.
