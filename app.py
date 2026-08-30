@@ -148,11 +148,15 @@ with tabs[2]:
         domains=st.multiselect("출제 영역",DOMAINS,default=DOMAINS)
     with c2:
         use_ai=st.toggle("AI로 임용형 문장 재구성",value=True)
-        model=st.text_input("OpenAI 모델",value="gpt-5.6-terra")
+        model=st.text_input("문항 작성 AI",value="gpt-5.6-terra")
+        use_ai_judge=st.toggle("AI 출제검토위원 품질심사",value=True)
+        judge_model=st.text_input("품질심사 AI",value="gpt-5.6-terra")
     with c3:
         seed=st.number_input("랜덤 시드(재현용)",min_value=0,value=20260830,step=1)
 
-    st.caption("엄격모드: 부분점수 → 영역/자료형 청사진 → 원문 전제 잠금 → 계산 검산 → concept-family A/B 중복 차단 순으로 생성합니다.")
+    st.caption("품질우선모드: DB/Python 정답 고정 → AI 관계성 선별 → AI 문항 작성 → 정답을 보지 않는 Blind 검토 + 근거를 보는 Grounded 검토 → Python 재검증 → 섹션 심사 → A/B 종합심사 순으로 생성합니다.")
+    if use_ai and use_ai_judge:
+        st.info("품질심사를 여러 단계로 수행하므로 이전 버전보다 생성 시간이 길고 API 호출도 많습니다. 대신 탈락 문항은 저장하지 않고 다른 후보로 교체합니다.")
     key=api_key()
     if use_ai and not key:
         st.warning("OPENAI_API_KEY가 없어 이번 생성은 AI 없이 안전모드로 동작합니다.")
@@ -168,8 +172,13 @@ with tabs[2]:
     if st.button("전공 A + B 생성",type="primary",use_container_width=True):
         with st.spinner("정답 고정 → 문항 생성 → 근거 대조 → 중복 검사 → A/B 편성 → 보관 중..."):
             try:
-                A,B=make_ab(DB,domains=domains,api_key=key,model=model,
-                            ai_enabled=bool(use_ai and key),seed=int(seed))
+                A,B=make_ab(
+                    DB,domains=domains,api_key=key,model=model,
+                    ai_enabled=bool(use_ai and key),
+                    ai_quality_enabled=bool(use_ai_judge and key),
+                    judge_model=judge_model,
+                    seed=int(seed)
+                )
                 st.session_state["A"]=A
                 st.session_state["B"]=B
                 saved,warn=save_generated_to_archive(A,B,model,int(seed),domains)
@@ -181,9 +190,11 @@ with tabs[2]:
                     if warn: st.warning(warn)
                 astat=A.get("generation_stats",{}); bstat=B.get("generation_stats",{})
                 st.caption(
-                    f"AI 호출 {astat.get('ai_calls',0)+bstat.get('ai_calls',0)}회 · "
-                    f"Python 계산형 {astat.get('formula_questions',0)+bstat.get('formula_questions',0)}문항 · "
-                    f"안전 폴백 {astat.get('safe_fallbacks',0)+bstat.get('safe_fallbacks',0)}문항"
+                    f"문항작성 AI {astat.get('ai_calls',0)+bstat.get('ai_calls',0)}회 · "
+                    f"AI 품질심사 대상 {astat.get('ai_judge_calls',0)+bstat.get('ai_judge_calls',0)}개 · "
+                    f"관계성 선별 {astat.get('ai_selector_calls',0)+bstat.get('ai_selector_calls',0)}회 · "
+                    f"AI 탈락 {astat.get('ai_judge_rejects',0)+bstat.get('ai_judge_rejects',0)}문항 · "
+                    f"Python 계산형 {astat.get('formula_questions',0)+bstat.get('formula_questions',0)}문항"
                 )
             except Exception as e:
                 st.error(str(e))
@@ -204,9 +215,17 @@ with tabs[2]:
                         for x in q["conditions"]: st.write("○",x)
                     st.markdown("**<작성 방법>**")
                     for x in q["tasks"]: st.write("○",x)
+                    aq=q.get("ai_quality",{})
+                    if aq.get("pass") is True:
+                        st.caption(
+                            f"AI 출제검토 통과 · 평균 {aq.get('average','-')}/5 · "
+                            f"사고행동: {', '.join(aq.get('thinking_types',[])) or '-'}"
+                        )
                     with st.popover("정답/검증근거"):
                         st.write("정답:",q["answer"])
                         st.write("해설:",q["solution"])
+                        if aq:
+                            st.write("AI 품질심사:",aq)
                         if q.get("verifier")=="source":
                             st.write("출처:", q.get("source_basis"))
                             st.write("근거:", q.get("evidence"))
@@ -347,10 +366,12 @@ with tabs[4]:
 3. AI가 계산한 값은 정답으로 채택하지 않습니다.
 
 **개념형**
-1. DB에서 원문 정답과 근거문장을 먼저 뽑습니다.
-2. 사실 지문은 원문 근거로 잠그고 AI가 바꾸지 못하게 합니다.
-3. 생성 후 정답·근거·출처를 다시 검사합니다.
-4. 정답 용어가 문제 지문에 노출되면 폐기합니다.
+1. DB에서 정답과 원문 근거를 먼저 고정합니다.
+2. 4점 문항은 AI 관계성 선별기가 같은 master concept로 묶일 anchor만 고릅니다.
+3. 문항 작성 AI는 고정된 정답·원문 범위 안에서 자료와 작성 방법을 구성합니다.
+4. 별도의 AI 출제검토위원이 정답 노출, 단순 베껴쓰기, 무관한 하위문항, 난도 부족, 모호성, 기출 유사성을 평가하여 탈락시킬 수 있습니다.
+5. AI 심사를 통과한 뒤에도 정답/evidence/source/page 구조를 Python이 다시 검사합니다.
+6. AI 품질심사가 꺼져 있으면 AI 생성 지문은 사용하지 않고 원문 잠금 폴백만 사용합니다.
 
 **A/B**
 - 동일 원리·공식은 concept-family로 묶어 A/B 중복을 막습니다.

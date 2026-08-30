@@ -35,39 +35,64 @@ def _strip_json(text):
     t=re.sub(r"\s*```$","",t)
     return t
 
-def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,material_form,style_profile):
+
+def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,material_form,style_profile,
+                   source_context="",relation_meta=None):
     from openai import OpenAI
-    client=OpenAI(api_key=api_key,timeout=45,max_retries=0)
-    passage=build_source_passage(bundle,material_form)
+    client=OpenAI(api_key=api_key,timeout=90,max_retries=2)
     answers=[a["answer"] for a in bundle]
+    relation_meta=relation_meta or {}
+    evidence=[a["evidence"] for a in bundle]
+    source_context=source_context or "\n".join(evidence)
+
     prompt=f"""
-대한민국 중등 기술 임용시험의 '작성 방법'만 편집한다.
-사실 지문은 프로그램이 원문 근거로 이미 고정했으며 절대로 수정하지 않는다.
+너는 대한민국 중등 기술 임용시험 문항 초안 작성자다.
+정답은 이미 DB에서 고정되어 있으며 절대로 바꾸거나 새 정답을 만들면 안 된다.
 
 전공 {section}, {points}점, 유형={question_type}, 자료형={material_form}
 부분점수={pattern['subpoints']}
-고정정답={answers}
-고정지문:
-{passage}
+master concept={relation_meta.get('master_concept','')}
+관계={relation_meta.get('relation','')}
+권장 사고행동={relation_meta.get('thinking_types',[])}
+
+고정정답:
+{json.dumps(answers,ensure_ascii=False)}
+
+각 정답의 원문 근거:
+{json.dumps(evidence,ensure_ascii=False)}
+
+해당 출처 문맥:
+{source_context[:9000]}
 
 실제 기출 구조:
 {style_profile}
 
-규칙:
-- tasks 개수는 정확히 {len(pattern['subpoints'])}개.
-- task i는 고정정답 i 하나를 평가한다.
-- 4점은 최소 3개의 서로 다른 채점 요구를 가져야 한다.
-- 2점짜리 하위요소는 단순 용어 쓰기만 시키지 말고, 고정지문에서 확인 가능한 특징·이유·관계·적용 중 하나를 함께 요구한다.
-- 같은 동사와 같은 요구를 표현만 바꾸어 반복하지 않는다.
-- 가능한 경우 식별 → 관계/비교 → 적용/설명의 흐름으로 구성한다.
-- 원자료에 없는 숫자, 사실, 사례, 조건, 인과관계를 추가하지 않는다.
-- 정답을 task 안에 직접 쓰지 않는다.
-- 2점은 짧게, 4점은 부분점수별 요구가 분명하게 보이게 한다.
+반드시 지킬 규칙:
+- passage/conditions/tasks만 작성한다. 정답은 수정하지 않는다.
+- 기술적 사실, 수치, 인과관계는 위 출처 문맥이 직접 뒷받침하는 것만 사용한다.
+- 출처에 없는 실제 사례, 장치 조건, 수치, 효과를 꾸며내지 않는다.
+- 중립적 수업 상황 프레임("교사가 자료를 제시했다", "학생이 검토했다")은 허용하되 기술 사실을 추가하지 않는다.
+- 정답 단어를 passage/conditions/tasks에 직접 쓰지 않는다.
+- 원문 정의를 정답 단어만 빈칸 처리한 채 거의 그대로 제시하지 않는다.
+- 한 문장만 읽고 정답을 그대로 복원할 수 있는 '정의 베껴쓰기' 문제를 만들지 않는다.
+- 자료 전체를 해석해야 하도록 단서를 분산하되, 고정정답을 도출할 정보는 충분히 남긴다.
+- 4점은 최소 두 종류 이상의 사고행동(식별/관계설명/오류판단/비교/적용/계산/수정)을 포함해야 한다.
+- 4점의 세 하위 요구가 모두 '용어 쓰기' 또는 '분류하기'이면 안 된다.
+- 같은 요구를 표현만 바꾸어 반복하지 않는다.
+- 각 task는 해당 고정정답 요소와 명확하게 대응되어야 한다.
+- 2점은 짧고 명확하게 쓴다.
+- 자료형은 실제 답 풀이에 필요한 형태여야 하고 장식용이면 안 된다.
 - JSON 하나만 출력한다.
 
-{{"intro":"...", "tasks":["..."], "solution_labels":["..."]}}
+{{
+ "intro":"...",
+ "passage":"...",
+ "conditions":["..."],
+ "tasks":["..."],
+ "thinking_types":["..."]
+}}
 """
-    r=client.responses.create(model=model,input=prompt,reasoning={"effort":"low"})
+    r=client.responses.create(model=model,input=prompt,reasoning={"effort":"medium"})
     x=json.loads(_strip_json(r.output_text))
     q={
       "domain":bundle[0]["domain"],
@@ -76,15 +101,18 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
       "question_type":question_type,"material_form":material_form,
       "verifier":"source",
       "intro":x.get("intro","다음 자료를 읽고 <작성 방법>에 따라 쓰시오."),
-      "passage":passage,
-      "conditions":[],
-      "tasks":x.get("tasks",[]),
+      "passage":str(x.get("passage","")).strip(),
+      "conditions":[str(v).strip() for v in x.get("conditions",[]) if str(v).strip()],
+      "tasks":[str(v).strip() for v in x.get("tasks",[]) if str(v).strip()],
       "answer":answers,
-      "solution":[f"{x.get('solution_labels',['정답']*len(bundle))[i] if i < len(x.get('solution_labels',[])) else '정답'}: {a['answer']}" for i,a in enumerate(bundle)],
-      "evidence":[a["evidence"] for a in bundle],
+      "solution":[f"{LABELS[i]}: {a['answer']}" for i,a in enumerate(bundle)],
+      "evidence":evidence,
       "sources":[{"source_name":a["source_name"],"page_no":a["page_no"]} for a in bundle],
       "source_basis":"; ".join(f"{a['source_name']} p.{a['page_no']}" for a in bundle),
-      "premise_mode":"source_locked"
+      "premise_mode":"ai_grounded",
+      "master_concept":relation_meta.get("master_concept",""),
+      "relation":relation_meta.get("relation",""),
+      "intended_thinking_types":[str(v) for v in x.get("thinking_types",[])],
     }
     q["fingerprint"]=fingerprint(q)
     return q

@@ -42,16 +42,67 @@ def _basic(q):
         if sp==[1,1,2] and len(tasks)!=3:e.append("1+1+2 요구 수 오류")
     return e
 
-def validate_grounded_question(q,source_context):
+
+def _max_copy_similarity(passage,evidence,answer):
+    """정답만 지우고 원문 정의를 거의 그대로 복사했는지 보수적으로 검사."""
+    p=norm(passage)
+    ev=str(evidence)
+    if answer:
+        ev=re.sub(re.escape(str(answer)),"",ev,flags=re.I)
+    e=norm(ev)
+    if len(e)<18 or len(p)<18:return 0.0
+    if e in p:return 1.0
+    # evidence 길이와 비슷한 창에서 최대 유사도
+    L=len(e)
+    if len(p)<=L*2:
+        return difflib.SequenceMatcher(None,p,e).ratio()
+    step=max(1,L//5)
+    best=0.0
+    for i in range(0,max(1,len(p)-L+1),step):
+        w=p[i:i+L]
+        best=max(best,difflib.SequenceMatcher(None,w,e).ratio())
+    return best
+
+def static_quality_errors(q):
+    e=[]
+    if q.get("premise_mode")!="ai_grounded":
+        return e
+    pts=int(q.get("points",0))
+    passage=q.get("passage","")
+    for ans,ev in zip(q.get("answer",[]),q.get("evidence",[])):
+        if _max_copy_similarity(passage,ev,ans)>=0.86:
+            e.append("원문 정의/근거 과다복사")
+            break
+    if pts==4:
+        aq=q.get("ai_quality",{})
+        think={str(x).strip() for x in aq.get("thinking_types",[]) if str(x).strip()}
+        if len(think)<2:e.append("4점 사고행동 다양성 부족")
+        tasks=" ".join(q.get("tasks",[]))
+        reasoning_terms=("이유","근거","관계","비교","판단","설명","계산","수정","적용","영향","과정","순서","해석","도출")
+        if sum(1 for k in reasoning_terms if k in tasks)<1:
+            e.append("4점 단순회상형")
+    return e
+
+def validate_grounded_question(q,source_context,allow_ai_grounded=False):
     e=_basic(q)
     if q.get("verifier")!="source":e.append("개념형 verifier 오류")
-    if q.get("premise_mode")!="source_locked":e.append("지문 전제 잠금 누락")
+    mode=q.get("premise_mode")
+    if mode=="ai_grounded":
+        if not allow_ai_grounded:e.append("AI 생성 지문은 품질심사 전 통과 불가")
+        aq=q.get("ai_quality",{})
+        if allow_ai_grounded and not aq.get("pass"):e.append("AI 품질심사 미통과")
+    elif mode!="source_locked":
+        e.append("지문 전제 모드 오류")
     ev=q.get("evidence",[]); ans=q.get("answer",[])
     if len(ev)!=len(ans):e.append("근거-정답 수 불일치")
     for a,v in zip(ans,ev):
         if not v or not contains_loose(source_context,v):e.append("근거가 원자료에 없음")
         if len(norm(a))<=55 and not contains_loose(v,a):e.append(f"정답이 대응 근거에 없음:{a}")
     if not q.get("sources"):e.append("출처 없음")
+    e.extend(static_quality_errors(q))
+    if q.get("premise_mode")=="ai_grounded":
+        if not str(q.get("master_concept","")).strip():e.append("AI 지문 master concept 누락")
+        if not str(q.get("relation","")).strip():e.append("AI 지문 개념 관계 누락")
     if q.get("points")==4 and q.get("sources"):
         srcs=q.get("sources") or []
         names={str(s.get("source_name","")) for s in srcs}

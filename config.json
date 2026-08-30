@@ -134,5 +134,24 @@
     "scarce_domain_policy": "발명은 다영역 종합시험에서 섹션당 최대 1회",
     "ab_retry": "deterministic blueprint retry; no validator relaxation",
     "smoke_test": "100/100 A+B seeds passed in AI-off conservative mode"
+  },
+  "ai_quality_judge": {
+    "enabled_by_default": true,
+    "writer_model": "gpt-5.6-terra",
+    "judge_model": "gpt-5.6-terra",
+    "pipeline": [
+      "DB/Python fixed answer",
+      "AI coherent-anchor selector",
+      "AI question writer",
+      "blind reviewer without answer/source",
+      "grounding reviewer with fixed answer/source",
+      "deterministic evidence/source/static-copy checks",
+      "section-level AI review",
+      "A/B pair-level AI review"
+    ],
+    "veto_only": true,
+    "ai_never_changes_fixed_answer": true,
+    "4pt_min_inferential_distance": 3.5,
+    "direct_definition_copy_static_reject_threshold": 0.86
   }
 }

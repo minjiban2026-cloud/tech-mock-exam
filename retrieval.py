@@ -113,3 +113,30 @@ def official_style_profile(db_path, limit=4):
       "한 자료 안에서 용어→원리/특징→계산·적용·비교가 자연스럽게 이어진다. "
       "표·대화·수업계획·조건·과정자료를 활용하며 서로 무관한 개념을 억지로 묶지 않는다."
     )
+
+
+def candidate_cluster(db_path, domain, used_answers=None, used_topics=None, limit=10):
+    """AI 관계성 선별 전에 보여 줄 근접 anchor 후보군.
+    같은 출처의 2쪽 범위 안에서만 구성해 사실적으로 연결 가능한 후보만 제공한다.
+    """
+    used_topics=set(used_topics or [])
+    pool=[a for a in anchor_pool(db_path,domain,used_answers,400)
+          if a["topic"] not in used_topics]
+    if not pool: return []
+    # 후보가 많은 페이지/근접 구간부터 탐색
+    groups=[]
+    for seed in pool[:120]:
+        group=[]
+        for a in pool:
+            if a["source_name"]!=seed["source_name"]: continue
+            if abs(int(a["page_no"])-int(seed["page_no"]))>2: continue
+            if a["topic"] in used_topics: continue
+            if a["answer"] in {x["answer"] for x in group}: continue
+            group.append(a)
+        if len(group)>=2:
+            group=sorted(group,key=lambda x:(abs(int(x["page_no"])-int(seed["page_no"])),int(x["page_no"])))
+            groups.append(group[:limit])
+    if not groups: return []
+    # 같은 페이지/근접 페이지 후보가 많이 있는 군집을 우선
+    groups.sort(key=lambda g:(-len(g), max(int(x["page_no"]) for x in g)-min(int(x["page_no"]) for x in g)))
+    return groups[0][:limit]
