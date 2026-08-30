@@ -62,10 +62,10 @@ with tabs[2]:
         domains=st.multiselect("출제 영역",DOMAINS,default=DOMAINS)
     with c2:
         use_ai=st.toggle("AI로 임용형 문장 재구성",value=True)
-        model=st.text_input("OpenAI 모델",value="gpt-5.6-luna")
+        model=st.text_input("OpenAI 모델",value="gpt-5.6-terra")
     with c3:
         seed=st.number_input("랜덤 시드(재현용)",min_value=0,value=20260829,step=1)
-    st.caption("실제 2020~2026 임용 원본의 배점·부분점수·문항구조를 먼저 청사진으로 만든 뒤 출제합니다. 기본 모델은 저비용 GPT-5.6 Luna이며, AI는 정답을 변경하지 못합니다.")
+    st.caption("엄격모드: 실제 기출형 부분점수 → 영역/자료형 청사진 → 원문 전제 잠금 → 계산 검산 → concept-family A/B 중복 차단 순으로 생성합니다. 기본 모델은 GPT-5.6 Terra입니다.")
     key=api_key()
     if use_ai and not key:
         st.warning("OPENAI_API_KEY가 없어 이번 생성은 AI 없이 안전모드로 동작합니다.")
@@ -92,6 +92,7 @@ with tabs[2]:
                 badge="🧮 Python 검산" if q.get("verifier")=="python" else "📚 원문 근거검증"
                 with st.expander(f"{q['number']}번 · {q['domain']} · {q.get('question_type','')} · {q['points']}점({'+'.join(map(str,q.get('subpoints',[])))}) · {badge}"):
                     st.caption(f"주제: {q['topic']}")
+                    st.caption(f"자료형: {q.get('material_form','-')} · 부분점수: {'+'.join(map(str,q.get('subpoints',[])))} · 개념군: {', '.join(q.get('concept_families',[]))}")
                     st.write(q["passage"])
                     if q.get("conditions"):
                         st.markdown("**<조건>**")

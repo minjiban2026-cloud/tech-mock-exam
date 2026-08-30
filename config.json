@@ -75,5 +75,22 @@
     "free_ai_technical_diagrams": false,
     "premise_rule": "원자료 근거가 없는 수치/사실/인과관계 추가 금지",
     "fail_policy": "문항만 교체/원문형 폴백; 전체 시험은 검증 실패 때만 중단"
+  },
+  "strict_final_rules": {
+    "default_model": "gpt-5.6-terra",
+    "premise_lock": "개념형 사실 지문은 서브노트 evidence를 코드가 마스킹해 구성; AI는 factual passage 수정 불가",
+    "4pt_calculation": "최소 3채점요소, 기본 1+1+2; 단순 공식대입 4점 금지",
+    "cross_section_duplicate": "A/B concept-family 겹침 금지",
+    "formula_duplicate": "동일 공식/원리 family의 직렬·병렬 변형도 중복 처리",
+    "domain_balance": "전체 영역 선택 시 영역당 최대 2문항 수준으로 분산",
+    "material_diversity": [
+      "서술자료",
+      "대화자료",
+      "과정자료",
+      "표형자료",
+      "수치자료"
+    ],
+    "answer_rubric": "정답 PDF에 하위요소별 [1점]/[2점]/[3점] 표시",
+    "circuit_policy": "회로 자유생성 금지; 검증된 전용 템플릿이 없으면 출제하지 않음"
   }
 }

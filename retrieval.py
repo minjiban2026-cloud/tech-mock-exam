@@ -2,6 +2,11 @@
 import sqlite3, random, re
 
 BAD_WORDS=("요약","목차","단원","개요","정리","내용체계","서브노트","교과서 정리")
+GENERIC_EXACT={
+  "방법","내용","특징","종류","분류","영역","단원","목차","개요","정리",
+  "역할","활용","평가","한계","관련문제","관련 문제","소리","의미","장점","단점",
+  "구분","기능","목적","과정","절차","예시","사례","정의"
+}
 
 def connect(db_path):
     con=sqlite3.connect(db_path)
@@ -27,9 +32,12 @@ def _safe_anchor(a):
     if not a: return False
     topic=str(a["topic"]).strip(); ans=str(a["answer"]).strip(); ev=str(a["evidence"]).strip()
     if len(ans)<2 or len(ans)>55 or len(ev)<15: return False
-    if topic in {"방법","내용","특징","종류","분류","영역","단원","목차","개요","정리"}: return False
+    if topic.strip() in GENERIC_EXACT or ans.strip() in GENERIC_EXACT: return False
+    if ans.lstrip().startswith(("·","•","○","▶","※")): return False
     if any(w in topic or w in ans for w in BAD_WORDS): return False
     if re.fullmatch(r"표준\d+",ans): return False
+    # 제목/문장조각처럼 보이는 지나치게 불완전한 답 제거
+    if ans.endswith(("의","와","과","및",":","(",",")): return False
     return True
 
 def anchor_pool(db_path, domain, used_answers=None, limit=250):
