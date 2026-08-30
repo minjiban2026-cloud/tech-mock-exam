@@ -73,3 +73,10 @@ streamlit run app.py
 - 수동 수정 시 자동검증 상태를 해제하여 `수정됨`으로 표시합니다.
 - `supabase_archive_schema.sql`을 Supabase SQL Editor에서 최초 1회 실행해야 합니다.
 - Streamlit Secrets에는 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`를 설정하세요.
+
+# QUALITY FOCUS v2
+- 모든 4점 문항을 최소 3개의 독립 채점요소로 제한했습니다.
+- 형식상 4점이지만 실제 요구가 2개뿐인 2+2/1+3 자동 패턴은 잠정 비활성화했습니다.
+- 4점 계산형에서 같은 공식을 두 번 채점요소로 세는 방식을 금지했습니다.
+- 계산형은 원리/판단 → 중간값 → 최종 계산의 흐름으로 강화했습니다.
+- AI 작성방법은 같은 요구 반복을 금지하고, 2점짜리 하위요소에 원문 근거 기반 설명을 요구하도록 강화했습니다.

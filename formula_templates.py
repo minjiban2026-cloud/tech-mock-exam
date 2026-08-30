@@ -33,9 +33,9 @@ def material_hooke(rng):
       "intro":"다음은 탄성영역에서 축방향 하중을 받는 봉에 관한 자료이다.",
       "passage":f"길이 {L} mm, 단면적 {A} mm², 탄성계수 {E/1000:g} GPa인 봉에 {P/1000:g} kN의 인장하중이 작용한다.",
       "conditions":["σ=Eε의 관계가 성립하는 범위로 가정한다."],
-      "tasks":["봉의 수직응력[MPa]을 구할 것.","봉의 길이 방향 변형량[mm]을 풀이 과정과 함께 구할 것."],
-      "answer":[f"{P/A:g} MPa",f"{delta:.4g} mm"],
-      "solution":[f"σ=P/A={P}/{A}={P/A:g} MPa",f"δ=PL/(AE)={P}×{L}/({A}×{E})={delta:.4g} mm"],
+      "tasks":["봉의 수직응력[MPa]을 구할 것.","봉의 길이 방향 변형률을 구할 것.","봉의 길이 방향 변형량[mm]을 풀이 과정과 함께 구할 것."],
+      "answer":[f"{P/A:g} MPa",f"{(P/A)/E:.4g}",f"{delta:.4g} mm"],
+      "solution":[f"σ=P/A={P}/{A}={P/A:g} MPa",f"ε=σ/E={(P/A):g}/{E}={(P/A)/E:.4g}",f"δ=εL=PL/(AE)={delta:.4g} mm"],
       "source_basis":"재료역학 서브노트의 훅의 법칙과 δ=PL/AE"
     }
     q["fingerprint"]=_fp({k:q[k] for k in ["domain","topic","passage","answer"]})
@@ -51,9 +51,9 @@ def material_cylinder(rng):
       "intro":"다음은 내압을 받는 얇은 원통 용기에 관한 자료이다.",
       "passage":f"안지름이 {D} mm인 얇은 원통에 {p} N/mm²의 내압이 작용한다. 재료의 허용 원주응력은 {allow} N/mm²이다.",
       "conditions":["원주방향 응력을 기준으로 설계한다.","얇은 원통으로 가정한다."],
-      "tasks":["원주방향 응력식을 쓸 것.","필요한 최소 두께[mm]를 구할 것."],
-      "answer":["σₕ=pD/(2t)",f"{t:g} mm"],
-      "solution":[f"σₕ=pD/(2t)",f"t=pD/(2σₕ)={p}×{D}/(2×{allow})={t:g} mm"],
+      "tasks":["얇은 원통의 설계에서 축방향 응력보다 크게 발생하여 두께를 지배하는 응력의 명칭을 쓸 것.","그 응력의 관계식을 쓸 것.","허용응력을 넘지 않도록 필요한 최소 두께[mm]를 풀이 과정과 함께 구할 것."],
+      "answer":["원주방향 응력", "σₕ=pD/(2t)",f"{t:g} mm"],
+      "solution":["얇은 원통에서는 원주방향 응력이 축방향 응력의 2배이므로 두께 설계를 지배한다.","σₕ=pD/(2t)",f"t=pD/(2σallow)={p}×{D}/(2×{allow})={t:g} mm"],
       "source_basis":"재료역학 서브노트의 원통 내압 원주방향 응력"
     }
     q["fingerprint"]=_fp({k:q[k] for k in ["domain","topic","passage","answer"]})
@@ -74,9 +74,9 @@ def material_spring(rng):
       "intro":"다음은 두 스프링으로 구성된 탄성계에 관한 자료이다.",
       "passage":f"스프링 상수 k₁={k1} N/mm, k₂={k2} N/mm인 두 스프링을 {mode}로 연결하고 전체에 {P} N의 하중을 가하였다.",
       "conditions":["스프링은 선형 탄성범위에서 작동한다."],
-      "tasks":["등가 스프링 상수[N/mm]를 구할 것.","전체 변형량[mm]을 구할 것."],
-      "answer":[f"{k:.4g} N/mm",f"{delta:.4g} mm"],
-      "solution":[("1/k=1/k₁+1/k₂" if mode=="직렬" else "k=k₁+k₂")+f" → k={k:.4g} N/mm",f"δ=P/k={P}/{k:.4g}={delta:.4g} mm"],
+      "tasks":[f"두 스프링의 {mode} 연결에 대한 등가 스프링 상수 관계식을 쓸 것.","등가 스프링 상수[N/mm]를 구할 것.","전체 변형량[mm]을 풀이 과정과 함께 구할 것."],
+      "answer":[("1/k=1/k₁+1/k₂" if mode=="직렬" else "k=k₁+k₂"),f"{k:.4g} N/mm",f"{delta:.4g} mm"],
+      "solution":[("1/k=1/k₁+1/k₂" if mode=="직렬" else "k=k₁+k₂"),f"k={k:.4g} N/mm",f"δ=P/k={P}/{k:.4g}={delta:.4g} mm"],
       "source_basis":"재료역학 서브노트의 스프링 직렬·병렬 합성"
     }
     q["fingerprint"]=_fp({k:q[k] for k in ["domain","topic","passage","answer"]})
@@ -93,9 +93,9 @@ def euler_buckling(rng):
       "intro":"다음은 세장한 기둥의 좌굴에 관한 자료이다.",
       "passage":f"탄성계수 E=200 GPa, 단면 2차 모멘트 I={I/1e6:g}×10⁶ mm⁴, 길이 L={L/1000:g} m인 기둥의 유효길이계수 K는 {K:g}이다.",
       "conditions":["오일러 좌굴식을 적용한다.","π는 계산기의 값을 사용한다."],
-      "tasks":["유효길이 KL[mm]을 구할 것.","임계 좌굴하중[kN]을 구할 것."],
-      "answer":[f"{K*L:g} mm",f"{Pcr:.3g} kN"],
-      "solution":[f"KL={K:g}×{L}={K*L:g} mm",f"Pcr=π²EI/(KL)²={Pcr:.3g} kN"],
+      "tasks":["오일러 좌굴식에 사용하는 유효길이의 관계식을 쓸 것.","이 기둥의 유효길이 KL[mm]을 구할 것.","임계 좌굴하중[kN]을 풀이 과정과 함께 구할 것."],
+      "answer":["Le=KL",f"{K*L:g} mm",f"{Pcr:.3g} kN"],
+      "solution":["유효길이 Le=KL",f"Le={K:g}×{L}={K*L:g} mm",f"Pcr=π²EI/Le²={Pcr:.3g} kN"],
       "source_basis":"재료역학 서브노트의 오일러 방정식"
     }
     q["fingerprint"]=_fp({k:q[k] for k in ["domain","topic","passage","answer"]})
@@ -129,9 +129,9 @@ def fluid_pascal(rng):
       "intro":"다음은 서로 다른 크기의 피스톤을 가진 유압장치에 관한 자료이다.",
       "passage":f"작은 피스톤의 지름은 {d1} cm, 큰 피스톤의 지름은 {d2} cm이다. 작은 피스톤에 {F1} N의 힘을 가한다.",
       "conditions":["유체 손실과 피스톤 마찰은 무시한다."],
-      "tasks":["두 피스톤에서 동일하게 전달되는 물리량의 명칭을 쓸 것.","큰 피스톤에서 얻는 힘[N]을 구할 것."],
-      "answer":["압력",f"{F2:g} N"],
-      "solution":["밀폐된 유체에 가한 압력은 모든 방향으로 동일하게 전달된다.",f"F₂=F₁(A₂/A₁)=F₁(d₂/d₁)²={F2:g} N"],
+      "tasks":["두 피스톤에서 동일하게 전달되는 물리량의 명칭을 쓸 것.","큰 피스톤과 작은 피스톤의 단면적 비 A₂/A₁을 구할 것.","큰 피스톤에서 얻는 힘[N]을 풀이 과정과 함께 구할 것."],
+      "answer":["압력",f"{(d2/d1)**2:g}",f"{F2:g} N"],
+      "solution":["밀폐된 유체의 압력이 동일하게 전달된다.",f"A₂/A₁=(d₂/d₁)²=({d2}/{d1})²={(d2/d1)**2:g}",f"F₂=F₁(A₂/A₁)={F2:g} N"],
       "source_basis":"유체역학 서브노트의 파스칼 원리"
     }
     q["fingerprint"]=_fp({k:q[k] for k in ["domain","topic","passage","answer"]})
@@ -147,9 +147,9 @@ def fluid_continuity(rng):
       "intro":"다음은 정상상태로 흐르는 비압축성 유체의 관로에 관한 자료이다.",
       "passage":f"원형 관의 지름이 {d1} mm에서 {d2} mm로 감소한다. 지름 {d1} mm 구간의 평균 유속은 {v1} m/s이다.",
       "conditions":["밀도는 일정하고 누설은 없다."],
-      "tasks":["적용되는 보존 법칙을 쓸 것.","지름 {d2} mm 구간의 평균 유속[m/s]을 구할 것."],
-      "answer":["질량 보존 법칙",f"{v2:g} m/s"],
-      "solution":["비압축성 유체에서 A₁V₁=A₂V₂이다.",f"V₂=V₁(d₁/d₂)²={v1}×({d1}/{d2})²={v2:g} m/s"],
+      "tasks":["적용되는 보존 법칙을 쓸 것.","두 구간의 단면적 비 A₁/A₂를 구할 것.",f"지름 {d2} mm 구간의 평균 유속[m/s]을 풀이 과정과 함께 구할 것."],
+      "answer":["질량 보존 법칙",f"{(d1/d2)**2:g}",f"{v2:g} m/s"],
+      "solution":["비압축성 정상유동에서 질량 보존에 의해 A₁V₁=A₂V₂이다.",f"A₁/A₂=(d₁/d₂)²=({d1}/{d2})²={(d1/d2)**2:g}",f"V₂=V₁(A₁/A₂)={v1}×{(d1/d2)**2:g}={v2:g} m/s"],
       "source_basis":"유체역학 서브노트의 연속방정식"
     }
     q["fingerprint"]=_fp({k:q[k] for k in ["domain","topic","passage","answer"]})
@@ -181,9 +181,9 @@ def refrigerator_cop(rng):
       "intro":"다음은 역카르노 사이클로 작동하는 냉동기에 관한 자료이다.",
       "passage":f"저온 열원의 절대온도는 {TL} K, 고온 열원의 절대온도는 {TH} K이다.",
       "conditions":["이상적인 역카르노 냉동기로 가정한다."],
-      "tasks":["냉동기의 성능계수 식을 온도로 나타낼 것.","성능계수를 구할 것."],
-      "answer":["COP=TL/(TH-TL)",f"{cop:.4g}"],
-      "solution":["역카르노 냉동기의 COP=TL/(TH-TL)",f"{TL}/({TH}-{TL})={cop:.4g}"],
+      "tasks":["고온 열원과 저온 열원의 온도차 TH-TL[K]를 구할 것.","역카르노 냉동기의 성능계수 식을 온도로 나타낼 것.","성능계수를 풀이 과정과 함께 구할 것."],
+      "answer":[f"{TH-TL} K","COP=TL/(TH-TL)",f"{cop:.4g}"],
+      "solution":[f"TH-TL={TH}-{TL}={TH-TL} K","COP=TL/(TH-TL)",f"COP={TL}/({TH}-{TL})={cop:.4g}"],
       "source_basis":"열역학 서브노트의 냉동기 성능계수"
     }
     q["fingerprint"]=_fp({k:q[k] for k in ["domain","topic","passage","answer"]})

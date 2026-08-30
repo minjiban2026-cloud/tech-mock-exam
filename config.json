@@ -106,5 +106,33 @@
     ],
     "manual_edit_policy": "수동 수정 시 verified=False 및 manually_edited=True",
     "recommended_secret": "SUPABASE_SERVICE_ROLE_KEY"
+  },
+  "quality_focus_v2": {
+    "four_point_rule": "모든 4점 문항 최소 3개 독립 채점요소",
+    "source_patterns": [
+      "1+1+2",
+      "1+1+1+1"
+    ],
+    "disabled_shallow_patterns": [
+      "2+2",
+      "1+3"
+    ],
+    "calculation_rule": "공식 복제 금지; 개념/관계 또는 중간판단 + 중간값 + 최종 계산",
+    "calculation_examples": {
+      "훅의 법칙": "응력→변형률→변형량",
+      "얇은 원통": "지배응력 식별→관계식→최소두께",
+      "오일러 좌굴": "유효길이 관계→유효길이→좌굴하중",
+      "파스칼": "전달 물리량→면적비→출력힘",
+      "연속방정식": "보존법칙→면적비→유속",
+      "냉동기 COP": "온도차→관계식→COP"
+    },
+    "ai_task_rule": "동일 요구 반복 금지, 2점 하위요소는 원문 근거 기반 특징/이유/관계/적용을 함께 요구"
+  },
+  "quality_recheck": {
+    "source_coherence_4pt": "same source, page span <= 2",
+    "concept_pattern_retry": "quality-preserving same-point pattern cascade",
+    "scarce_domain_policy": "발명은 다영역 종합시험에서 섹션당 최대 1회",
+    "ab_retry": "deterministic blueprint retry; no validator relaxation",
+    "smoke_test": "100/100 A+B seeds passed in AI-off conservative mode"
   }
 }

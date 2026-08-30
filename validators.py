@@ -36,8 +36,8 @@ def _basic(q):
             e.append(f"정답 노출:{a}")
     if pts==2 and len(q.get("passage",""))>900:e.append("2점 지문 과다")
     if pts==4:
-        if len(tasks)<2:e.append("4점 채점요소 부족")
-        if complexity_score(q)<3:e.append("4점 복잡도 미달")
+        if len(tasks)<3:e.append("4점 채점요소 부족(최소 3개 요구)")
+        if complexity_score(q)<4:e.append("4점 복잡도 미달")
         # 1+1+2이면 실제 3개 요구 강제
         if sp==[1,1,2] and len(tasks)!=3:e.append("1+1+2 요구 수 오류")
     return e
@@ -52,6 +52,12 @@ def validate_grounded_question(q,source_context):
         if not v or not contains_loose(source_context,v):e.append("근거가 원자료에 없음")
         if len(norm(a))<=55 and not contains_loose(v,a):e.append(f"정답이 대응 근거에 없음:{a}")
     if not q.get("sources"):e.append("출처 없음")
+    if q.get("points")==4 and q.get("sources"):
+        srcs=q.get("sources") or []
+        names={str(s.get("source_name","")) for s in srcs}
+        pages=[int(s.get("page_no",0)) for s in srcs if str(s.get("page_no","")).isdigit()]
+        if len(names)>1:e.append("4점 자료 응집도 미달(서로 다른 출처 혼합)")
+        if pages and max(pages)-min(pages)>2:e.append("4점 자료 응집도 미달(페이지 간격 과다)")
     return list(dict.fromkeys(e))
 
 def validate_formula_question(q):

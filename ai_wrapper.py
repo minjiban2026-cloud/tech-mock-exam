@@ -56,7 +56,10 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
 규칙:
 - tasks 개수는 정확히 {len(pattern['subpoints'])}개.
 - task i는 고정정답 i 하나를 평가한다.
-- 4점 1+1+2이면 실제 요구도 3개여야 한다.
+- 4점은 최소 3개의 서로 다른 채점 요구를 가져야 한다.
+- 2점짜리 하위요소는 단순 용어 쓰기만 시키지 말고, 고정지문에서 확인 가능한 특징·이유·관계·적용 중 하나를 함께 요구한다.
+- 같은 동사와 같은 요구를 표현만 바꾸어 반복하지 않는다.
+- 가능한 경우 식별 → 관계/비교 → 적용/설명의 흐름으로 구성한다.
 - 원자료에 없는 숫자, 사실, 사례, 조건, 인과관계를 추가하지 않는다.
 - 정답을 task 안에 직접 쓰지 않는다.
 - 2점은 짧게, 4점은 부분점수별 요구가 분명하게 보이게 한다.
@@ -99,7 +102,7 @@ def safe_bundle_question(bundle,points,pattern,question_type,material_form):
       "tasks":[
           (f"{LABELS[i]}에 해당하는 용어 또는 내용을 쓸 것."
            if pattern["subpoints"][i]==1 else
-           f"{LABELS[i]}에 해당하는 용어 또는 내용을 쓰고, 자료에 제시된 관련 근거를 함께 서술할 것.")
+           f"{LABELS[i]}에 해당하는 용어 또는 내용을 쓰고, 자료에 제시된 특징·이유·관계 중 해당하는 내용을 근거로 함께 설명할 것.")
           for i in range(len(bundle))
       ],
       "answer":[a["answer"] for a in bundle],
