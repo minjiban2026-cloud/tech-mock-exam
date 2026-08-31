@@ -97,3 +97,25 @@ streamlit run app.py
 
 AI는 정답을 결정하거나 바꿀 권한이 없습니다. AI 심사는 veto(탈락)만 할 수 있습니다.
 품질우선 모드는 API 호출 수와 생성 시간이 늘어납니다.
+
+
+# 고정 파일명 정책
+이 버전부터 기존 실행 파일명은 변경하지 않습니다.
+- app.py
+- exam_builder.py
+- ai_wrapper.py
+- validators.py
+- retrieval.py
+- formula_templates.py
+- patterns.py
+- concept_families.py
+- pdf_export.py
+- archive_store.py
+- knowledge.db
+- config.json
+- requirements.txt
+- packages.txt
+- supabase_archive_schema.sql
+
+새 기능은 새 모듈 추가로만 확장할 수 있으며, 기존 역할의 파일은 다른 이름으로 교체하지 않습니다.
+현재 추가 모듈: quality_judge.py

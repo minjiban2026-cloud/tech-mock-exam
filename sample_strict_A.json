@@ -1,0 +1,770 @@
+{
+  "exam_title": "기술 임용 모의고사 전공 A",
+  "section": "A",
+  "total_points": 40,
+  "questions": [
+    {
+      "domain": "생명기술",
+      "topic": "2) 지오박터 · 신재생에너지의 바이오 연료",
+      "points": 2,
+      "subpoints": [
+        1,
+        1
+      ],
+      "pattern_id": "T2_11",
+      "question_type": "순서/과정",
+      "material_form": "과정자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "1단계. ㉠ : 똥(유기성 폐기물)을 먹고 전기를 뱉어냄\n2단계. - ㉡ : 물리적, 열화학적, 생화학적 처리를 통해 고체, 액체, 기체 상태의 사용",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓸 것."
+      ],
+      "answer": [
+        "2) 지오박터",
+        "신재생에너지의 바이오 연료"
+      ],
+      "solution": [
+        "㉠: 2) 지오박터",
+        "㉡: 신재생에너지의 바이오 연료"
+      ],
+      "evidence": [
+        "2) 지오박터 : 똥(유기성 폐기물)을 먹고 전기를 뱉어냄",
+        "- 신재생에너지의 바이오 연료 : 물리적, 열화학적, 생화학적 처리를 통해 고체, 액체, 기체 상태의 사용"
+      ],
+      "sources": [
+        {
+          "source_name": "생명 교과서 정리_jio_ning.pdf",
+          "page_no": 41
+        },
+        {
+          "source_name": "생명 교과서 정리_jio_ning.pdf",
+          "page_no": 42
+        }
+      ],
+      "source_basis": "생명 교과서 정리_jio_ning.pdf p.41; 생명 교과서 정리_jio_ning.pdf p.42",
+      "premise_mode": "source_locked",
+      "fingerprint": "089dd15657b62e6ad219",
+      "number": 1,
+      "blueprint_domain": "생명기술",
+      "concept_families": [
+        "topic_2_지오박터",
+        "topic_신재생에너지의_바이오_연료"
+      ]
+    },
+    {
+      "domain": "발명",
+      "topic": "고장해결(Custer) · 확산적 사고",
+      "points": 2,
+      "subpoints": [
+        1,
+        1
+      ],
+      "pattern_id": "T2_11",
+      "question_type": "자료식별",
+      "material_form": "표형자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "자료 1 | ㉠ (trouble\u0001 shooting)\n자료 2 | ㉡ 창의력 3)\u0001 최적의대안선정",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓸 것."
+      ],
+      "answer": [
+        "고장해결",
+        "확산적사고"
+      ],
+      "solution": [
+        "㉠: 고장해결",
+        "㉡: 확산적사고"
+      ],
+      "evidence": [
+        "고장해결 (trouble\u0001 shooting)",
+        "확산적사고 창의력 3)\u0001 최적의대안선정"
+      ],
+      "sources": [
+        {
+          "source_name": "기술교육론 서브노트_강지현.pdf",
+          "page_no": 106
+        },
+        {
+          "source_name": "기술교육론 서브노트_강지현.pdf",
+          "page_no": 107
+        }
+      ],
+      "source_basis": "기술교육론 서브노트_강지현.pdf p.106; 기술교육론 서브노트_강지현.pdf p.107",
+      "premise_mode": "source_locked",
+      "fingerprint": "b2a275c67ab076e01adb",
+      "number": 2,
+      "blueprint_domain": "발명",
+      "concept_families": [
+        "topic_고장해결_custer_",
+        "topic_확산적_사고"
+      ]
+    },
+    {
+      "domain": "통신기술",
+      "topic": "순환 중복 검사(CRC · ASCII 코드",
+      "points": 2,
+      "subpoints": [
+        1,
+        1
+      ],
+      "pattern_id": "T2_11",
+      "question_type": "자료식별",
+      "material_form": "서술자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "◦ - ㉠: Cyclic Redundancy Check)\n◦ - ㉡: 1000001 (A)",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓸 것."
+      ],
+      "answer": [
+        "순환 중복 검사(CRC",
+        "ASCII 코드"
+      ],
+      "solution": [
+        "㉠: 순환 중복 검사(CRC",
+        "㉡: ASCII 코드"
+      ],
+      "evidence": [
+        "- 순환 중복 검사(CRC: Cyclic Redundancy Check)",
+        "- ASCII 코드: 1000001 (A)"
+      ],
+      "sources": [
+        {
+          "source_name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+          "page_no": 88
+        },
+        {
+          "source_name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+          "page_no": 89
+        }
+      ],
+      "source_basis": "2026 기술임용 서브노트(통신기술)_이성민.pdf p.88; 2026 기술임용 서브노트(통신기술)_이성민.pdf p.89",
+      "premise_mode": "source_locked",
+      "fingerprint": "c895cd66883ac87d5b8b",
+      "number": 3,
+      "blueprint_domain": "통신기술",
+      "concept_families": [
+        "topic_ascii_코드",
+        "topic_순환_중복_검사_crc"
+      ]
+    },
+    {
+      "domain": "제조기술",
+      "topic": "운동상태에 따라 · 크리프",
+      "points": 2,
+      "subpoints": [
+        1,
+        1
+      ],
+      "pattern_id": "T2_11",
+      "question_type": "오류판단",
+      "material_form": "대화자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "교사: - ㉠: 미끄럼 마멸, 구름 마멸, 왕복 미끄럼 마멸\n학생 A: - ㉡: 온도가 높을수록 재료에 인장강도보다 작은 응력일지라도 오랜시간 가해주면 재료는 차차 늘어가서 절단",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓸 것."
+      ],
+      "answer": [
+        "운동상태에 따라",
+        "크리프"
+      ],
+      "solution": [
+        "㉠: 운동상태에 따라",
+        "㉡: 크리프"
+      ],
+      "evidence": [
+        "- 운동상태에 따라: 미끄럼 마멸, 구름 마멸, 왕복 미끄럼 마멸",
+        "- 크리프: 온도가 높을수록 재료에 인장강도보다 작은 응력일지라도 오랜시간 가해주면 재료는 차차 늘어가서 절단"
+      ],
+      "sources": [
+        {
+          "source_name": "제조기술 서브노트_조효준.pdf",
+          "page_no": 235
+        },
+        {
+          "source_name": "제조기술 서브노트_조효준.pdf",
+          "page_no": 234
+        }
+      ],
+      "source_basis": "제조기술 서브노트_조효준.pdf p.235; 제조기술 서브노트_조효준.pdf p.234",
+      "premise_mode": "source_locked",
+      "fingerprint": "07075fc67a3c649faed7",
+      "number": 4,
+      "blueprint_domain": "제조기술",
+      "concept_families": [
+        "topic_운동상태에_따라",
+        "topic_크리프"
+      ]
+    },
+    {
+      "domain": "전기·전자",
+      "topic": "쌍방향 · 빛을 차단하면",
+      "points": 4,
+      "subpoints": [
+        2,
+        2
+      ],
+      "pattern_id": "T4_22",
+      "question_type": "개념+적용",
+      "material_form": "과정자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "1단계. - ㉠ : 다이악, 트라이악\n2단계. - ㉡ : 저항이 커짐 → 전류의 흐름을 방해",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓰고, 자료에 제시된 관련 근거를 함께 서술할 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓰고, 자료에 제시된 관련 근거를 함께 서술할 것."
+      ],
+      "answer": [
+        "쌍방향",
+        "빛을 차단하면"
+      ],
+      "solution": [
+        "㉠: 쌍방향 / 근거: - 쌍방향 : 다이악, 트라이악",
+        "㉡: 빛을 차단하면 / 근거: - 빛을 차단하면 : 저항이 커짐 → 전류의 흐름을 방해"
+      ],
+      "evidence": [
+        "- 쌍방향 : 다이악, 트라이악",
+        "- 빛을 차단하면 : 저항이 커짐 → 전류의 흐름을 방해"
+      ],
+      "sources": [
+        {
+          "source_name": "전기전자 서브노트_김규식.pdf",
+          "page_no": 78
+        },
+        {
+          "source_name": "전기전자 서브노트_김규식.pdf",
+          "page_no": 79
+        }
+      ],
+      "source_basis": "전기전자 서브노트_김규식.pdf p.78; 전기전자 서브노트_김규식.pdf p.79",
+      "premise_mode": "source_locked",
+      "fingerprint": "067659458392e0d59560",
+      "number": 5,
+      "blueprint_domain": "전기·전자",
+      "concept_families": [
+        "topic_빛을_차단하면",
+        "topic_쌍방향"
+      ]
+    },
+    {
+      "domain": "수송기술",
+      "topic": "제트 기관 · (4) · 냉동 사이클",
+      "points": 4,
+      "subpoints": [
+        1,
+        1,
+        2
+      ],
+      "pattern_id": "T4_112",
+      "question_type": "오류수정",
+      "material_form": "표형자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "자료 1 | ▶ ㉠ 가스 터빈의 원리를 이용해, 공기를 흡입하여 연료와 혼합· 연소시키고, 연소된 고온·고압의 가스를 분출시켜 그 반작용 으로 추진력을 얻는 기관\n자료 2 | ㉡ : 램 효과를 이용하여 압축된 공기에\n자료 3 | ▶ ㉢ 열(고열원, 저열원)을 이동시키는 열역학적 사이클. 열역학 제2법칙을 근거로 작동 ※ 냉방이나 냉동의 목적으로 저열원을 이용할 경우 ‘냉동기’라 하고,",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉢에 해당하는 용어 또는 내용을 쓰고, 자료에 제시된 관련 근거를 함께 서술할 것."
+      ],
+      "answer": [
+        "제트 기관",
+        "(4)",
+        "냉동 사이클"
+      ],
+      "solution": [
+        "㉠: 제트 기관",
+        "㉡: (4)",
+        "㉢: 냉동 사이클 / 근거: ▶ 냉동 사이클 열(고열원, 저열원)을 이동시키는 열역학적 사이클. 열역학 제2법칙을 근거로 작동 ※ 냉방이나 냉동의 목적으로 저열원을 이용할 경우 ‘냉동기’라 하고,"
+      ],
+      "evidence": [
+        "▶ 제트 기관 가스 터빈의 원리를 이용해, 공기를 흡입하여 연료와 혼합· 연소시키고, 연소된 고온·고압의 가스를 분출시켜 그 반작용 으로 추진력을 얻는 기관",
+        "(4) : 램 효과를 이용하여 압축된 공기에",
+        "▶ 냉동 사이클 열(고열원, 저열원)을 이동시키는 열역학적 사이클. 열역학 제2법칙을 근거로 작동 ※ 냉방이나 냉동의 목적으로 저열원을 이용할 경우 ‘냉동기’라 하고,"
+      ],
+      "sources": [
+        {
+          "source_name": "[역학] Part1 열역학 (1).pdf",
+          "page_no": 9
+        },
+        {
+          "source_name": "[역학] Part1 열역학 (1).pdf",
+          "page_no": 9
+        },
+        {
+          "source_name": "[역학] Part1 열역학 (1).pdf",
+          "page_no": 10
+        }
+      ],
+      "source_basis": "[역학] Part1 열역학 (1).pdf p.9; [역학] Part1 열역학 (1).pdf p.9; [역학] Part1 열역학 (1).pdf p.10",
+      "premise_mode": "source_locked",
+      "fingerprint": "01ff408fb15348ee46b7",
+      "number": 6,
+      "blueprint_domain": "수송기술",
+      "concept_families": [
+        "topic__4_",
+        "topic_냉동_사이클",
+        "topic_제트_기관"
+      ]
+    },
+    {
+      "domain": "재료역학",
+      "topic": "오일러 좌굴",
+      "points": 4,
+      "verifier": "python",
+      "intro": "다음은 세장한 기둥의 좌굴에 관한 자료이다.",
+      "passage": "탄성계수 E=200 GPa, 단면 2차 모멘트 I=1×10⁶ mm⁴, 길이 L=2 m인 기둥의 유효길이계수 K는 0.7이다.",
+      "conditions": [
+        "오일러 좌굴식을 적용한다.",
+        "π는 계산기의 값을 사용한다."
+      ],
+      "tasks": [
+        "오일러 좌굴식에 사용하는 유효길이의 관계식을 쓸 것.",
+        "유효길이 KL[mm]을 구할 것.",
+        "임계 좌굴하중[kN]을 구할 것."
+      ],
+      "answer": [
+        "Le=KL",
+        "1400 mm",
+        "1.01e+03 kN"
+      ],
+      "solution": [
+        "유효길이 Le=KL",
+        "KL=0.7×2000=1400 mm",
+        "Pcr=π²EI/(KL)²=1.01e+03 kN"
+      ],
+      "source_basis": "재료역학 서브노트의 오일러 방정식",
+      "fingerprint": "425e205fbba57cfc0a74",
+      "material_form": "수치자료",
+      "question_type": "계산/판단",
+      "concept_family": "euler_buckling",
+      "subpoints": [
+        1,
+        1,
+        2
+      ],
+      "pattern_id": "T4_C112",
+      "number": 7,
+      "blueprint_domain": "재료역학",
+      "concept_families": [
+        "euler_buckling"
+      ]
+    },
+    {
+      "domain": "건설기술",
+      "topic": "철근공사 · 철근 형상에 따른 종류 · 강재 절감 · 구조 형태에 따른 분류",
+      "points": 4,
+      "subpoints": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "pattern_id": "T4_1111",
+      "question_type": "비교/구분",
+      "material_form": "대화자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "교사: ■ ㉠ 철근 조립과정 ◎ ♥ 비교\n학생 A: - ㉡: ⓐ 원형 철근 ⓑ 이형 철근\n학생 B: - ㉢: 항복강도가 높아 강재 소요량 절감(경량화)\n교사: - ㉣ : 보에 의해 지지되는 슬래브, 천장슬래브, 벽슬래브, 바닥슬래브, 계단슬래브,,,,?",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉢에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉣에 해당하는 용어 또는 내용을 쓸 것."
+      ],
+      "answer": [
+        "철근공사",
+        "철근 형상에 따른 종류",
+        "강재 절감",
+        "구조 형태에 따른 분류"
+      ],
+      "solution": [
+        "㉠: 철근공사",
+        "㉡: 철근 형상에 따른 종류",
+        "㉢: 강재 절감",
+        "㉣: 구조 형태에 따른 분류"
+      ],
+      "evidence": [
+        "■ 철근공사 철근 조립과정 ◎ ♥ 비교",
+        "- 철근 형상에 따른 종류: ⓐ 원형 철근 ⓑ 이형 철근",
+        "- 강재 절감: 항복강도가 높아 강재 소요량 절감(경량화)",
+        "- 구조 형태에 따른 분류 : 보에 의해 지지되는 슬래브, 천장슬래브, 벽슬래브, 바닥슬래브, 계단슬래브,,,,?"
+      ],
+      "sources": [
+        {
+          "source_name": "건설기술 서브노트_조효준.pdf",
+          "page_no": 80
+        },
+        {
+          "source_name": "건설기술 서브노트_조효준.pdf",
+          "page_no": 80
+        },
+        {
+          "source_name": "건설기술 서브노트_조효준.pdf",
+          "page_no": 80
+        },
+        {
+          "source_name": "건설기술 서브노트_조효준.pdf",
+          "page_no": 79
+        }
+      ],
+      "source_basis": "건설기술 서브노트_조효준.pdf p.80; 건설기술 서브노트_조효준.pdf p.80; 건설기술 서브노트_조효준.pdf p.80; 건설기술 서브노트_조효준.pdf p.79",
+      "premise_mode": "source_locked",
+      "fingerprint": "5bf6b976f20ea99e3353",
+      "number": 8,
+      "blueprint_domain": "건설기술",
+      "concept_families": [
+        "topic_강재_절감",
+        "topic_구조_형태에_따른_분류",
+        "topic_철근_형상에_따른_종류",
+        "topic_철근공사"
+      ]
+    },
+    {
+      "domain": "기술교육론",
+      "topic": "수송기술 · 자원관리와환경",
+      "points": 4,
+      "subpoints": [
+        1,
+        3
+      ],
+      "pattern_id": "T4_13",
+      "question_type": "사례/설계",
+      "material_form": "과정자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "1단계. □㉠ \u0001 ∙ 에너지의생산과 \u0001 \u0001 \u0001 이용 \u0001 ∙ ㉠의특성\n2단계. □㉡ □가족생활과주거 \u0001 ☞\u0001 7차교육내용의체계는기술과가정의구분이불명확함→2007\u0001 개정교육과정에서구분 \u0001 ☞\u0001 가정관련영역은구체적하위요소작성하지않음(진한부분이기술분야영역)",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓰고, 자료에 제시된 관련 근거를 함께 서술할 것."
+      ],
+      "answer": [
+        "수송기술",
+        "자원관리와환경"
+      ],
+      "solution": [
+        "㉠: 수송기술",
+        "㉡: 자원관리와환경 / 근거: □자원관리와환경 □가족생활과주거 \u0001 ☞\u0001 7차교육내용의체계는기술과가정의구분이불명확함→2007\u0001 개정교육과정에서구분 \u0001 ☞\u0001 가정관련영역은구체적하위요소작성하지않음(진한부분이기술분야영역)"
+      ],
+      "evidence": [
+        "□수송기술 \u0001 ∙ 에너지의생산과 \u0001 \u0001 \u0001 이용 \u0001 ∙ 수송기술의특성",
+        "□자원관리와환경 □가족생활과주거 \u0001 ☞\u0001 7차교육내용의체계는기술과가정의구분이불명확함→2007\u0001 개정교육과정에서구분 \u0001 ☞\u0001 가정관련영역은구체적하위요소작성하지않음(진한부분이기술분야영역)"
+      ],
+      "sources": [
+        {
+          "source_name": "기술교육론 서브노트_강지현.pdf",
+          "page_no": 59
+        },
+        {
+          "source_name": "기술교육론 서브노트_강지현.pdf",
+          "page_no": 58
+        }
+      ],
+      "source_basis": "기술교육론 서브노트_강지현.pdf p.59; 기술교육론 서브노트_강지현.pdf p.58",
+      "premise_mode": "source_locked",
+      "fingerprint": "b20d286fee191de014b9",
+      "number": 9,
+      "blueprint_domain": "기술교육론",
+      "concept_families": [
+        "topic_수송기술",
+        "topic_자원관리와환경"
+      ]
+    },
+    {
+      "domain": "발명",
+      "topic": "ALU · 하이라이팅 · 역브레인스토밍",
+      "points": 4,
+      "subpoints": [
+        1,
+        1,
+        2
+      ],
+      "pattern_id": "T4_112",
+      "question_type": "원인/이유",
+      "material_form": "표형자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "자료 1 | ■ ㉠ [Advantage, Limitation and Unique Qualities) _최(2)216p\u0001 ★21(B)05 정의 - 강점,\u0001 약점,\u0001 독특한특징의첫단어로만든기본적인수렴적사고도구\n자료 2 | ■ ㉡ _최(2)214p\u0001 ★21(B)05 정의 - 히트기법*으로선정된대안들을몇개의범주에따라분류해보는것\n자료 3 | ■ ㉢ _서브 정의 - 아이디어를생성하는입장인브레인스토밍과달리이미생성해놓은아이디어에대해많은양의",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉢에 해당하는 용어 또는 내용을 쓰고, 자료에 제시된 관련 근거를 함께 서술할 것."
+      ],
+      "answer": [
+        "ALU 기법",
+        "하이라이팅 기법",
+        "역브레인스토밍"
+      ],
+      "solution": [
+        "㉠: ALU 기법",
+        "㉡: 하이라이팅 기법",
+        "㉢: 역브레인스토밍 / 근거: ■ 역브레인스토밍 _서브 정의 - 아이디어를생성하는입장인브레인스토밍과달리이미생성해놓은아이디어에대해많은양의"
+      ],
+      "evidence": [
+        "■ ALU 기법 [Advantage, Limitation and Unique Qualities) _최(2)216p\u0001 ★21(B)05 정의 - 강점,\u0001 약점,\u0001 독특한특징의첫단어로만든기본적인수렴적사고도구",
+        "■ 하이라이팅 기법 _최(2)214p\u0001 ★21(B)05 정의 - 히트기법*으로선정된대안들을몇개의범주에따라분류해보는것",
+        "■ 역브레인스토밍 _서브 정의 - 아이디어를생성하는입장인브레인스토밍과달리이미생성해놓은아이디어에대해많은양의"
+      ],
+      "sources": [
+        {
+          "source_name": "기술교육론 서브노트_강지현.pdf",
+          "page_no": 116
+        },
+        {
+          "source_name": "기술교육론 서브노트_강지현.pdf",
+          "page_no": 115
+        },
+        {
+          "source_name": "기술교육론 서브노트_강지현.pdf",
+          "page_no": 115
+        }
+      ],
+      "source_basis": "기술교육론 서브노트_강지현.pdf p.116; 기술교육론 서브노트_강지현.pdf p.115; 기술교육론 서브노트_강지현.pdf p.115",
+      "premise_mode": "source_locked",
+      "fingerprint": "350ddfa839b0911aa71f",
+      "number": 10,
+      "blueprint_domain": "발명",
+      "concept_families": [
+        "invention_thinking"
+      ]
+    },
+    {
+      "domain": "수송기술",
+      "topic": "역카르노 냉동기 COP",
+      "points": 4,
+      "verifier": "python",
+      "intro": "다음은 역카르노 사이클로 작동하는 냉동기에 관한 자료이다.",
+      "passage": "저온 열원의 절대온도는 200 K, 고온 열원의 절대온도는 350 K이다.",
+      "conditions": [
+        "이상적인 역카르노 냉동기로 가정한다."
+      ],
+      "tasks": [
+        "역카르노 냉동기의 성능계수 관계식을 쓸 것.",
+        "냉동기의 성능계수 식을 온도로 나타낼 것.",
+        "성능계수를 구할 것."
+      ],
+      "answer": [
+        "COP=TL/(TH-TL)",
+        "COP=TL/(TH-TL)",
+        "1.333"
+      ],
+      "solution": [
+        "COP=TL/(TH-TL)",
+        "역카르노 냉동기의 COP=TL/(TH-TL)",
+        "200/(350-200)=1.333"
+      ],
+      "source_basis": "열역학 서브노트의 냉동기 성능계수",
+      "fingerprint": "01111ec249ef0bd49ef5",
+      "material_form": "수치자료",
+      "question_type": "계산/판단",
+      "concept_family": "refrigeration_cop",
+      "subpoints": [
+        1,
+        1,
+        2
+      ],
+      "pattern_id": "T4_C112",
+      "number": 11,
+      "blueprint_domain": "수송기술",
+      "concept_families": [
+        "refrigeration_cop"
+      ]
+    },
+    {
+      "domain": "통신기술",
+      "topic": "오류 발생률이 높으면 · 세로 중복 검사(LRC · 수직 중복 검사(VRC",
+      "points": 4,
+      "subpoints": [
+        1,
+        1,
+        2
+      ],
+      "pattern_id": "T4_112",
+      "question_type": "과정/순서",
+      "material_form": "대화자료",
+      "verifier": "source",
+      "intro": "다음 자료를 읽고 <작성 방법>에 따라 쓰시오.",
+      "passage": "교사: - ㉠ : 짧은 프레임을 전송하여 통신회선 사용의 극대\n학생 A: - ㉡: Longitudinal Redundancy Check) = 블록합 검사\n학생 B: - ㉢: Vertical Redundancy Check) = 패리티 검사",
+      "conditions": [],
+      "tasks": [
+        "㉠에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉡에 해당하는 용어 또는 내용을 쓸 것.",
+        "㉢에 해당하는 용어 또는 내용을 쓰고, 자료에 제시된 관련 근거를 함께 서술할 것."
+      ],
+      "answer": [
+        "오류 발생률이 높으면",
+        "세로 중복 검사(LRC",
+        "수직 중복 검사(VRC"
+      ],
+      "solution": [
+        "㉠: 오류 발생률이 높으면",
+        "㉡: 세로 중복 검사(LRC",
+        "㉢: 수직 중복 검사(VRC / 근거: - 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+      ],
+      "evidence": [
+        "- 오류 발생률이 높으면 : 짧은 프레임을 전송하여 통신회선 사용의 극대",
+        "- 세로 중복 검사(LRC: Longitudinal Redundancy Check) = 블록합 검사",
+        "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+      ],
+      "sources": [
+        {
+          "source_name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+          "page_no": 87
+        },
+        {
+          "source_name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+          "page_no": 88
+        },
+        {
+          "source_name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+          "page_no": 88
+        }
+      ],
+      "source_basis": "2026 기술임용 서브노트(통신기술)_이성민.pdf p.87; 2026 기술임용 서브노트(통신기술)_이성민.pdf p.88; 2026 기술임용 서브노트(통신기술)_이성민.pdf p.88",
+      "premise_mode": "source_locked",
+      "fingerprint": "8d791be009a04bfbbd1e",
+      "number": 12,
+      "blueprint_domain": "통신기술",
+      "concept_families": [
+        "topic_세로_중복_검사_lrc",
+        "topic_수직_중복_검사_vrc",
+        "topic_오류_발생률이_높으면"
+      ]
+    }
+  ],
+  "verified": true,
+  "blueprint": [
+    {
+      "number": 1,
+      "points": 2,
+      "domain": "생명기술",
+      "question_type": "순서/과정",
+      "material_form": "과정자료"
+    },
+    {
+      "number": 2,
+      "points": 2,
+      "domain": "발명",
+      "question_type": "자료식별",
+      "material_form": "표형자료"
+    },
+    {
+      "number": 3,
+      "points": 2,
+      "domain": "통신기술",
+      "question_type": "자료식별",
+      "material_form": "서술자료"
+    },
+    {
+      "number": 4,
+      "points": 2,
+      "domain": "제조기술",
+      "question_type": "오류판단",
+      "material_form": "대화자료"
+    },
+    {
+      "number": 5,
+      "points": 4,
+      "domain": "전기·전자",
+      "question_type": "개념+적용",
+      "material_form": "과정자료"
+    },
+    {
+      "number": 6,
+      "points": 4,
+      "domain": "수송기술",
+      "question_type": "오류수정",
+      "material_form": "표형자료"
+    },
+    {
+      "number": 7,
+      "points": 4,
+      "domain": "재료역학",
+      "question_type": "계산/판단",
+      "material_form": "서술자료"
+    },
+    {
+      "number": 8,
+      "points": 4,
+      "domain": "건설기술",
+      "question_type": "비교/구분",
+      "material_form": "대화자료"
+    },
+    {
+      "number": 9,
+      "points": 4,
+      "domain": "기술교육론",
+      "question_type": "사례/설계",
+      "material_form": "과정자료"
+    },
+    {
+      "number": 10,
+      "points": 4,
+      "domain": "발명",
+      "question_type": "원인/이유",
+      "material_form": "표형자료"
+    },
+    {
+      "number": 11,
+      "points": 4,
+      "domain": "수송기술",
+      "question_type": "계산/판단",
+      "material_form": "수치자료"
+    },
+    {
+      "number": 12,
+      "points": 4,
+      "domain": "통신기술",
+      "question_type": "과정/순서",
+      "material_form": "대화자료"
+    }
+  ],
+  "generation_stats": {
+    "ai_calls": 0,
+    "safe_fallbacks": 10,
+    "formula_questions": 2
+  },
+  "used_answers": [
+    "신재생에너지의 바이오 연료",
+    "세로 중복 검사(LRC",
+    "냉동 사이클",
+    "오류 발생률이 높으면",
+    "자원관리와환경",
+    "구조 형태에 따른 분류",
+    "쌍방향",
+    "강재 절감",
+    "ASCII 코드",
+    "하이라이팅 기법",
+    "운동상태에 따라",
+    "크리프",
+    "수송기술",
+    "고장해결",
+    "2) 지오박터",
+    "빛을 차단하면",
+    "수직 중복 검사(VRC",
+    "순환 중복 검사(CRC",
+    "(4)",
+    "역브레인스토밍",
+    "확산적사고",
+    "제트 기관",
+    "철근 형상에 따른 종류",
+    "철근공사",
+    "ALU 기법"
+  ],
+  "verification_note": "부분점수·복잡도·원문전제잠금·concept-family·영역균형·A/B중복 자동검증 통과"
+}

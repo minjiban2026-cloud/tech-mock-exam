@@ -153,5 +153,13 @@
     "ai_never_changes_fixed_answer": true,
     "4pt_min_inferential_distance": 3.5,
     "direct_definition_copy_static_reject_threshold": 0.86
+  },
+  "stable_filename_policy": {
+    "enabled": true,
+    "builder_filename": "exam_builder.py",
+    "app_import": "from exam_builder import make_ab, DOMAINS",
+    "rename_existing_runtime_files": false,
+    "new_modules_may_be_added": true,
+    "current_new_module": "quality_judge.py"
   }
 }
