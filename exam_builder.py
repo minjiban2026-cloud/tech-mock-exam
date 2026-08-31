@@ -158,13 +158,13 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
             # 한 문제 슬롯이 수십 번 반복되지 않도록 AI 후보 예산을 제한한다.
             # 품질 기준은 그대로이며, 실패 원인에 따라 다른 패턴으로 즉시 전환한다.
-            slot_candidate_budget = 3 if quality_active else 32
+            slot_candidate_budget = 1 if quality_active else 32
             slot_candidates_used = 0
 
             for pat in _concept_patterns(rng,pts,first_pat):
                 if quality_active and slot_candidates_used >= slot_candidate_budget:
                     diag(slot,"slot_budget",
-                         "AI 후보 생성 예산 3회 소진 - 같은 문제 무한 재시도 중단",
+                         "AI 후보 생성 예산 1회 소진 - 즉시 실패/다음 청사진 전환",
                          pattern=pat.get("id"))
                     break
                 need=len(pat["subpoints"])
@@ -419,7 +419,7 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
                 "reason":str(ex)
             })
 
-    for a_try in range(2):
+    for a_try in range(1):
         a_seed=None if seed is None else base + a_try*1000
         try:
             A=make_section(
@@ -433,7 +433,7 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
             continue
 
         af=set().union(*(families_for(q) for q in A["questions"]))
-        for b_try in range(3):
+        for b_try in range(1):
             b_seed=None if seed is None else base + 1 + a_try*1000 + b_try*37
             try:
                 B=make_section(

@@ -13,7 +13,7 @@ def _strip_json(text):
 
 def _client(api_key):
     from openai import OpenAI
-    return OpenAI(api_key=api_key, timeout=45, max_retries=1)
+    return OpenAI(api_key=api_key, timeout=30, max_retries=0)
 
 def _ask_json(api_key, model, prompt, effort="medium"):
     r=_client(api_key).responses.create(model=model,input=prompt,reasoning={"effort":effort})
@@ -67,7 +67,7 @@ JSON만 출력:
  "reason":"짧은 근거"
 }}
 """
-    x=_ask_json(api_key,model,prompt,"medium")
+    x=_ask_json(api_key,model,prompt,"low")
     idx=x.get("selected_indices",[])
     if x.get("verdict")!="PASS": return None
     if not isinstance(idx,list) or len(idx)!=need: return None
@@ -130,7 +130,7 @@ JSON만 출력:
  "reason":"2~4문장"
 }}
 """
-    blind=_ask_json(api_key,model,blind_prompt,"medium")
+    blind=_ask_json(api_key,model,blind_prompt,"low")
 
     # Blind 단계에서 이미 탈락이 확정되면 Grounded 호출을 생략한다.
     # 품질 기준은 그대로이고, 불필요한 두 번째 AI 호출만 제거한다.
@@ -211,7 +211,7 @@ JSON만 출력:
  "weakest_point":"가장 큰 약점 한 문장"
 }}
 """
-    grounded=_ask_json(api_key,model,grounding_prompt,"medium")
+    grounded=_ask_json(api_key,model,grounding_prompt,"low")
 
     try:
         bs=blind.get("scores",{}); gs=grounded.get("scores",{})
@@ -288,7 +288,7 @@ REJECT 조건:
 JSON만:
 {{"verdict":"PASS 또는 REJECT","exam_realism":0,"variety":0,"difficulty_balance":0,"reason":"2~4문장"}}
 """
-    x=_ask_json(api_key,model,prompt,"medium")
+    x=_ask_json(api_key,model,prompt,"low")
     try:
         er=float(x.get("exam_realism",-1)); va=float(x.get("variety",-1)); db=float(x.get("difficulty_balance",-1))
     except Exception:
@@ -327,7 +327,7 @@ JSON만:
 {{"verdict":"PASS 또는 REJECT","cross_section_variety":0,"semantic_duplication_control":0,
 "overall_exam_realism":0,"reason":"2~4문장"}}
 """
-    x=_ask_json(api_key,model,prompt,"medium")
+    x=_ask_json(api_key,model,prompt,"low")
     try:
         a=float(x.get("cross_section_variety",-1)); b=float(x.get("semantic_duplication_control",-1)); c=float(x.get("overall_exam_realism",-1))
     except Exception:
