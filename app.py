@@ -1,15 +1,8 @@
-
 import os, json, sqlite3, copy
 from pathlib import Path
 from datetime import datetime
 
 import streamlit as st
-
-import exam_builder
-import inspect
-
-st.write("파일 위치:", exam_builder.__file__)
-st.write("make_ab 형태:", inspect.signature(exam_builder.make_ab))
 
 from exam_builder import make_ab, DOMAINS
 from pdf_export import export_pdf
@@ -121,6 +114,47 @@ def exam_editor(exam,prefix):
     edited["verification_note"]="보관소에서 수동 수정됨: 원래의 자동검증 상태를 그대로 보장하지 않음"
     return edited
 
+def show_generation_diagnostics(exc):
+    diagnostics=getattr(exc,"generation_diagnostics",None)
+    if not diagnostics:
+        return
+    st.markdown("#### 생성 실패 진단")
+    st.caption("품질 기준을 낮추지 않고, 어느 단계에서 후보가 탈락했는지 표시합니다.")
+    for i,row in enumerate(diagnostics,1):
+        sec=row.get("section","")
+        no=row.get("number","")
+        dom=row.get("domain","")
+        attempt=row.get("attempt","")
+        stage=row.get("stage","")
+        title=f"{i}. {attempt}"
+        if sec or no:
+            title+=f" · {sec} {no}번"
+        if dom:
+            title+=f" · {dom}"
+        if stage:
+            title+=f" · {stage}"
+        with st.expander(title):
+            if row.get("pattern"):
+                st.write("패턴:",row["pattern"])
+            if row.get("reason"):
+                st.write("사유:",row["reason"])
+            if row.get("fatal_flags"):
+                st.write("Fatal flags:",row["fatal_flags"])
+            if row.get("scores"):
+                st.write("심사 점수:")
+                st.json(row["scores"])
+            if row.get("weakest_point"):
+                st.write("가장 큰 약점:",row["weakest_point"])
+            if row.get("candidate_topics"):
+                st.write("후보 주제:",row["candidate_topics"])
+            if row.get("blind_verdict") or row.get("grounded_verdict"):
+                st.write(
+                    "Blind / Grounded:",
+                    row.get("blind_verdict","-"),
+                    "/",
+                    row.get("grounded_verdict","-")
+                )
+
 tabs=st.tabs(["① DB 상태","② 출제범위 검색","③ A/B 생성","④ 모의고사 보관소","⑤ 검증 원리","⑥ 기출 구조"])
 
 with tabs[0]:
@@ -205,6 +239,7 @@ with tabs[2]:
                 )
             except Exception as e:
                 st.error(str(e))
+                show_generation_diagnostics(e)
 
     if "A" in st.session_state and "B" in st.session_state:
         for sec in ["A","B"]:
@@ -306,7 +341,6 @@ with tabs[3]:
                         st.markdown("##### 전공 B 수정")
                         edited_B=exam_editor(rec["exam_b"],f"{exam_id}_B")
                         if st.button("수정 내용 저장",type="primary",use_container_width=True):
-                            # 최소 구조 안전검사
                             errors=[]
                             for sec,ex in [("A",edited_A),("B",edited_B)]:
                                 for q in ex.get("questions",[]):

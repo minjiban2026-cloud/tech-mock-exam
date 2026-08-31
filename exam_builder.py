@@ -1,6 +1,5 @@
 BUILDER_API_VERSION = "AI-JUDGE-COMPAT-2"
 
-
 import random, math, re
 from formula_templates import generate_formula_question
 from retrieval import related_bundle,bundle_context,official_style_profile,candidate_cluster
@@ -56,10 +55,8 @@ def _enrich_formula(q,pts):
         q["answer"]=q["answer"][:2];q["tasks"]=q["tasks"][:2];q["solution"]=q["solution"][:2]
         q["subpoints"]=[1,1]
     else:
-        # 템플릿 자체가 서로 다른 3개 채점요소를 제공해야 한다. 같은 공식을 복제해 점수를 부풀리지 않는다.
         if len(q.get("answer",[]))<3 or len(q.get("tasks",[]))<3:return None
         q["answer"]=q["answer"][:3];q["tasks"]=q["tasks"][:3];q["solution"]=q["solution"][:3]
-        # 정답 요소가 사실상 중복이면 폐기
         canon=[re.sub(r"[^0-9A-Za-z가-힣]+","",str(x)).lower() for x in q["answer"][:3]]
         if len(set(canon))<3:return None
         q["subpoints"]=[1,1,2]
@@ -67,7 +64,6 @@ def _enrich_formula(q,pts):
     q["pattern_id"]="T4_C112" if pts==4 else "T2_C11"
     q["fingerprint"]=fingerprint(q)
     return q
-
 
 def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-terra",
                  ai_enabled=True,ai_quality_enabled=True,judge_model=None,seed=None,
@@ -89,6 +85,25 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
     judge_calls=0; judge_rejects=0; selector_calls=0
     formula_cap=2
 
+    diagnostics=[]
+    diagnostic_limit=100
+
+    def diag(slot,stage,reason="",**extra):
+        if len(diagnostics)>=diagnostic_limit:
+            return
+        row={
+            "section":section,
+            "number":slot.get("number"),
+            "domain":slot.get("domain"),
+            "points":slot.get("points"),
+            "stage":stage,
+            "reason":str(reason or ""),
+        }
+        for k,v in extra.items():
+            if v not in (None,"",[],{}):
+                row[k]=v
+        diagnostics.append(row)
+
     for slot in plan:
         pts=slot["points"]; dom=slot["domain"]; q=None
         wants_calc=slot["question_type"] in {"간단계산","계산/판단"}
@@ -97,32 +112,46 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
             slot["question_type"]="자료해석" if pts==4 else "자료식별"
             wants_calc=False
 
-        # ---------- deterministic calculation + AI quality veto ----------
         if wants_calc and dom in FORMULA_DOMAINS and formula_used<formula_cap:
             for _ in range(16 if quality_active else 40):
                 cand=generate_formula_question(dom,rng)
-                if not cand:break
+                if not cand:
+                    diag(slot,"formula_generator","계산형 템플릿 후보 없음")
+                    break
                 cand=_enrich_formula(cand,pts)
-                if not cand:continue
-                if too_similar(cand,prior+qs):continue
-                if validate_formula_question(cand):continue
+                if not cand:
+                    diag(slot,"formula_enrich","계산형 채점요소 조건 불충족")
+                    continue
+                if too_similar(cand,prior+qs):
+                    diag(slot,"formula_similarity","기존 문항과 유사")
+                    continue
+                formula_errs=validate_formula_question(cand)
+                if formula_errs:
+                    diag(slot,"formula_python_validator",
+                         " / ".join(map(str,formula_errs)) if isinstance(formula_errs,(list,tuple)) else str(formula_errs))
+                    continue
 
                 if quality_active:
                     try:
                         judge_calls+=1
                         review=judge_question(api_key,judge_model,cand,"",style)
-                    except Exception:
-                        review={"pass":False,"reason":"AI 품질심사 호출 실패"}
+                    except Exception as ex:
+                        review={"pass":False,"reason":"AI 품질심사 호출 실패: "+str(ex)}
                     cand["ai_quality"]=review
                     if not review.get("pass"):
                         judge_rejects+=1
+                        diag(slot,"formula_ai_judge",review.get("reason",""),
+                             fatal_flags=review.get("fatal_flags",[]),
+                             scores=review.get("scores",{}),
+                             weakest_point=review.get("weakest_point",""),
+                             blind_verdict=review.get("blind_verdict"),
+                             grounded_verdict=review.get("grounded_verdict"))
                         continue
                 else:
                     cand["ai_quality"]={"pass":None,"mode":"not_run"}
 
                 q=cand;formula_used+=1;break
 
-        # ---------- concept question ----------
         if q is None:
             first_pat=weighted_pick(rng,pts,calc=False,used=used_patterns)
             local_rejected_topics=set()
@@ -141,15 +170,25 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                             limit=9
                         )
                         if len(cluster)<need:
+                            diag(slot,"candidate_cluster",
+                                 f"후보 anchor 부족: 필요 {need}, 확보 {len(cluster)}",
+                                 pattern=pat.get("id"))
                             break
                         try:
                             selector_calls+=1
                             selected=select_coherent_bundle(
                                 api_key,judge_model,cluster,pts,style,need=need
                             )
-                        except Exception:
+                        except Exception as ex:
                             selected=None
+                            diag(slot,"coherent_selector_call",
+                                 "AI 관계성 선별 호출 실패: "+str(ex),
+                                 pattern=pat.get("id"))
                         if not selected:
+                            diag(slot,"coherent_selector",
+                                 "관계성 선별 REJECT 또는 유효 묶음 없음",
+                                 pattern=pat.get("id"),
+                                 candidate_topics=[str(x.get("topic","")) for x in cluster[:5]])
                             if cluster:
                                 local_rejected_topics.add(cluster[0]["topic"])
                             continue
@@ -160,13 +199,15 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                             set(used_topics)|local_rejected_topics
                         )
                         if len(bundle)<need:
+                            diag(slot,"related_bundle",
+                                 f"원문 잠금 후보 부족: 필요 {need}, 확보 {len(bundle)}",
+                                 pattern=pat.get("id"))
                             break
 
                     ctx=bundle_context(db_path,bundle)
                     cand=None
 
                     if quality_active:
-                        # AI 작성자와 AI 검토위원을 분리한다.
                         try:
                             ai_calls+=1
                             cand=rewrite_bundle(
@@ -174,27 +215,46 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                 slot["question_type"],slot["material_form"],style,
                                 source_context=ctx,relation_meta=relation_meta
                             )
-                        except Exception:
+                        except Exception as ex:
                             cand=None
+                            diag(slot,"question_writer_call",
+                                 "AI 문항 작성 호출 실패: "+str(ex),
+                                 pattern=pat.get("id"))
 
                         if cand is not None:
-                            # 정답/evidence/source의 deterministic 검사는 judge 뒤에도 다시 수행한다.
                             try:
                                 judge_calls+=1
                                 review=judge_question(
                                     api_key,judge_model,cand,ctx,style
                                 )
-                            except Exception:
-                                review={"pass":False,"reason":"AI 품질심사 호출 실패"}
+                            except Exception as ex:
+                                review={"pass":False,"reason":"AI 품질심사 호출 실패: "+str(ex)}
                             cand["ai_quality"]=review
 
                             if not review.get("pass"):
                                 judge_rejects+=1
+                                diag(slot,"question_ai_judge",review.get("reason",""),
+                                     pattern=pat.get("id"),
+                                     fatal_flags=review.get("fatal_flags",[]),
+                                     scores=review.get("scores",{}),
+                                     weakest_point=review.get("weakest_point",""),
+                                     blind_verdict=review.get("blind_verdict"),
+                                     grounded_verdict=review.get("grounded_verdict"))
                                 cand=None
-                            elif validate_grounded_question(
-                                cand,ctx,allow_ai_grounded=True
-                            ) or too_similar(cand,prior+qs):
-                                cand=None
+                            else:
+                                grounded_errs=validate_grounded_question(
+                                    cand,ctx,allow_ai_grounded=True
+                                )
+                                if grounded_errs:
+                                    diag(slot,"grounded_python_validator",
+                                         " / ".join(map(str,grounded_errs)) if isinstance(grounded_errs,(list,tuple)) else str(grounded_errs),
+                                         pattern=pat.get("id"))
+                                    cand=None
+                                elif too_similar(cand,prior+qs):
+                                    diag(slot,"question_similarity",
+                                         "기존 문항과 유사",
+                                         pattern=pat.get("id"))
+                                    cand=None
 
                         if cand is None:
                             if bundle:
@@ -202,13 +262,14 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                             continue
 
                     else:
-                        # API/품질심사를 사용하지 않는 경우는 사실 지문을 원문으로 잠근
-                        # 보수적 폴백만 허용한다. AI 생성 지문을 무심사로 내보내지 않는다.
                         cand=safe_bundle_question(
                             bundle,pts,pat,slot["question_type"],slot["material_form"]
                         )
                         errs=validate_grounded_question(cand,ctx)
                         if errs or too_similar(cand,prior+qs):
+                            diag(slot,"safe_fallback_validator",
+                                 " / ".join(map(str,errs)) if errs else "기존 문항과 유사",
+                                 pattern=pat.get("id"))
                             if bundle:
                                 local_rejected_topics.add(bundle[0]["topic"])
                             continue
@@ -225,10 +286,12 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                     break
 
         if q is None:
-            raise RuntimeError(
+            err=RuntimeError(
                 f"{section} {slot['number']}번({dom})을 품질 기준으로 만들 수 없습니다. "
                 "품질 기준을 낮추지 않고 다른 청사진을 재시도합니다."
             )
+            err.generation_diagnostics=diagnostics[-15:]
+            raise err
 
         q["number"]=slot["number"]
         q["blueprint_domain"]=dom
@@ -239,7 +302,12 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
     errs=validate_exam(qs,count,points)
     if errs:
-        raise RuntimeError("시험 자동검증 실패: "+" / ".join(errs))
+        err=RuntimeError("시험 자동검증 실패: "+" / ".join(errs))
+        err.generation_diagnostics=diagnostics[-15:]+[{
+            "section":section,"stage":"exam_python_validator",
+            "reason":" / ".join(errs)
+        }]
+        raise err
 
     exam={
       "exam_title":f"기술 임용 모의고사 전공 {section}",
@@ -261,15 +329,26 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
         try:
             judge_calls+=1
             section_review=judge_exam(api_key,judge_model,exam,style)
-        except Exception:
-            section_review={"pass":False,"reason":"섹션 AI 심사 호출 실패"}
+        except Exception as ex:
+            section_review={"pass":False,"reason":"섹션 AI 심사 호출 실패: "+str(ex)}
         exam["section_ai_quality"]=section_review
         exam["generation_stats"]["ai_judge_calls"]=judge_calls
         if not section_review.get("pass"):
-            raise RuntimeError(
+            err=RuntimeError(
                 f"{section} 섹션 전체 AI 품질심사 탈락: "
                 +str(section_review.get("reason",""))
             )
+            err.generation_diagnostics=diagnostics[-12:]+[{
+                "section":section,
+                "stage":"section_ai_judge",
+                "reason":str(section_review.get("reason","")),
+                "scores":{
+                    "exam_realism":section_review.get("exam_realism"),
+                    "variety":section_review.get("variety"),
+                    "difficulty_balance":section_review.get("difficulty_balance"),
+                }
+            }]
+            raise err
     else:
         exam["section_ai_quality"]={"pass":None,"mode":"not_run"}
 
@@ -281,9 +360,22 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
             judge_model=None,seed=None):
     base=0 if seed is None else int(seed)
     last_error=None
+    ab_diagnostics=[]
 
-    # AI 품질심사로 문항/섹션이 탈락할 수 있으므로 청사진을 재시도한다.
-    # 검증 기준은 낮추지 않는다.
+    def collect_error(ex,attempt):
+        rows=getattr(ex,"generation_diagnostics",None)
+        if rows:
+            for row in rows:
+                x=dict(row)
+                x["attempt"]=attempt
+                ab_diagnostics.append(x)
+        else:
+            ab_diagnostics.append({
+                "attempt":attempt,
+                "stage":"section_or_pair",
+                "reason":str(ex)
+            })
+
     for a_try in range(4):
         a_seed=None if seed is None else base + a_try*1000
         try:
@@ -294,6 +386,7 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
             )
         except Exception as ex:
             last_error=ex
+            collect_error(ex,f"A-{a_try+1}")
             continue
 
         af=set().union(*(families_for(q) for q in A["questions"]))
@@ -312,6 +405,7 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
                     last_error=RuntimeError(
                         "A/B concept-family 중복 발견: "+", ".join(sorted(af&bf))
                     )
+                    collect_error(last_error,f"A-{a_try+1}/B-{b_try+1}")
                     continue
                 quality_active=bool(ai_enabled and ai_quality_enabled and api_key)
                 if quality_active:
@@ -320,13 +414,14 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
                             api_key,judge_model or model,A,B,
                             official_style_profile(db_path)
                         )
-                    except Exception:
-                        pair_review={"pass":False,"reason":"A/B 종합 AI 심사 호출 실패"}
+                    except Exception as ex:
+                        pair_review={"pass":False,"reason":"A/B 종합 AI 심사 호출 실패: "+str(ex)}
                     if not pair_review.get("pass"):
                         last_error=RuntimeError(
                             "A/B 종합 AI 품질심사 탈락: "
                             +str(pair_review.get("reason",""))
                         )
+                        collect_error(last_error,f"A-{a_try+1}/B-{b_try+1}")
                         continue
                     A["ab_pair_ai_quality"]=pair_review
                     B["ab_pair_ai_quality"]=pair_review
@@ -341,9 +436,12 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
                 return A,B
             except Exception as ex:
                 last_error=ex
+                collect_error(ex,f"A-{a_try+1}/B-{b_try+1}")
                 continue
-    raise RuntimeError(
+
+    err=RuntimeError(
         "정답/품질 기준을 낮추지 않은 상태에서 A/B 편성에 실패했습니다: "
         +str(last_error)
     )
-
+    err.generation_diagnostics=ab_diagnostics[-50:]
+    raise err
