@@ -5,6 +5,12 @@ from datetime import datetime
 
 import streamlit as st
 
+import exam_builder
+import inspect
+
+st.write("파일 위치:", exam_builder.__file__)
+st.write("make_ab 형태:", inspect.signature(exam_builder.make_ab))
+
 from exam_builder import make_ab, DOMAINS
 from pdf_export import export_pdf
 from retrieval import search_pages
