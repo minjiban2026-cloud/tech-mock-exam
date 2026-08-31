@@ -20,7 +20,6 @@ st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
 st.caption("배포 버전: FINAL-STABLE-20260831")
-st.caption("진단 패치: DIAG-20260831-1")
 
 def secret(name, default=""):
     try:
@@ -190,9 +189,9 @@ with tabs[2]:
         domains=st.multiselect("출제 영역",DOMAINS,default=DOMAINS)
     with c2:
         use_ai=st.toggle("AI로 임용형 문장 재구성",value=True)
-        model=st.text_input("문항 작성 AI",value="gpt-5.6-terra")
+        model=st.text_input("문항 작성 AI",value="gpt-5.6-luna")
         use_ai_judge=st.toggle("AI 출제검토위원 품질심사",value=True)
-        judge_model=st.text_input("품질심사 AI",value="gpt-5.6-terra")
+        judge_model=st.text_input("품질심사 AI",value="gpt-5.6-luna")
     with c3:
         seed=st.number_input("랜덤 시드(재현용)",min_value=0,value=20260830,step=1)
 

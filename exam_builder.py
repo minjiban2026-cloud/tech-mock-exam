@@ -65,7 +65,7 @@ def _enrich_formula(q,pts):
     q["fingerprint"]=fingerprint(q)
     return q
 
-def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-terra",
+def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-luna",
                  ai_enabled=True,ai_quality_enabled=True,judge_model=None,seed=None,
                  previous_questions=None,shared_answers=None):
     rng=random.Random(seed)
@@ -193,6 +193,23 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                 local_rejected_topics.add(cluster[0]["topic"])
                             continue
                         bundle,relation_meta=selected
+
+                        if pts==2:
+                            _tt=set(str(x).strip() for x in relation_meta.get("thinking_types",[]) if str(x).strip())
+                            _rel=str(relation_meta.get("relation","")).strip()
+                            if len(_tt)<2 or len(_rel)<4:
+                                diag(slot,"two_point_relation_gate",
+                                     "2점 관계형 문항 조건 불충족: 최소 2종 사고행동 + 명시적 관계 필요",
+                                     pattern=pat.get("id"),
+                                     candidate_topics=[str(x.get("topic","")) for x in bundle])
+                                for a in bundle:
+                                    local_rejected_topics.add(a["topic"])
+                                continue
+                            relation_meta["quality_directive"]=(
+                                "2점 문항도 두 정답을 각 문장에서 독립적으로 찾아 쓰게 만들지 말 것. "
+                                "첫 요소의 판단 또는 자료 해석이 두 번째 요소 판단에 반드시 사용되게 구성하고, "
+                                "정답 정의·고유특징을 지문에 거의 그대로 제시하지 말 것."
+                            )
                     else:
                         bundle=related_bundle(
                             db_path,dom,need,used_answers,
@@ -233,6 +250,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
                             if not review.get("pass"):
                                 judge_rejects+=1
+                                _fatal=set(str(x) for x in review.get("fatal_flags",[]))
                                 diag(slot,"question_ai_judge",review.get("reason",""),
                                      pattern=pat.get("id"),
                                      fatal_flags=review.get("fatal_flags",[]),
@@ -240,6 +258,13 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                      weakest_point=review.get("weakest_point",""),
                                      blind_verdict=review.get("blind_verdict"),
                                      grounded_verdict=review.get("grounded_verdict"))
+
+                                _hard={"ROTE_ONLY","TOO_EASY","DIRECT_ANSWER_LEAK","AMBIGUOUS"}
+                                if _fatal & _hard:
+                                    for a in bundle:
+                                        local_rejected_topics.add(a["topic"])
+                                elif bundle:
+                                    local_rejected_topics.add(bundle[0]["topic"])
                                 cand=None
                             else:
                                 grounded_errs=validate_grounded_question(
@@ -257,7 +282,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                     cand=None
 
                         if cand is None:
-                            if bundle:
+                            if bundle and not any(a["topic"] in local_rejected_topics for a in bundle):
                                 local_rejected_topics.add(bundle[0]["topic"])
                             continue
 
@@ -356,7 +381,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
 
 def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
-            api_key="",model="gpt-5.6-terra",ai_enabled=True,ai_quality_enabled=True,
+            api_key="",model="gpt-5.6-luna",ai_enabled=True,ai_quality_enabled=True,
             judge_model=None,seed=None):
     base=0 if seed is None else int(seed)
     last_error=None
