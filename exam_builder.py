@@ -156,10 +156,22 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
             first_pat=weighted_pick(rng,pts,calc=False,used=used_patterns)
             local_rejected_topics=set()
 
+            # 한 문제 슬롯이 수십 번 반복되지 않도록 AI 후보 예산을 제한한다.
+            # 품질 기준은 그대로이며, 실패 원인에 따라 다른 패턴으로 즉시 전환한다.
+            slot_candidate_budget = 3 if quality_active else 32
+            slot_candidates_used = 0
+
             for pat in _concept_patterns(rng,pts,first_pat):
+                if quality_active and slot_candidates_used >= slot_candidate_budget:
+                    diag(slot,"slot_budget",
+                         "AI 후보 생성 예산 3회 소진 - 같은 문제 무한 재시도 중단",
+                         pattern=pat.get("id"))
+                    break
                 need=len(pat["subpoints"])
 
-                for _ in range(10 if quality_active else 32):
+                for _ in range(1 if quality_active else 32):
+                    if quality_active and slot_candidates_used >= slot_candidate_budget:
+                        break
                     relation_meta={}
                     bundle=[]
 
@@ -193,6 +205,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                 local_rejected_topics.add(cluster[0]["topic"])
                             continue
                         bundle,relation_meta=selected
+                        slot_candidates_used += 1
 
                         if pts==2:
                             _tt=set(str(x).strip() for x in relation_meta.get("thinking_types",[]) if str(x).strip())
@@ -208,7 +221,9 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                             relation_meta["quality_directive"]=(
                                 "2점 문항도 두 정답을 각 문장에서 독립적으로 찾아 쓰게 만들지 말 것. "
                                 "첫 요소의 판단 또는 자료 해석이 두 번째 요소 판단에 반드시 사용되게 구성하고, "
-                                "정답 정의·고유특징을 지문에 거의 그대로 제시하지 말 것."
+                                "정답 정의·고유특징을 지문에 거의 그대로 제시하지 말 것. "
+                                "현재 패턴의 사고구조를 반드시 지킬 것: "
+                                + str(pat.get("quality_rule",pat.get("name","")))
                             )
                     else:
                         bundle=related_bundle(
@@ -259,10 +274,11 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                      blind_verdict=review.get("blind_verdict"),
                                      grounded_verdict=review.get("grounded_verdict"))
 
-                                _hard={"ROTE_ONLY","TOO_EASY","DIRECT_ANSWER_LEAK","AMBIGUOUS"}
+                                _hard={"ROTE_ONLY","TOO_EASY","DIRECT_ANSWER_LEAK","AMBIGUOUS","DECORATIVE_MATERIAL"}
                                 if _fatal & _hard:
                                     for a in bundle:
                                         local_rejected_topics.add(a["topic"])
+                                    relation_meta["force_pattern_switch"]=True
                                 elif bundle:
                                     local_rejected_topics.add(bundle[0]["topic"])
                                 cand=None
@@ -284,6 +300,8 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                         if cand is None:
                             if bundle and not any(a["topic"] in local_rejected_topics for a in bundle):
                                 local_rejected_topics.add(bundle[0]["topic"])
+                            if relation_meta.get("force_pattern_switch"):
+                                break
                             continue
 
                     else:
@@ -401,7 +419,7 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
                 "reason":str(ex)
             })
 
-    for a_try in range(4):
+    for a_try in range(2):
         a_seed=None if seed is None else base + a_try*1000
         try:
             A=make_section(
@@ -415,7 +433,7 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
             continue
 
         af=set().union(*(families_for(q) for q in A["questions"]))
-        for b_try in range(8):
+        for b_try in range(3):
             b_seed=None if seed is None else base + 1 + a_try*1000 + b_try*37
             try:
                 B=make_section(
@@ -468,5 +486,5 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
         "정답/품질 기준을 낮추지 않은 상태에서 A/B 편성에 실패했습니다: "
         +str(last_error)
     )
-    err.generation_diagnostics=ab_diagnostics[-50:]
+    err.generation_diagnostics=ab_diagnostics[-30:]
     raise err

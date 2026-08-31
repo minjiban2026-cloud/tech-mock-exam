@@ -13,7 +13,7 @@ def _strip_json(text):
 
 def _client(api_key):
     from openai import OpenAI
-    return OpenAI(api_key=api_key, timeout=90, max_retries=2)
+    return OpenAI(api_key=api_key, timeout=45, max_retries=1)
 
 def _ask_json(api_key, model, prompt, effort="medium"):
     r=_client(api_key).responses.create(model=model,input=prompt,reasoning={"effort":effort})
@@ -132,6 +132,47 @@ JSON만 출력:
 """
     blind=_ask_json(api_key,model,blind_prompt,"medium")
 
+    # Blind 단계에서 이미 탈락이 확정되면 Grounded 호출을 생략한다.
+    # 품질 기준은 그대로이고, 불필요한 두 번째 AI 호출만 제거한다.
+    try:
+        _bs=blind.get("scores",{})
+        _blind_vals={
+            "inferential_distance":float(_bs.get("inferential_distance",-1)),
+            "task_distinctness":float(_bs.get("task_distinctness",-1)),
+            "exam_realism":float(_bs.get("exam_realism",-1)),
+            "difficulty_fit":float(_bs.get("difficulty_fit",-1)),
+            "ambiguity_control":float(_bs.get("ambiguity_control",-1)),
+        }
+    except Exception:
+        return {"pass":False,"review_stage":"blind","reason":"Blind AI 심사 점수 파싱 실패",
+                "blind_raw":blind,"blind_verdict":blind.get("verdict")}
+
+    _blind_fatal=[str(f) for f in blind.get("fatal_flags",[]) if str(f).strip()]
+    _pts=int(question.get("points",0))
+    if _pts==4:
+        _blind_threshold_ok=(
+            _blind_vals["inferential_distance"]>=3.5 and
+            _blind_vals["task_distinctness"]>=4 and
+            _blind_vals["exam_realism"]>=4 and
+            _blind_vals["difficulty_fit"]>=4 and
+            _blind_vals["ambiguity_control"]>=4
+        )
+    else:
+        _blind_threshold_ok=(
+            _blind_vals["exam_realism"]>=3.5 and
+            _blind_vals["ambiguity_control"]>=4
+        )
+
+    if blind.get("verdict")!="PASS" or _blind_fatal or not _blind_threshold_ok:
+        return {
+            "pass":False,"review_stage":"blind",
+            "scores":_blind_vals,"fatal_flags":_blind_fatal,
+            "thinking_types":[str(v) for v in blind.get("thinking_types",[])][:6],
+            "reason":"[blind] "+str(blind.get("reason","")),
+            "weakest_point":"Blind 심사 단계에서 이미 탈락 확정",
+            "blind_verdict":blind.get("verdict"),"grounded_verdict":"SKIPPED"
+        }
+
     grounded_q=dict(public_q)
     grounded_q.update({
         "fixed_answer":question.get("answer",[]),"evidence":question.get("evidence",[]),
@@ -210,7 +251,7 @@ JSON만 출력:
                 and avg>=3.7 and not fatal)
 
     return {
-        "pass":bool(passed),"scores":vals,"average":round(avg,3),
+        "pass":bool(passed),"review_stage":"grounded","scores":vals,"average":round(avg,3),
         "thinking_types":[str(v) for v in blind.get("thinking_types",[])][:6],
         "fatal_flags":fatal,
         "reason":"[blind] "+str(blind.get("reason",""))+" [grounded] "+str(grounded.get("reason","")),
