@@ -23,7 +23,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R8-20260901")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R8.1-20260901")
 
 def secret(name, default=""):
     try:
@@ -215,12 +215,20 @@ with tabs[2]:
         st.info("Supabase 보관소를 연결하면 새로고침 후에도 생성 결과가 유지됩니다.")
 
     st.markdown("#### 🧪 품질 튜닝용 6문항")
+    loaded_builder_path=str(getattr(exam_builder_module,"__file__","UNKNOWN"))
     st.caption(f"현재 로드된 exam_builder: {BUILDER_API_VERSION}")
-    builder_ok=(BUILDER_API_VERSION=="SAMPLE6-CONTRACTFIX-R8-20260901")
+    st.caption(f"로드 경로: {loaded_builder_path}")
+
+    # 문자열 버전이 조금 달라도 샘플 기능 자체가 있으면 실행 가능하게 한다.
+    builder_ok=(
+        callable(getattr(exam_builder_module,"make_quality_sample",None))
+        and callable(getattr(exam_builder_module,"make_ab",None))
+        and hasattr(exam_builder_module,"_smart_relation_bundle")
+    )
     if not builder_ok:
         st.error(
-            "⚠️ app.py와 exam_builder.py 버전이 맞지 않습니다. "
-            "이번 ZIP의 4개 파일을 모두 덮어쓴 뒤 Streamlit 앱을 Reboot 하세요."
+            "⚠️ 현재 실행 중인 exam_builder.py에 샘플6 기능이 없습니다. "
+            "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
         "한 번에 2점 2문항 + 4점 4문항만 생성합니다. "
@@ -235,7 +243,7 @@ with tabs[2]:
         disabled=(not builder_ok)
     ):
         if make_quality_sample is None:
-            st.error("exam_builder.py가 아직 이전 버전입니다. ZIP의 exam_builder.py를 같은 이름으로 덮어쓴 뒤 앱을 재부팅하세요.")
+            st.error(f"exam_builder.py에 make_quality_sample이 없습니다. 현재 로드 경로: {loaded_builder_path}")
         else:
             with st.spinner("2점 2개 + 4점 4개 생성 중..."):
                 try:

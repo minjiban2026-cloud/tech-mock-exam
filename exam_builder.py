@@ -1,4 +1,4 @@
-BUILDER_API_VERSION = "SAMPLE6-CONTRACTFIX-R8-20260901"
+BUILDER_API_VERSION = "SAMPLE6-CONTRACTFIX-R8.1-20260901"
 
 import random, math, re, sqlite3
 from formula_templates import generate_formula_question
