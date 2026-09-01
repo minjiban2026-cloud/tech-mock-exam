@@ -93,99 +93,23 @@ JSON만 출력:
     }
 
 def judge_question(api_key, model, question, source_context="", style_profile=""):
-    public_q={
+    """
+    R10: 문항당 AI 품질심사는 1회만 호출한다.
+    DB/Python grounding validator가 사실·정답을 먼저 검증하고,
+    이 reviewer는 임용 유사성/추론거리/자료필요성/모호성에 veto만 행사한다.
+    """
+    review_q={
         "domain":question.get("domain"),"points":question.get("points"),
+        "pattern_id":question.get("pattern_id"),
         "question_type":question.get("question_type"),"material_form":question.get("material_form"),
         "intro":question.get("intro"),"passage":question.get("passage"),
         "conditions":question.get("conditions",[]),"tasks":question.get("tasks",[]),
-    }
-    blind_prompt=f"""
-너는 대한민국 중등 기술 임용 1차 전공시험의 외부 출제 검토위원이다.
-정답과 출처를 보지 않고 실제 수험생처럼 문제만 평가한다. 수정하지 말고 PASS/REJECT만 판정한다.
-
-실제 기출 구조:
-{style_profile}
-
-문항:
-{json.dumps(public_q,ensure_ascii=False)}
-
-강한 REJECT:
-- 2점이라도 명칭 두 개를 각 줄에서 찾아 쓰는 독립 회상 문제
-- 하위 요구가 모두 같은 회상 행동
-- 자료를 종합할 필요가 없음
-- 자료가 정답 정의/고유특징을 거의 그대로 말해 추론거리가 없음
-- 문제유형 이름과 실제 요구행동이 불일치
-- 서로 다른 요구 사이에 논리적 연결이 없음
-- 배점 대비 너무 쉽거나 모호함
-- 4점인데 사실상 정의/용어를 옮겨 쓰는 수준
-
-0~5:
-inferential_distance, task_distinctness, exam_realism, difficulty_fit, ambiguity_control
-
-JSON만 출력:
-{{
- "verdict":"PASS 또는 REJECT",
- "scores":{{
-  "inferential_distance":0,"task_distinctness":0,"exam_realism":0,
-  "difficulty_fit":0,"ambiguity_control":0
- }},
- "thinking_types":["식별","관계설명","적용" 등],
- "fatal_flags":["ROTE_ONLY","DECORATIVE_MATERIAL","TOO_EASY","AMBIGUOUS","UNRELATED_SUBPARTS" 중 해당되는 것만],
- "reason":"2~4문장"
-}}
-"""
-    blind=_ask_json(api_key,model,blind_prompt,"low")
-
-    # Blind 단계에서 이미 탈락이 확정되면 Grounded 호출을 생략한다.
-    # 품질 기준은 그대로이고, 불필요한 두 번째 AI 호출만 제거한다.
-    try:
-        _bs=blind.get("scores",{})
-        _blind_vals={
-            "inferential_distance":float(_bs.get("inferential_distance",-1)),
-            "task_distinctness":float(_bs.get("task_distinctness",-1)),
-            "exam_realism":float(_bs.get("exam_realism",-1)),
-            "difficulty_fit":float(_bs.get("difficulty_fit",-1)),
-            "ambiguity_control":float(_bs.get("ambiguity_control",-1)),
-        }
-    except Exception:
-        return {"pass":False,"review_stage":"blind","reason":"Blind AI 심사 점수 파싱 실패",
-                "blind_raw":blind,"blind_verdict":blind.get("verdict")}
-
-    _blind_fatal=[str(f) for f in blind.get("fatal_flags",[]) if str(f).strip()]
-    _pts=int(question.get("points",0))
-    if _pts==4:
-        _blind_threshold_ok=(
-            _blind_vals["inferential_distance"]>=3.5 and
-            _blind_vals["task_distinctness"]>=4 and
-            _blind_vals["exam_realism"]>=4 and
-            _blind_vals["difficulty_fit"]>=4 and
-            _blind_vals["ambiguity_control"]>=4
-        )
-    else:
-        _blind_threshold_ok=(
-            _blind_vals["exam_realism"]>=3.5 and
-            _blind_vals["ambiguity_control"]>=4
-        )
-
-    if blind.get("verdict")!="PASS" or _blind_fatal or not _blind_threshold_ok:
-        return {
-            "pass":False,"review_stage":"blind",
-            "scores":_blind_vals,"fatal_flags":_blind_fatal,
-            "thinking_types":[str(v) for v in blind.get("thinking_types",[])][:6],
-            "reason":"[blind] "+str(blind.get("reason","")),
-            "weakest_point":"Blind 심사 단계에서 이미 탈락 확정",
-            "blind_verdict":blind.get("verdict"),"grounded_verdict":"SKIPPED"
-        }
-
-    grounded_q=dict(public_q)
-    grounded_q.update({
         "fixed_answer":question.get("answer",[]),"evidence":question.get("evidence",[]),
-        "solution":question.get("solution",[]),"master_concept":question.get("master_concept",""),
-        "relation":question.get("relation",""),"verifier":question.get("verifier"),
-    })
-    grounding_prompt=f"""
-너는 중등 기술 임용시험의 사실검증·채점 검토위원이다.
-정답은 DB/Python이 이미 고정했다. 새 정답을 만들지 말고 품질에 veto만 행사한다.
+        "master_concept":question.get("master_concept",""),"relation":question.get("relation",""),
+    }
+    prompt=f"""
+너는 대한민국 중등 기술 임용 1차 전공시험의 최종 외부 검토위원이다.
+정답은 DB/Python에서 이미 고정되었다. 절대로 정답을 고치거나 새 답을 제안하지 말고 PASS/REJECT veto만 한다.
 
 실제 기출 구조:
 {style_profile}
@@ -193,74 +117,89 @@ JSON만 출력:
 고정 원자료 문맥:
 {source_context[:9000]}
 
-문항+고정정답:
-{json.dumps(grounded_q,ensure_ascii=False)}
+문항과 고정정답:
+{json.dumps(review_q,ensure_ascii=False)}
 
 강한 REJECT:
-- 원자료가 뒷받침하지 않는 사실·수치·인과관계 추가
-- 정답 용어만 가리고 원문 정의/고유특징을 거의 그대로 제시
-- anchor들이 하나의 master concept가 아님
-- 작성 방법과 고정정답이 일대일 대응하지 않음
-- 복수 정답/채점 모호성이 큼
+- 서브노트의 주변적·사소한 명칭 하나를 맞히는 것이 사실상 핵심인 문제
+- 자료 한 문장/표 한 행에서 답을 바로 옮기는 문제
+- 완성 공식/정의를 보여주고 공식명·개념명만 묻는 문제
+- 4점인데 소문항들이 서로 독립적으로 풀리는 병렬 암기 묶음
+- 4점의 앞 판단/계산이 뒤 적용·설명에 실제로 쓰이지 않음
+- 자료가 없어도 거의 같은 답을 할 수 있어 자료가 장식적임
+- 배점 대비 너무 쉽거나 모호함
+- 원자료가 뒷받침하지 않는 사실·수치·인과관계가 추가됨
+- 고정정답과 작성 요구의 대응이 모호함
 
-0~5:
-grounding, answer_leakage(5=노출 없음), coherence, ambiguity_control
+0~5로 평가:
+grounding, answer_leakage(5=노출 없음), coherence, inferential_distance,
+task_distinctness, exam_realism, difficulty_fit, ambiguity_control
 
 JSON만 출력:
 {{
  "verdict":"PASS 또는 REJECT",
- "scores":{{"grounding":0,"answer_leakage":0,"coherence":0,"ambiguity_control":0}},
- "fatal_flags":["DIRECT_ANSWER_LEAK","UNSUPPORTED_FACT","UNRELATED_SUBPARTS","AMBIGUOUS" 중 해당되는 것만],
+ "scores":{{
+  "grounding":0,"answer_leakage":0,"coherence":0,"inferential_distance":0,
+  "task_distinctness":0,"exam_realism":0,"difficulty_fit":0,"ambiguity_control":0
+ }},
+ "thinking_types":["자료해석","판단","관계설명","적용" 등],
+ "fatal_flags":["ROTE_ONLY","DECORATIVE_MATERIAL","TOO_EASY","AMBIGUOUS","UNRELATED_SUBPARTS","DIRECT_ANSWER_LEAK","UNSUPPORTED_FACT" 중 해당되는 것만],
  "reason":"2~4문장",
  "weakest_point":"가장 큰 약점 한 문장"
 }}
 """
-    grounded=_ask_json(api_key,model,grounding_prompt,"low")
-
+    x=_ask_json(api_key,model,prompt,"low")
     try:
-        bs=blind.get("scores",{}); gs=grounded.get("scores",{})
-        vals={
-            "grounding":float(gs.get("grounding",-1)),
-            "answer_leakage":float(gs.get("answer_leakage",-1)),
-            "coherence":float(gs.get("coherence",-1)),
-            "inferential_distance":float(bs.get("inferential_distance",-1)),
-            "task_distinctness":float(bs.get("task_distinctness",-1)),
-            "exam_realism":float(bs.get("exam_realism",-1)),
-            "difficulty_fit":float(bs.get("difficulty_fit",-1)),
-            "ambiguity_control":min(float(bs.get("ambiguity_control",-1)),float(gs.get("ambiguity_control",-1))),
-        }
+        ss=x.get("scores",{})
+        vals={k:float(ss.get(k,-1)) for k in SCORE_KEYS}
     except Exception:
-        return {"pass":False,"reason":"2중 AI 심사 점수 파싱 실패","blind_raw":blind,"grounded_raw":grounded}
-    if any(v<0 or v>5 for v in vals.values()):
-        return {"pass":False,"reason":"2중 AI 심사 점수 범위 오류","scores":vals}
+        return {"pass":False,"review_stage":"integrated","reason":"통합 AI 심사 점수 파싱 실패","raw":x}
 
-    fatal=list(dict.fromkeys(
-        [str(f) for f in blind.get("fatal_flags",[]) if str(f).strip()] +
-        [str(f) for f in grounded.get("fatal_flags",[]) if str(f).strip()]
-    ))
+    if any(v<0 or v>5 for v in vals.values()):
+        return {"pass":False,"review_stage":"integrated","reason":"통합 AI 심사 점수 범위 오류","scores":vals}
+
+    fatal=[str(f) for f in x.get("fatal_flags",[]) if str(f).strip()]
     avg=sum(vals.values())/len(vals)
     pts=int(question.get("points",0))
-    blind_pass=blind.get("verdict")=="PASS"
-    grounded_pass=grounded.get("verdict")=="PASS"
 
     if pts==4:
-        passed=(blind_pass and grounded_pass and vals["grounding"]>=4 and vals["answer_leakage"]>=4
-                and vals["coherence"]>=4 and vals["inferential_distance"]>=3.5
-                and vals["task_distinctness"]>=4 and vals["exam_realism"]>=4
-                and vals["difficulty_fit"]>=4 and vals["ambiguity_control"]>=4
-                and avg>=4.05 and not fatal)
+        passed=(
+            x.get("verdict")=="PASS"
+            and vals["grounding"]>=4
+            and vals["answer_leakage"]>=4
+            and vals["coherence"]>=4
+            and vals["inferential_distance"]>=3.5
+            and vals["task_distinctness"]>=4
+            and vals["exam_realism"]>=4
+            and vals["difficulty_fit"]>=4
+            and vals["ambiguity_control"]>=4
+            and avg>=4.0
+            and not fatal
+        )
     else:
-        passed=(blind_pass and grounded_pass and vals["grounding"]>=4 and vals["answer_leakage"]>=4
-                and vals["ambiguity_control"]>=4 and vals["exam_realism"]>=3.5
-                and avg>=3.7 and not fatal)
+        passed=(
+            x.get("verdict")=="PASS"
+            and vals["grounding"]>=4
+            and vals["answer_leakage"]>=4
+            and vals["exam_realism"]>=3.5
+            and vals["ambiguity_control"]>=4
+            and vals["inferential_distance"]>=3
+            and avg>=3.7
+            and not fatal
+        )
 
     return {
-        "pass":bool(passed),"review_stage":"grounded","scores":vals,"average":round(avg,3),
-        "thinking_types":[str(v) for v in blind.get("thinking_types",[])][:6],
+        "pass":bool(passed),
+        "review_stage":"integrated",
+        "scores":vals,
+        "average":round(avg,3),
+        "thinking_types":[str(v) for v in x.get("thinking_types",[])][:6],
         "fatal_flags":fatal,
-        "reason":"[blind] "+str(blind.get("reason",""))+" [grounded] "+str(grounded.get("reason","")),
-        "weakest_point":str(grounded.get("weakest_point","")),
-        "blind_verdict":blind.get("verdict"),"grounded_verdict":grounded.get("verdict"),
+        "reason":str(x.get("reason","")),
+        "weakest_point":str(x.get("weakest_point","")),
+        # 기존 diagnostics/UI 호환
+        "blind_verdict":x.get("verdict"),
+        "grounded_verdict":"PYTHON_GROUNDING",
     }
 
 def judge_exam(api_key, model, exam, style_profile=""):

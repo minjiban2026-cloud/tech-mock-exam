@@ -60,6 +60,58 @@ def _max_copy_similarity(passage,evidence,answer):
         best=max(best,difflib.SequenceMatcher(None,w,e).ratio())
     return best
 
+
+_REASON_TERMS=("이유","근거","관계","비교","판단","설명","계산","수정","적용","영향","과정","순서","해석","도출","예측")
+_DEPENDENCY_TERMS=("앞의","앞서","위 판단","위 결과","이를 이용","이를 근거","그 결과","이 결과","두 결과","공통 원리","같은 원리","앞 문항","앞선")
+
+def _recall_only_task(task):
+    t=str(task or "")
+    recall=any(k in t for k in ("명칭","용어","이름","쓰시오","적으시오"))
+    reason=any(k in t for k in _REASON_TERMS)
+    return bool(recall and not reason)
+
+def _dependency_quality_errors(q):
+    e=[]
+    pts=int(q.get("points",0))
+    tasks=[str(x) for x in q.get("tasks",[])]
+    pid=str(q.get("pattern_id","")).upper()
+
+    if pts==2 and len(tasks)>=2 and all(_recall_only_task(t) for t in tasks[:2]):
+        e.append("2점 독립 단순회상형")
+
+    if pts==4:
+        recall_count=sum(1 for t in tasks if _recall_only_task(t))
+        if recall_count>=2:
+            e.append("4점 독립 명칭회상 과다")
+
+        if pid in {"T4_DATA112","T4_112"} and tasks:
+            last=tasks[-1]
+            if not any(k in last for k in _DEPENDENCY_TERMS):
+                e.append("4점 사고사슬 연결표지 부족")
+
+        if pid=="T4_ERR22" and len(tasks)>=2:
+            joined=" ".join(tasks[1:])
+            if not any(k in joined for k in ("공통","같은 원리","위 판단","앞의","이를 근거","관계")):
+                e.append("4점 오류수정 공통근거 연결 부족")
+    return e
+
+def _answer_distance_errors(q):
+    """
+    정답 단어 자체 노출뿐 아니라 '근거를 거의 보여주고 명칭만 쓰게 하는' 저변환 문항을 줄인다.
+    단순회상 task일 때는 기존 0.86보다 엄격한 0.74 유사도 기준을 적용한다.
+    """
+    e=[]
+    passage=str(q.get("passage",""))
+    tasks=[str(x) for x in q.get("tasks",[])]
+    for i,(ans,ev) in enumerate(zip(q.get("answer",[]),q.get("evidence",[]))):
+        task=tasks[i] if i<len(tasks) else ""
+        if _recall_only_task(task):
+            sim=_max_copy_similarity(passage,ev,ans)
+            if sim>=0.74:
+                e.append("정답 변환거리 부족(근거→명칭 회상)")
+                break
+    return e
+
 def static_quality_errors(q,require_ai_quality=True):
     e=[]
     if q.get("premise_mode")!="ai_grounded":
@@ -70,6 +122,8 @@ def static_quality_errors(q,require_ai_quality=True):
         if _max_copy_similarity(passage,ev,ans)>=0.86:
             e.append("원문 정의/근거 과다복사")
             break
+    e.extend(_dependency_quality_errors(q))
+    e.extend(_answer_distance_errors(q))
     if pts==4:
         aq=q.get("ai_quality",{}) or {}
         # 최종 A/B: judge 결과가 있으면 judge의 thinking_types 사용.

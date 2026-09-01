@@ -34,7 +34,7 @@ def _strip_json(text):
 def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,material_form,style_profile,
                    source_context="",relation_meta=None):
     from openai import OpenAI
-    client=OpenAI(api_key=api_key,timeout=90,max_retries=2)
+    client=OpenAI(api_key=api_key,timeout=60,max_retries=1)
     answers=[a["answer"] for a in bundle]
     relation_meta=relation_meta or {}
     evidence=[a["evidence"] for a in bundle]
@@ -49,6 +49,8 @@ master concept={relation_meta.get('master_concept','')}
 관계={relation_meta.get('relation','')}
 권장 사고행동={relation_meta.get('thinking_types',[])}
 출제 핵심지시={relation_meta.get('quality_directive','')}
+실제 임용형 문항 골격={relation_meta.get('exam_skeleton','')}
+Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),ensure_ascii=False)}
 
 고정정답:
 {json.dumps(answers,ensure_ascii=False)}
@@ -73,6 +75,10 @@ master concept={relation_meta.get('master_concept','')}
 - 고정정답이 방정식/원리/법칙의 명칭일 때 완성된 식이나 정의를 그대로 제시하고 그 이름만 묻는 방식은 금지한다.
 - 4점은 하나의 coherent scenario 안에서 앞의 해석·판단이 뒤의 관계설명·적용에 쓰이는 사고 사슬이어야 한다.
 - 4점의 소문항들이 서로 없어도 풀리는 독립된 1점/2점 암기문항 묶음이면 안 된다.
+- T4_DATA112/T4_112의 마지막 task는 반드시 '앞의 결과', '이를 이용하여', '위 판단을 근거로'처럼 앞선 판단을 실제로 사용하도록 명시한다.
+- T4_ERR22는 두 오류를 병렬로 고치는 데 그치지 말고 같은 원리/공통 근거로 연결한다.
+- 자료에서 한 문장 또는 한 표의 한 행만 읽으면 답을 바로 옮길 수 있는 요구는 만들지 않는다.
+- 1점 채점요소도 가능하면 단순 명칭 회상이 아니라 조건 판별·중간값·오류 판단 등 뒤 추론에 필요한 중간 판단으로 만든다.
 - 4점은 최소 두 종류 이상의 사고행동(식별/관계설명/오류판단/비교/적용/계산/수정)을 포함해야 한다.
 - 4점의 세 하위 요구가 모두 '용어 쓰기' 또는 '분류하기'이면 안 된다.
 - 같은 요구를 표현만 바꾸어 반복하지 않는다.
@@ -88,7 +94,7 @@ master concept={relation_meta.get('master_concept','')}
  "thinking_types":["..."]
 }}
 """
-    r=client.responses.create(model=model,input=prompt,reasoning={"effort":"medium"})
+    r=client.responses.create(model=model,input=prompt,reasoning={"effort":("medium" if points==4 else "low")})
     x=json.loads(_strip_json(r.output_text))
     q={
       "domain":bundle[0]["domain"],

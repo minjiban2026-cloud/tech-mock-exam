@@ -1,4 +1,4 @@
-BUILDER_API_VERSION = "SAMPLE6-SUBNOTE-CORE-R9-20260901"
+BUILDER_API_VERSION = "SAMPLE6-EXAM-REALISM-R10-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -275,6 +275,94 @@ def _subnote_importance_score(a, page_text=""):
         pass
     return score
 
+
+def _exam_value_score(a, page_text=""):
+    """
+    API 호출 전에 서브노트 후보의 '임용 출제 가치'를 점수화한다.
+    정답의 진위를 바꾸지 않고 후보 순위만 정한다.
+    """
+    topic=_norm_anchor_text(a.get("topic",""))
+    answer=_norm_anchor_text(a.get("answer",""))
+    evidence=_norm_anchor_text(a.get("evidence",""))
+    page=_norm_anchor_text(page_text)
+    blob=" ".join((topic,evidence,page))
+
+    score=0.0
+
+    # 실제 기출 표시: 중요도 강한 신호
+    if (
+        re.search(r"★?\s*(?:20)?\d{2}\s*[AB]", blob, re.I)
+        or re.search(r"\b\d{2}[AB]\s*\(", blob, re.I)
+        or re.search(r"기금\s*\d{2}", blob)
+    ):
+        score += 2.5
+
+    # 임용에서 연결형/적용형으로 만들기 좋은 지식
+    high_groups = [
+        r"(원인|결과|영향|때문|따라서|증가|감소|변화)",
+        r"(조건|경우|이상|이하|초과|미만|온도|압력|속도|하중|응력|전압|전류)",
+        r"(원리|법칙|관계식|공식|방정식|계산|비|율|효율)",
+        r"(과정|순서|단계|작동|작용|흐름|전달|변환)",
+        r"(비교|차이|반면|보다|구분|오류|수정)",
+        r"(구조|기능|재료|성질|결정|조직|결함)",
+    ]
+    score += 0.75 * sum(1 for p in high_groups if re.search(p, blob))
+
+    # 숫자/단위/수식이 있으면 계산·조건판단 문항으로 만들 가능성이 큼
+    if re.search(r"\d", blob) and re.search(r"(mm|cm|m\b|Pa|MPa|N\b|kN|V\b|A\b|W\b|Hz|byte|℃|%|ρ|σ|η|Q|MTU)", blob, re.I):
+        score += 1.25
+
+    # 너무 일반적인 정답, 찬반·단순 레이블은 강한 감점
+    if answer.strip().lower() in {
+        "찬성","반대","예","아니오","가능","불가능","장점","단점",
+        "높다","낮다","크다","작다","증가","감소"
+    }:
+        score -= 3.5
+
+    # 단순 '명칭/종류'만 있는 heading성 topic은 후순위
+    if re.search(r"(명칭|종류|분류|이름)\s*$", topic) and not re.search(r"(원리|관계|조건|과정|오류|비교)", blob):
+        score -= 1.5
+
+    return score
+
+def _skeleton_for_pattern(pattern_id):
+    """
+    실제 임용에서 자주 보이는 '문항 골격'만 고정한다.
+    내용/정답은 서브노트에서만 가져온다.
+    """
+    pid=str(pattern_id or "").upper()
+    return {
+        "T2_REL":"현상/조건 자료 → 첫 판단 → 그 판단을 근거로 결과·관계 판단",
+        "T2_ERR":"학생 설명 제시 → 오류 판단 → 같은 근거로 올바르게 수정",
+        "T2_CMP":"두 사례/조건 제시 → 차이 판단 → 구분 근거 설명",
+        "T2_DATA":"자료의 조건 해석 → 해석 결과를 실제 판단에 적용",
+        "T4_DATA112":"자료 해석 → 중간 개념/값 판단 → 앞의 결과를 이용한 적용·결과예측",
+        "T4_ERR22":"학생의 오류 판단 → 수정 → 두 판단을 관통하는 공통 원리·근거 설명",
+        "T4_112":"조건/현상 해석 → 두 개념의 관계 판단 → 앞의 판단을 함께 이용한 적용",
+    }.get(pid,"자료 해석 → 관계 판단 → 적용")
+
+def _scoring_plan(pattern, chosen):
+    """
+    AI가 먼저 긴 지문을 만들지 않도록 채점 논리를 Python에서 선결정한다.
+    정답 자체는 DB anchor 그대로 고정한다.
+    """
+    sp=list(pattern.get("subpoints",[]))
+    topics=[_norm_anchor_text(x.get("topic","")) for x in chosen]
+    answers=[_norm_anchor_text(x.get("answer","")) for x in chosen]
+    rows=[]
+    for i,(pt,topic,ans) in enumerate(zip(sp,topics,answers),1):
+        if i==1:
+            role="자료에서 핵심 조건/오류/차이를 해석·판단"
+        elif i==len(sp):
+            role="앞선 판단을 실제로 이용해 관계·적용·결과를 도출"
+        else:
+            role="첫 판단과 마지막 적용을 이어 주는 중간 판단"
+        rows.append({
+            "order":i,"points":int(pt),"topic":topic,
+            "fixed_answer":ans,"role":role
+        })
+    return rows
+
 def _direct_chain_order(bundle):
     """
     4점 문항은 '같은 분야'가 아니라 실제 교차참조가 이어지는 사슬이어야 한다.
@@ -355,9 +443,11 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             continue
         if not _anchor_ok(a):
             continue
-        a["importance_score"]=_subnote_importance_score(
-            a,page_map.get((str(a.get("source_name","")),int(a.get("page_no",0) or 0)),"")
+        _page_text=page_map.get(
+            (str(a.get("source_name","")),int(a.get("page_no",0) or 0)),""
         )
+        a["importance_score"]=_subnote_importance_score(a,_page_text)
+        a["exam_value_score"]=_exam_value_score(a,_page_text)
         if _topic_core(a["answer"]) in used_answers:
             continue
         if _topic_core(a["topic"]) in excluded_topics:
@@ -429,8 +519,12 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             except Exception:
                 conf=0.0
             importance=sum(float(x.get("importance_score") or 0) for x in chosen)/len(chosen)
+            exam_value=sum(float(x.get("exam_value_score") or 0) for x in chosen)/len(chosen)
             candidates.append((
-                graph_score + min(1.0,max(0.0,conf)) + importance*1.8,
+                graph_score
+                + min(1.0,max(0.0,conf))
+                + importance*1.25
+                + exam_value*2.0,
                 chosen
             ))
 
@@ -454,10 +548,14 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "master_concept":_norm_anchor_text(chosen[0].get("topic","")) if chosen else "",
         "relation":"직접 교차참조를 따라 이어지는 핵심 개념 사슬: "+topic_chain,
         "thinking_types":_pattern_thinking_types(pattern_id),
+        "exam_skeleton":_skeleton_for_pattern(pattern_id),
+        "scoring_plan":_scoring_plan(
+            {"id":pattern_id,"subpoints":[1]*len(chosen)}, chosen
+        ),
         "quality_directive":_relation_directive(pattern_id,chosen),
-        "selector_reason":f"Python subnote-core relation score={score:.2f}",
+        "selector_reason":f"Python exam-value relation score={score:.2f}",
         "relation_score":round(score,2),
-        "selection_mode":"python_subnote_core_direct_chain",
+        "selection_mode":"python_exam_value_direct_chain",
         "source_policy":"subnote_only_for_answer_content",
     }
     return chosen,relation_meta
@@ -697,21 +795,21 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
             # 한 문제 슬롯이 수십 번 반복되지 않도록 AI 후보 예산을 제한한다.
             # 품질 기준은 그대로이며, 실패 원인에 따라 다른 패턴으로 즉시 전환한다.
-            slot_candidate_budget = 1 if quality_active else (6 if tuning_mode else 32)
+            slot_candidate_budget = 2 if quality_active else (4 if tuning_mode else 8)
             slot_candidates_used = 0
             # selector 자체 호출도 슬롯당 제한한다. REJECT/timeout도 호출 1회로 계산한다.
-            selector_attempt_limit = 1 if quality_active else (0 if tuning_mode else 32)
+            selector_attempt_limit = 0
             selector_attempts = 0
 
             for pat in _concept_patterns(rng,pts,first_pat):
                 if (quality_active or tuning_mode) and (
                     slot_candidates_used >= slot_candidate_budget or
-                    (not tuning_mode and selector_attempts >= selector_attempt_limit)
+                    False
                 ):
                     _budget_reason=(
                         f"샘플 후보 예산 소진(candidate={slot_candidates_used}/{slot_candidate_budget})"
                         if tuning_mode else
-                        f"AI 호출 예산 소진(candidate={slot_candidates_used}/{slot_candidate_budget}, selector={selector_attempts}/{selector_attempt_limit})"
+                        f"문항 후보 예산 소진(candidate={slot_candidates_used}/{slot_candidate_budget})"
                     )
                     diag(slot,"slot_budget",_budget_reason,pattern=pat.get("id"))
                     break
@@ -720,61 +818,26 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                 for _ in range(1 if quality_active else (2 if tuning_mode else 32)):
                     if (quality_active or tuning_mode) and (
                         slot_candidates_used >= slot_candidate_budget or
-                        (not tuning_mode and selector_attempts >= selector_attempt_limit)
+                        False
                     ):
                         break
                     relation_meta={}
                     bundle=[]
 
                     if selector_active:
-                        if tuning_mode:
-                            bundle,relation_meta=_smart_relation_bundle(
-                                db_path,dom,need,used_answers,
-                                set(used_topics)|local_rejected_topics,rng,
-                                pattern_id=pat.get("id","")
-                            )
-                            if len(bundle)<need:
-                                diag(slot,"python_relation_cluster",
-                                     f"강한 관계 anchor 묶음 부족: 필요 {need}, 확보 {len(bundle)}",
-                                     pattern=pat.get("id"))
-                                break
-                            slot_candidates_used += 1
-                            # 성공한 관계 묶음은 실패 진단에 기록하지 않는다.
-                        else:
-                            compact_limit=max(5, min(6, need+2))
-                            raw_cluster=candidate_cluster(
-                                db_path,dom,used_answers,
-                                set(used_topics)|local_rejected_topics,
-                                limit=12
-                            )
-                            cluster=_compact_candidate_cluster(raw_cluster,need,compact_limit)
-                            if len(cluster)<need:
-                                diag(slot,"candidate_cluster",
-                                     f"관계성 필터 후 후보 부족: 필요 {need}, 확보 {len(cluster)}",
-                                     pattern=pat.get("id"))
-                                break
-                            try:
-                                selector_calls+=1
-                                selector_attempts+=1
-                                selected=select_coherent_bundle(
-                                    api_key,judge_model,cluster,pts,style,need=need
-                                )
-                            except Exception as ex:
-                                selected=None
-                                diag(slot,"coherent_selector_call",
-                                     "AI 관계성 선별 호출 실패: "+str(ex),
-                                     pattern=pat.get("id"))
-                            if not selected:
-                                diag(slot,"coherent_selector",
-                                     "관계성 선별 REJECT 또는 유효 묶음 없음",
-                                     pattern=pat.get("id"),
-                                     candidate_topics=[str(x.get("topic","")) for x in cluster[:5]])
-                                for x in cluster[:2]:
-                                    local_rejected_topics.add(str(x.get("topic","")))
-                                continue
-                            bundle,relation_meta=selected
-                            slot_candidates_used += 1
-
+                        # R10: 관계 selector는 Python에서 수행한다.
+                        # 최종 A/B에서도 selector AI 호출을 없애 생성시간/비용을 줄인다.
+                        bundle,relation_meta=_smart_relation_bundle(
+                            db_path,dom,need,used_answers,
+                            set(used_topics)|local_rejected_topics,rng,
+                            pattern_id=pat.get("id","")
+                        )
+                        if len(bundle)<need:
+                            diag(slot,"python_exam_value_selector",
+                                 f"출제 가치·관계성 후보 부족: 필요 {need}, 확보 {len(bundle)}",
+                                 pattern=pat.get("id"))
+                            break
+                        slot_candidates_used += 1
                         if pts==2:
                             _tt=set(str(x).strip() for x in relation_meta.get("thinking_types",[]) if str(x).strip())
                             _rel=str(relation_meta.get("relation","")).strip()
@@ -803,6 +866,15 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                  f"원문 잠금 후보 부족: 필요 {need}, 확보 {len(bundle)}",
                                  pattern=pat.get("id"))
                             break
+
+                    # AI 호출 전에 Python이 채점 논리와 기출형 골격을 확정한다.
+                    if relation_meta:
+                        relation_meta["exam_skeleton"]=_skeleton_for_pattern(pat.get("id",""))
+                        relation_meta["scoring_plan"]=_scoring_plan(pat,bundle)
+                        relation_meta["quality_directive"]=(
+                            str(relation_meta.get("quality_directive","")) + " "
+                            + str(pat.get("quality_rule",""))
+                        ).strip()
 
                     ctx=bundle_context(db_path,bundle)
                     cand=None
