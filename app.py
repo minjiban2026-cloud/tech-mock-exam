@@ -4,11 +4,11 @@ from datetime import datetime
 
 import streamlit as st
 
-from exam_builder import make_ab, DOMAINS
-# 새 6문항 기능은 선택 기능으로 읽는다.
-# exam_builder.py가 아직 구버전이어도 앱 전체가 ImportError로 죽지 않는다.
-import exam_builder as _exam_builder
-make_quality_sample = getattr(_exam_builder, "make_quality_sample", None)
+import exam_builder as exam_builder_module
+make_ab = exam_builder_module.make_ab
+make_quality_sample = getattr(exam_builder_module, "make_quality_sample", None)
+DOMAINS = exam_builder_module.DOMAINS
+BUILDER_API_VERSION = getattr(exam_builder_module, "BUILDER_API_VERSION", "UNKNOWN")
 from pdf_export import export_pdf
 from retrieval import search_pages
 from archive_store import (
@@ -215,13 +215,25 @@ with tabs[2]:
         st.info("Supabase 보관소를 연결하면 새로고침 후에도 생성 결과가 유지됩니다.")
 
     st.markdown("#### 🧪 품질 튜닝용 6문항")
+    st.caption(f"현재 로드된 exam_builder: {BUILDER_API_VERSION}")
+    builder_ok=(BUILDER_API_VERSION=="SAMPLE6-PYREL-R4-20260901")
+    if not builder_ok:
+        st.error(
+            "⚠️ app.py와 exam_builder.py 버전이 맞지 않습니다. "
+            "이번 ZIP의 4개 파일을 모두 덮어쓴 뒤 Streamlit 앱을 Reboot 하세요."
+        )
     st.caption(
         "한 번에 2점 2문항 + 4점 4문항만 생성합니다. "
-        "이 단계에서는 최종 Blind/Grounded/섹션 심사를 생략하여 "
-        "문제 형태를 빠르게 확인합니다."
+        "이 단계에서는 AI 관계성 selector와 최종 Blind/Grounded/섹션 심사를 생략하고, "
+        "Python 관계묶음 + Luna 문항작성 + deterministic 검증만 사용합니다."
     )
 
-    if st.button("6문항 빠른 품질 샘플 생성",type="primary",use_container_width=True):
+    if st.button(
+        "6문항 빠른 품질 샘플 생성",
+        type="primary",
+        use_container_width=True,
+        disabled=(not builder_ok)
+    ):
         if make_quality_sample is None:
             st.error("exam_builder.py가 아직 이전 버전입니다. ZIP의 exam_builder.py를 같은 이름으로 덮어쓴 뒤 앱을 재부팅하세요.")
         else:
@@ -235,10 +247,14 @@ with tabs[2]:
                     )
                     st.session_state["QUALITY_SAMPLE"]=sample
                     st.success("6문항 품질 튜닝 샘플 생성 완료.")
+                    st.caption(
+                        f"실행 모드: {sample.get('sample_mode','-')} · "
+                        f"builder: {sample.get('builder_api_version','-')}"
+                    )
                     ss=sample.get("generation_stats",{})
                     st.caption(
                         f"문항작성 AI {ss.get('ai_calls',0)}회 · "
-                        f"관계성 선별 {ss.get('ai_selector_calls',0)}회 · "
+                        f"AI 관계성 선별 {ss.get('ai_selector_calls',0)}회(정상=0) · "
                         f"계산형 {ss.get('formula_questions',0)}문항"
                     )
                 except Exception as e:
