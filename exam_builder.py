@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-CORE-EXAM-R15.1-20260901"
+BUILDER_API_VERSION = "SAMPLE6-ANCHOR-CLEAN-R16-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -94,9 +94,85 @@ def _anchor_quality_reason(a):
             return "answer_not_supported_in_evidence"
     return ""
 
-def _anchor_ok(a):
-    return _anchor_quality_reason(a)==""
 
+def _strip_anchor_noise(text):
+    t=str(text or "").strip()
+    t=re.sub(r"^[\s·•○●◦▪■□◆◇▶▷→\-–—:;|/\\]+","",t)
+    t=re.sub(r"[\s·•○●◦▪■□◆◇▶▷→\-–—:;|/\\]+$","",t)
+    t=re.sub(r"\s+"," ",t).strip()
+    return t
+
+def _anchor_fragment_reason(a):
+    """
+    Conservative fragment detector: reject only clearly broken/non-independent
+    answer anchors. Valid short technical concepts, acronyms, and formulas pass.
+    """
+    topic=_strip_anchor_noise(a.get("topic",""))
+    answer=_strip_anchor_noise(a.get("answer",""))
+
+    if not topic or not answer:
+        return "empty_topic_or_answer"
+
+    raw_topic=str(a.get("topic","") or "").strip()
+    raw_answer=str(a.get("answer","") or "").strip()
+
+    # Parser residue such as "· 허용대"
+    if raw_topic != topic or raw_answer != answer:
+        if re.match(r"^[·•○●◦▪■□◆◇▶▷]+", raw_topic) and len(topic) <= 12:
+            return "leading_parser_symbol"
+        if re.match(r"^[·•○●◦▪■□◆◇▶▷]+", raw_answer) and len(answer) <= 12:
+            return "leading_parser_symbol"
+
+    # Common grammatical/location fragments that are not independent answer concepts.
+    if len(answer) <= 18:
+        grammatical_suffixes = (
+            " 내"," 외","에서","에게","한테","의","에","으로","로",
+            "와","과","및","때","경우","위해","통해","따라","대한","관한"
+        )
+        lexical_exempt = {"실내","옥내","옥외","체내","관내"}
+        if answer not in lexical_exempt and any(answer.endswith(x) for x in grammatical_suffixes):
+            return "grammatical_fragment"
+
+    if re.fullmatch(r"(실린더|기관|회로|재료|구조물|시스템|장치|부품|공간)\s*(내|안|밖|외)", answer):
+        return "generic_place_fragment"
+
+    generic_identity = {
+        "내부","외부","위치","부분","구간","영역","장소","공간",
+        "실린더 내","기관 내","회로 내","재료 내","장치 내",
+    }
+    if topic == answer and answer in generic_identity:
+        return "generic_identity"
+
+    if answer in {"내","외","안","밖","위","아래","앞","뒤","중","부분","위치","영역","구간"}:
+        return "relational_only"
+
+    return ""
+
+def _bundle_anchor_integrity(chosen):
+    reasons=[]
+    for x in chosen:
+        r=_anchor_fragment_reason(x)
+        if r:
+            reasons.append({
+                "topic":str(x.get("topic","")),
+                "answer":str(x.get("answer","")),
+                "reason":r,
+            })
+    return (len(reasons)==0), reasons
+
+def _independent_scoring_targets(chosen):
+    answers=[_strip_anchor_noise(x.get("answer","")) for x in chosen]
+    bad={"내부","외부","위치","부분","구간","영역","장소","공간","내","외","안","밖"}
+    if any(a in bad for a in answers):
+        return False
+    if len(set(answers)) != len(answers):
+        return False
+    return True
+
+def _anchor_ok(a):
+    if _anchor_fragment_reason(a):
+        return False
+    return _anchor_quality_reason(a)==""
 def _near_duplicate_anchor(a,b):
     at=_topic_core(a.get("topic",""))
     bt=_topic_core(b.get("topic",""))
@@ -683,8 +759,6 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "domain":domain,
         "pattern_id":pattern_id,
         "required_count":need,
-        "builder_version":BUILDER_API_VERSION,
-        "support_policy":"R15.1_SUPPORT_ONLY_FALLBACK_PERIPHERALITY_GE4_HARD_REJECT",
         "raw_rows":len(rows),
         "primary_source_pass":0,
         "anchor_ok_pass":0,
@@ -704,10 +778,14 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "support_only_reject":0,
         "support_only_fallback":0,
         "two_point_label_reject":0,
+        "anchor_fragment_reject":0,
+        "bundle_fragment_reject":0,
         "candidate_accept":0,
         "reject_examples":{
             "support_only":[],
             "two_point_label":[],
+            "anchor_fragment":[],
+            "bundle_fragment":[],
             "same_source":[],
             "page_distance":[],
             "natural_unit":[],
@@ -729,6 +807,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             continue
         _pd["primary_source_pass"]+=1
         if not _anchor_ok(a):
+            _fr=_anchor_fragment_reason(a)
+            if _fr:
+                _pd["anchor_fragment_reject"]+=1
+                if len(_pd["reject_examples"]["anchor_fragment"])<5:
+                    _pd["reject_examples"]["anchor_fragment"].append({
+                        "topic":str(a.get("topic","")),
+                        "answer":str(a.get("answer","")),
+                        "reason":_fr,
+                    })
             continue
         _pd["anchor_ok_pass"]+=1
         _page_text=page_map.get(
@@ -795,6 +882,17 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 _pd["near_duplicate_reject"]+=1
                 continue
 
+            integrity_ok,integrity_reasons=_bundle_anchor_integrity(chosen)
+            if not integrity_ok:
+                _pd["bundle_fragment_reject"]+=1
+                if len(_pd["reject_examples"]["bundle_fragment"])<5:
+                    _pd["reject_examples"]["bundle_fragment"].append({
+                        "topics":[str(x.get("topic","")) for x in chosen],
+                        "answers":[str(x.get("answer","")) for x in chosen],
+                        "reasons":integrity_reasons,
+                    })
+                continue
+
             connected,graph_score=_bundle_connected(chosen,min_edge=4.0)
             if not connected:
                 _pd["connected_reject"]+=1
@@ -806,6 +904,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             natural_score=_natural_unit_score(chosen)
 
             if str(pattern_id).upper().startswith("T4"):
+                if not _independent_scoring_targets(chosen):
+                    _pd["bundle_fragment_reject"]+=1
+                    if len(_pd["reject_examples"]["bundle_fragment"])<5:
+                        _pd["reject_examples"]["bundle_fragment"].append({
+                            "topics":[str(x.get("topic","")) for x in chosen],
+                            "answers":[str(x.get("answer","")) for x in chosen],
+                            "reasons":[{"reason":"not_independent_scoring_targets"}],
+                        })
+                    continue
                 if natural_score < 3.0:
                     _pd["natural_unit_reject"]+=1
                     if len(_pd["reject_examples"]["natural_unit"])<5:
