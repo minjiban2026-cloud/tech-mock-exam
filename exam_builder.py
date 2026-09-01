@@ -1,4 +1,4 @@
-BUILDER_API_VERSION = "SAMPLE6-TWO-POINT-FOCUS-R13-20260901"
+BUILDER_API_VERSION = "SAMPLE6-CORE-EXAM-R14-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -275,6 +275,131 @@ def _subnote_importance_score(a, page_text=""):
         pass
     return score
 
+
+
+def _past_exam_strength(a, page_text=""):
+    blob=" ".join([
+        _norm_anchor_text(a.get("topic","")),
+        _norm_anchor_text(a.get("evidence","")),
+        _norm_anchor_text(page_text),
+    ])
+    if (
+        re.search(r"★?\s*(?:20)?\d{2}\s*[AB]",blob,re.I)
+        or re.search(r"\b\d{2}[AB]\s*\(",blob,re.I)
+        or re.search(r"기금\s*\d{2}",blob)
+        or re.search(r"(임용|기출)",blob)
+    ):
+        return 5
+    if re.search(r"\b(?:19|20)\d{2}\b",blob):
+        return 4
+    if re.search(r"(출제|문제풀이|기출유사)",blob):
+        return 3
+    return 0
+
+def _core_subnote_importance(a, page_text=""):
+    topic=_norm_anchor_text(a.get("topic",""))
+    ev=_norm_anchor_text(a.get("evidence",""))
+    page=_norm_anchor_text(page_text)
+    blob=" ".join([topic,ev,page])
+    if re.search(r"(cf\)|참고|보충|부록|심화|기타|예시)",blob,re.I):
+        return 0
+    score=2
+    if re.search(r"(공식|정리|핵심|원리|법칙|과정|공정|구조|작동|특징|비교)",blob):
+        score+=1
+    if re.search(r"(표|단계|조건|관계|계산|식\b|=)",blob):
+        score+=1
+    if _past_exam_strength(a,page_text)>=4:
+        score+=1
+    return max(0,min(5,score))
+
+def _representative_concept_score(a, page_text=""):
+    topic=_norm_anchor_text(a.get("topic",""))
+    ev=_norm_anchor_text(a.get("evidence",""))
+    ans=_norm_anchor_text(a.get("answer",""))
+    blob=" ".join([topic,ev,_norm_anchor_text(page_text)])
+    score=2
+    if re.search(r"(원리|법칙|공식|구조|작동|공정|과정|방법|장치|회로|극성|응력|변형|압력|전압|전류|저항|기어|정류|단편|MTU|용접)",blob,re.I):
+        score+=2
+    if re.search(r"(대표|기본|핵심|주요|일반)",blob):
+        score+=1
+    if re.search(r"(특정|고유|예외|희귀|특수|세부|사례명|종명|균명)",blob):
+        score-=2
+    if len(ans)<=18 and re.search(r"(종류|명칭|이름|균|미생물|고유명)",topic+ans):
+        score-=1
+    return max(0,min(5,score))
+
+def _repeatability_score(a, page_text=""):
+    topic=_norm_anchor_text(a.get("topic",""))
+    ev=_norm_anchor_text(a.get("evidence",""))
+    ans=_norm_anchor_text(a.get("answer",""))
+    blob=" ".join([topic,ev,_norm_anchor_text(page_text)])
+    score=1
+    if re.search(r"(계산|공식|조건|비교|오류|원인|결과|관계|과정|단계|작동|설계|판단|적용|변화)",blob):
+        score+=2
+    if re.search(r"\d",blob) and re.search(r"(Pa|MPa|N\b|kN|V\b|A\b|W\b|Hz|byte|bit|mm|cm|m\b|kg|℃|%|MTU)",blob,re.I):
+        score+=1
+    if re.search(r"(극성|용입|응력|변형|압력|전압|전류|저항|기어비|정류|단편화|MTU|효율|열처리|공정)",blob,re.I):
+        score+=1
+    if len(ans)<=18 and not re.search(r"(계산|조건|관계|오류|적용|비교|과정|원인|결과)",blob):
+        score-=1
+    return max(0,min(5,score))
+
+def _concept_centrality_score(a, page_text=""):
+    topic=_norm_anchor_text(a.get("topic",""))
+    ev=_norm_anchor_text(a.get("evidence",""))
+    blob=" ".join([topic,ev,_norm_anchor_text(page_text)])
+    score=2
+    if re.search(r"(원리|법칙|공식|구조|관계|작동|과정|공정|기초|기본)",blob):
+        score+=2
+    if re.search(r"(응력|변형|전압|전류|저항|압력|에너지|효율|극성|용입|기어|단편화|열처리)",blob,re.I):
+        score+=1
+    if re.search(r"(특정 사례|예시|고유|예외|특수)",blob):
+        score-=1
+    return max(0,min(5,score))
+
+def _peripherality_score(a, page_text=""):
+    topic=_norm_anchor_text(a.get("topic",""))
+    ev=_norm_anchor_text(a.get("evidence",""))
+    ans=_norm_anchor_text(a.get("answer",""))
+    page=_norm_anchor_text(page_text)
+    blob=" ".join([topic,ev,page])
+    score=0
+    if re.search(r"(cf\)|참고|보충|부록|심화|기타|예시)",blob,re.I):
+        score+=3
+    if re.search(r"(특정|고유|예외|희귀|특수|세부|사례명|종명|균명)",blob):
+        score+=2
+    if len(ans)<=18 and re.search(r"(미생물|균|종류|명칭|이름|고유명)",topic+ans):
+        score+=1
+    if re.search(r"(원리|법칙|공식|구조|작동|공정|과정|주요|핵심)",blob):
+        score-=1
+    return max(0,min(5,score))
+
+def _core_exam_score(a, page_text=""):
+    # 사용자 확정 가중치:
+    # 기출성 4 / 서브노트 중요도 3 / 기본·대표 개념성 3 /
+    # 반복 출제 가능성 4 / 연결 중심성 3 / 지엽성 -2
+    past=_past_exam_strength(a,page_text)
+    note=_core_subnote_importance(a,page_text)
+    rep=_representative_concept_score(a,page_text)
+    repeat=_repeatability_score(a,page_text)
+    central=_concept_centrality_score(a,page_text)
+    peripheral=_peripherality_score(a,page_text)
+
+    raw=(past*4)+(note*3)+(rep*3)+(repeat*4)+(central*3)-(peripheral*2)
+    qualified=(past>=3 or rep>=4 or repeat>=4)
+
+    if qualified and raw>=58:
+        tier="CORE"
+    elif qualified and raw>=40:
+        tier="NORMAL"
+    else:
+        tier="SUPPORT"
+
+    return {
+        "score":float(raw),"tier":tier,"qualified":bool(qualified),
+        "past_exam":past,"subnote_importance":note,"representative":rep,
+        "repeatability":repeat,"centrality":central,"peripherality":peripheral,
+    }
 
 def _exam_value_score(a, page_text=""):
     """
@@ -570,6 +695,11 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         )
         a["importance_score"]=_subnote_importance_score(a,_page_text)
         a["exam_value_score"]=_exam_value_score(a,_page_text)
+        _core=_core_exam_score(a,_page_text)
+        a["core_exam_score"]=_core["score"]
+        a["core_exam_tier"]=_core["tier"]
+        a["core_exam_qualified"]=_core["qualified"]
+        a["core_exam_breakdown"]=_core
         if _topic_core(a["answer"]) in used_answers:
             continue
         if _topic_core(a["topic"]) in excluded_topics:
@@ -653,12 +783,22 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 conf=0.0
             importance=sum(float(x.get("importance_score") or 0) for x in chosen)/len(chosen)
             exam_value=sum(float(x.get("exam_value_score") or 0) for x in chosen)/len(chosen)
+            core_exam=sum(float(x.get("core_exam_score") or 0) for x in chosen)/len(chosen)
+            core_tiers=[str(x.get("core_exam_tier") or "SUPPORT") for x in chosen]
             natural=_natural_unit_score(chosen)
+
+            support_count=sum(1 for t in core_tiers if t=="SUPPORT")
+            # 세부/지엽 내용만으로 정답 bundle을 만들지는 않는다.
+            if support_count==len(chosen):
+                continue
+
             score_total=(
                 graph_score
                 + min(1.0,max(0.0,conf))
-                + importance*1.20
-                + exam_value*1.85
+                + importance*1.05
+                + exam_value*1.50
+                + core_exam*0.18
+                - support_count*1.75
             )
             if str(pattern_id).upper().startswith("T4"):
                 # R12에서 안정된 4점 선택 로직은 변경하지 않는다.
@@ -704,6 +844,12 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             "두 채점요소 모두 단순 명칭회상 금지; 하나의 핵심개념 판단 + 같은 개념의 근거/오류수정/비교/적용 우선"
             if not str(pattern_id).upper().startswith("T4") else ""
         ),
+        "core_exam_profile":[
+            {"topic":x.get("topic",""),"score":x.get("core_exam_score",0),
+             "tier":x.get("core_exam_tier","SUPPORT"),
+             "breakdown":x.get("core_exam_breakdown",{})}
+            for x in chosen
+        ],
         "quality_directive":_relation_directive(pattern_id,chosen),
         "selector_reason":f"Python exam-value relation score={score:.2f}",
         "relation_score":round(score,2),

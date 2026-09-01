@@ -54,6 +54,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 자료 길이 제한={json.dumps(relation_meta.get('material_limits',{}),ensure_ascii=False)}
 자연적 문제단위 점수={relation_meta.get('natural_unit_score','')}
 2점 후보 정책={relation_meta.get('two_point_label_policy','')}
+임용 핵심도 프로필={json.dumps(relation_meta.get('core_exam_profile',[]),ensure_ascii=False)}
 
 고정정답:
 {json.dumps(answers,ensure_ascii=False)}
@@ -94,6 +95,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 - 4점은 원자료에 원래 존재하는 하나의 과정/장치/현상/계산관계를 중심으로 만든다. 독립 개념 3개를 억지로 한 지문에 합치지 않는다.
 - 4점 자료에는 고정정답의 정의·조건·수치관계를 완성된 문장으로 그대로 나열하지 않는다. 수험생이 최소 한 번 계산·비교·판단해야 답이 나오게 한다.
 - 난도는 지문 길이와 정보량이 아니라 사고과정으로 만든다.
+- 정답은 CORE/NORMAL을 우선한다. SUPPORT는 자료·상황·오답·설명용으로 활용할 수 있지만, 세부 고유명·특수사례 자체를 주된 정답으로 요구하지 않는다.
 - 자료형은 실제 답 풀이에 필요한 형태여야 하고 장식용이면 안 된다.
 - JSON 하나만 출력한다.
 {{
