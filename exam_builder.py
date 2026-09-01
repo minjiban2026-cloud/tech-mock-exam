@@ -1,6 +1,6 @@
-BUILDER_API_VERSION = "SAMPLE6-CONTRACTFIX-R8.1-20260901"
+BUILDER_API_VERSION = "SAMPLE6-SUBNOTE-CORE-R9-20260901"
 
-import random, math, re, sqlite3
+import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
 from retrieval import related_bundle,bundle_context,official_style_profile,candidate_cluster
 from ai_wrapper import rewrite_bundle,safe_bundle_question
@@ -79,6 +79,8 @@ def _anchor_quality_reason(a):
         return "heading_or_junk"
     if re.match(r"^[가-힣]\s+[가-힣A-Za-z0-9]{4,}(?:\s|$)",topic):
         return "ocr_broken_prefix"
+    if re.match(r"^(?:cf\s*[\)\.\:]?|참고|부록|보충|심화|기타|예시)\b", topic, re.I):
+        return "supplementary_topic"
     if _heading_like(answer):
         return "answer_is_heading"
 
@@ -197,6 +199,122 @@ def _pattern_thinking_types(pattern_id):
         "T4_112":["개념판단","관계설명","적용"],
     }.get(pid,["자료해석","관계판단"])
 
+
+def _source_kind_map(con):
+    try:
+        cols={r[1] for r in con.execute("PRAGMA table_info(sources)").fetchall()}
+        if {"name","kind"} <= cols:
+            return {str(r[0]):str(r[1] or "") for r in con.execute("SELECT name,kind FROM sources").fetchall()}
+    except Exception:
+        pass
+    return {}
+
+def _primary_source(source_name, kind=""):
+    """
+    정답/출제내용은 사용자가 넣은 서브노트 계열만 사용한다.
+    공식기출/기출풀이/모의고사는 문제 구조·스타일 참고용이지 정답 후보가 아니다.
+    """
+    name=_norm_anchor_text(source_name).lower()
+    k=_norm_anchor_text(kind).lower()
+    if k=="subnote":
+        return True
+    allow=("서브노트","교과서 정리","[역학] part","자동차-에너지")
+    deny=("기출 문제 풀이","모의고사","전공 a","전공 b","official")
+    if any(x in name for x in deny):
+        return False
+    return any(x in name for x in allow)
+
+def _page_text_map(con, source_names):
+    names=[str(x) for x in source_names if str(x)]
+    if not names:
+        return {}
+    try:
+        cols={r[1] for r in con.execute("PRAGMA table_info(pages)").fetchall()}
+        if not {"source_name","page_no","text"} <= cols:
+            return {}
+        qmarks=",".join("?" for _ in names)
+        rows=con.execute(
+            f"SELECT source_name,page_no,text FROM pages WHERE source_name IN ({qmarks})",
+            names
+        ).fetchall()
+        return {(str(r[0]),int(r[1])):_norm_anchor_text(r[2]) for r in rows}
+    except Exception:
+        return {}
+
+def _subnote_importance_score(a, page_text=""):
+    """
+    서브노트 안에서도 주변 참고사항보다 핵심/기출표시가 있는 내용을 우선한다.
+    점수는 '정답의 진위'를 바꾸지 않고 후보 순위에만 사용한다.
+    """
+    topic=_norm_anchor_text(a.get("topic",""))
+    answer=_norm_anchor_text(a.get("answer",""))
+    evidence=_norm_anchor_text(a.get("evidence",""))
+    page=_norm_anchor_text(page_text)
+    blob=" ".join((topic,evidence,page))
+
+    score=0.0
+    # 서브노트에 실제 기출 연도/전공 표기가 있으면 강한 우선 신호
+    if (
+        re.search(r"★?\s*(?:20)?\d{2}\s*[AB]", blob, re.I)
+        or re.search(r"\b\d{2}[AB]\s*\(", blob, re.I)
+        or re.search(r"기금\s*\d{2}", blob)
+    ):
+        score += 3.0
+    # 공식/원리/과정/비교처럼 연결형 문항으로 만들기 좋은 핵심 서술
+    if re.search(r"(공식|관계식|원리|과정|순서|구조|작동|작용|원인|결과|조건|비교|차이|장단점|특징)", blob):
+        score += 0.8
+    # 너무 일반적인 단답은 후순위
+    if answer.strip().lower() in {"찬성","반대","예","아니오","가능","불가능","장점","단점"}:
+        score -= 3.0
+    # 보충/참고 표시는 강한 감점(대부분 _anchor_quality_reason에서 이미 제외됨)
+    if re.match(r"^(?:cf\\s*[\\)\\.\\:]?|참고|부록|보충|심화|기타|예시)\\b", topic, re.I):
+        score -= 6.0
+    try:
+        score += min(0.8,max(0.0,float(a.get("confidence") or 0))*0.8)
+    except Exception:
+        pass
+    return score
+
+def _direct_chain_order(bundle):
+    """
+    4점 문항은 '같은 분야'가 아니라 실제 교차참조가 이어지는 사슬이어야 한다.
+    인접 두 개념 사이에 최소 1개의 직접 교차참조가 있는 순서를 찾는다.
+    """
+    b=list(bundle or [])
+    if len(b)<=1:
+        return b,0.0
+    best=None
+    for perm in itertools.permutations(b):
+        total=0.0
+        ok=True
+        for i in range(len(perm)-1):
+            cross,_shared=_cross_reference_strength(perm[i],perm[i+1])
+            rel=_pair_relation_score(perm[i],perm[i+1])
+            if cross < 1 or rel < 4.0:
+                ok=False
+                break
+            total += rel + cross
+        if ok and (best is None or total>best[0]):
+            best=(total,list(perm))
+    return (best[1],best[0]) if best else ([],0.0)
+
+def _relation_directive(pattern_id, chosen):
+    topics=[_norm_anchor_text(x.get("topic","")) for x in chosen]
+    chain=" → ".join(x for x in topics if x)
+    if str(pattern_id).upper().startswith("T4"):
+        return (
+            "4점 문항은 독립된 용어 맞히기 여러 개를 한 문제에 붙이지 말 것. "
+            "하나의 상황/자료에서 앞 소문항의 해석·판단이 뒤 소문항의 관계설명·적용에 실제로 필요하게 구성할 것. "
+            "완성된 공식·정의를 자료에 그대로 제시한 뒤 공식명/개념명만 묻지 말 것. "
+            "자료는 답 풀이에 반드시 사용되게 할 것. 관계 사슬: " + chain
+        )
+    return (
+        "2점도 두 개의 독립 암기문항으로 만들지 말 것. "
+        "자료 해석 또는 첫 판단이 두 번째 판단의 근거가 되게 구성하고, "
+        "정답 정의를 거의 그대로 제시한 뒤 명칭만 묻지 말 것. 관계: " + chain
+    )
+
+
 def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics, rng, pattern_id=""):
     con=sqlite3.connect(db_path)
     con.row_factory=sqlite3.Row
@@ -218,6 +336,8 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             ORDER BY {conf_expr} DESC, source_name, page_no""",
         (domain,)
     ).fetchall()
+    source_kinds=_source_kind_map(con)
+    page_map=_page_text_map(con,{str(r["source_name"]) for r in rows})
     con.close()
 
     used_answers={_topic_core(x) for x in (used_answers or set())}
@@ -230,8 +350,14 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         a["topic"]=_norm_anchor_text(a.get("topic"))
         a["answer"]=_norm_anchor_text(a.get("answer"))
         a["evidence"]=_norm_anchor_text(a.get("evidence"))
+        a["source_kind"]=source_kinds.get(str(a.get("source_name","")),"")
+        if not _primary_source(a.get("source_name",""),a.get("source_kind","")):
+            continue
         if not _anchor_ok(a):
             continue
+        a["importance_score"]=_subnote_importance_score(
+            a,page_map.get((str(a.get("source_name","")),int(a.get("page_no",0) or 0)),"")
+        )
         if _topic_core(a["answer"]) in used_answers:
             continue
         if _topic_core(a["topic"]) in excluded_topics:
@@ -281,6 +407,14 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             if not connected:
                 continue
 
+            # 4점은 단순 공통단어 연결이 아니라 직접 교차참조가 이어지는 사고 사슬만 허용
+            if str(pattern_id).upper().startswith("T4"):
+                ordered,chain_score=_direct_chain_order(chosen)
+                if not ordered:
+                    continue
+                chosen=ordered
+                graph_score += min(6.0,chain_score*0.25)
+
             if len({str(x.get("source_name","")) for x in chosen})!=1:
                 continue
             try:
@@ -294,7 +428,11 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 conf=sum(float(x.get("confidence") or 0) for x in chosen)/len(chosen)
             except Exception:
                 conf=0.0
-            candidates.append((graph_score+min(1.0,max(0.0,conf)),chosen))
+            importance=sum(float(x.get("importance_score") or 0) for x in chosen)/len(chosen)
+            candidates.append((
+                graph_score + min(1.0,max(0.0,conf)) + importance*1.8,
+                chosen
+            ))
 
     if not candidates:
         return [],{}
@@ -309,15 +447,18 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         if len(uniq)>=8:
             break
 
-    top=uniq[:min(4,len(uniq))]
+    top=uniq[:min(2,len(uniq))]
     score,chosen=top[rng.randrange(len(top))]
+    topic_chain=" → ".join(_norm_anchor_text(x.get("topic","")) for x in chosen)
     relation_meta={
-        "master_concept":"동일 원문 문맥에서 직접 연결되는 개념군",
-        "relation":"교차참조 또는 공통 핵심 문맥으로 연결된 관계",
+        "master_concept":_norm_anchor_text(chosen[0].get("topic","")) if chosen else "",
+        "relation":"직접 교차참조를 따라 이어지는 핵심 개념 사슬: "+topic_chain,
         "thinking_types":_pattern_thinking_types(pattern_id),
-        "selector_reason":f"Python strong-relation score={score:.2f}",
+        "quality_directive":_relation_directive(pattern_id,chosen),
+        "selector_reason":f"Python subnote-core relation score={score:.2f}",
         "relation_score":round(score,2),
-        "selection_mode":"python_strong_relation_graph",
+        "selection_mode":"python_subnote_core_direct_chain",
+        "source_policy":"subnote_only_for_answer_content",
     }
     return chosen,relation_meta
 

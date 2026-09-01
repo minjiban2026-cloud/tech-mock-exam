@@ -1,9 +1,7 @@
-
 import json,re
 from validators import fingerprint
 
 LABELS=["㉠","㉡","㉢","㉣"]
-
 def _masked_evidence(bundle):
     # 한 근거문장 안에 다른 채점요소의 정답이 함께 등장하는 경우까지 모두 마스킹한다.
     answers=[str(a["answer"]).strip() for a in bundle]
@@ -17,7 +15,6 @@ def _masked_evidence(bundle):
             masked=f"{LABELS[i]}에 관한 원문 근거: {ev.replace(answers[i],'[정답란]')}"
         rows.append(masked)
     return rows
-
 def build_source_passage(bundle,material_form):
     rows=_masked_evidence(bundle)
     if material_form=="대화자료":
@@ -28,13 +25,11 @@ def build_source_passage(bundle,material_form):
     if material_form=="표형자료":
         return "\n".join(f"자료 {i+1} | {r}" for i,r in enumerate(rows))
     return "\n".join(f"◦ {r}" for r in rows)
-
 def _strip_json(text):
     t=text.strip()
     t=re.sub(r"^```(?:json)?\s*","",t)
     t=re.sub(r"\s*```$","",t)
     return t
-
 
 def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,material_form,style_profile,
                    source_context="",relation_meta=None):
@@ -44,7 +39,6 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
     relation_meta=relation_meta or {}
     evidence=[a["evidence"] for a in bundle]
     source_context=source_context or "\n".join(evidence)
-
     prompt=f"""
 너는 대한민국 중등 기술 임용시험 문항 초안 작성자다.
 정답은 이미 DB에서 고정되어 있으며 절대로 바꾸거나 새 정답을 만들면 안 된다.
@@ -54,6 +48,7 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
 master concept={relation_meta.get('master_concept','')}
 관계={relation_meta.get('relation','')}
 권장 사고행동={relation_meta.get('thinking_types',[])}
+출제 핵심지시={relation_meta.get('quality_directive','')}
 
 고정정답:
 {json.dumps(answers,ensure_ascii=False)}
@@ -66,7 +61,6 @@ master concept={relation_meta.get('master_concept','')}
 
 실제 기출 구조:
 {style_profile}
-
 반드시 지킬 규칙:
 - passage/conditions/tasks만 작성한다. 정답은 수정하지 않는다.
 - 기술적 사실, 수치, 인과관계는 위 출처 문맥이 직접 뒷받침하는 것만 사용한다.
@@ -76,14 +70,16 @@ master concept={relation_meta.get('master_concept','')}
 - 원문 정의를 정답 단어만 빈칸 처리한 채 거의 그대로 제시하지 않는다.
 - 한 문장만 읽고 정답을 그대로 복원할 수 있는 '정의 베껴쓰기' 문제를 만들지 않는다.
 - 자료 전체를 해석해야 하도록 단서를 분산하되, 고정정답을 도출할 정보는 충분히 남긴다.
+- 고정정답이 방정식/원리/법칙의 명칭일 때 완성된 식이나 정의를 그대로 제시하고 그 이름만 묻는 방식은 금지한다.
+- 4점은 하나의 coherent scenario 안에서 앞의 해석·판단이 뒤의 관계설명·적용에 쓰이는 사고 사슬이어야 한다.
+- 4점의 소문항들이 서로 없어도 풀리는 독립된 1점/2점 암기문항 묶음이면 안 된다.
 - 4점은 최소 두 종류 이상의 사고행동(식별/관계설명/오류판단/비교/적용/계산/수정)을 포함해야 한다.
 - 4점의 세 하위 요구가 모두 '용어 쓰기' 또는 '분류하기'이면 안 된다.
 - 같은 요구를 표현만 바꾸어 반복하지 않는다.
 - 각 task는 해당 고정정답 요소와 명확하게 대응되어야 한다.
-- 2점은 짧고 명확하게 쓴다.
+- 2점은 짧고 명확하게 쓰되 두 채점요소가 가능하면 하나의 판단관계 안에 있어야 한다.
 - 자료형은 실제 답 풀이에 필요한 형태여야 하고 장식용이면 안 된다.
 - JSON 하나만 출력한다.
-
 {{
  "intro":"...",
  "passage":"...",
@@ -116,7 +112,6 @@ master concept={relation_meta.get('master_concept','')}
     }
     q["fingerprint"]=fingerprint(q)
     return q
-
 def safe_bundle_question(bundle,points,pattern,question_type,material_form):
     passage=build_source_passage(bundle,material_form)
     q={
