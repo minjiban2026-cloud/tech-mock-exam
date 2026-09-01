@@ -1,4 +1,4 @@
-BUILDER_API_VERSION = "SAMPLE6-EXAM-REALISM-R10-20260901"
+BUILDER_API_VERSION = "SAMPLE6-EXAM-REALISM-R11-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -322,6 +322,14 @@ def _exam_value_score(a, page_text=""):
     # 단순 '명칭/종류'만 있는 heading성 topic은 후순위
     if re.search(r"(명칭|종류|분류|이름)\s*$", topic) and not re.search(r"(원리|관계|조건|과정|오류|비교)", blob):
         score -= 1.5
+
+    # R11: 2점에서 특히 문제가 되었던 '정의/특징 한 줄 → 용어명 회상' 후보를 더 강하게 낮춘다.
+    # 출제 자체를 막지는 않고, 같은 분야에 판단·관계·오류수정 가능한 후보가 있으면 그쪽을 우선한다.
+    short_ev = len(evidence) <= 120
+    naming_topic = bool(re.search(r"(정의|명칭|종류|분류|의미|무엇)", topic))
+    relational = bool(re.search(r"(원인|결과|관계|조건|과정|오류|비교|차이|영향|계산|적용)", blob))
+    if short_ev and naming_topic and not relational:
+        score -= 2.0
 
     return score
 

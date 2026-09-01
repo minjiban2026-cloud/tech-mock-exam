@@ -95,6 +95,56 @@ def _dependency_quality_errors(q):
                 e.append("4점 오류수정 공통근거 연결 부족")
     return e
 
+
+def _two_point_recall_errors(q):
+    e=[]
+    if int(q.get("points",0))!=2:
+        return e
+    tasks=[str(x) for x in q.get("tasks",[])]
+    if len(tasks)<2:
+        return e
+
+    recall_flags=[_recall_only_task(t) for t in tasks[:2]]
+    if all(recall_flags):
+        e.append("2점 양쪽 모두 단순 명칭회상")
+        return e
+
+    # 첫 요구가 명칭회상이라면 두 번째는 실제 판단/근거/수정/비교를 요구해야 한다.
+    if recall_flags[0]:
+        second=tasks[1]
+        if not any(k in second for k in ("이유","근거","판단","수정","비교","차이","관계","적용","해석")):
+            e.append("2점 명칭회상 후속 사고요구 부족")
+    return e
+
+def _four_point_direct_support_errors(q):
+    """
+    4점에서 자료가 사실상 정답표처럼 되어 있는 경우를 보수적으로 차단한다.
+    정답 문자열 노출은 기존 grounding에서 이미 잡으므로,
+    여기서는 '근거문장 거의 그대로 + task는 명칭/용어 회상' 조합만 추가 차단한다.
+    """
+    e=[]
+    if int(q.get("points",0))!=4:
+        return e
+
+    passage=str(q.get("passage",""))
+    tasks=[str(x) for x in q.get("tasks",[])]
+    evidences=[str(x) for x in q.get("evidence",[])]
+    answers=[str(x) for x in q.get("answer",[])]
+
+    direct_hits=0
+    for i,ev in enumerate(evidences):
+        task=tasks[i] if i<len(tasks) else ""
+        ans=answers[i] if i<len(answers) else ""
+        if not _recall_only_task(task):
+            continue
+        sim=_max_copy_similarity(passage,ev,ans)
+        if sim>=0.68:
+            direct_hits += 1
+
+    if direct_hits>=2:
+        e.append("4점 자료 직접지원 과다(정답표형)")
+    return e
+
 def _answer_distance_errors(q):
     """
     정답 단어 자체 노출뿐 아니라 '근거를 거의 보여주고 명칭만 쓰게 하는' 저변환 문항을 줄인다.
@@ -123,7 +173,9 @@ def static_quality_errors(q,require_ai_quality=True):
             e.append("원문 정의/근거 과다복사")
             break
     e.extend(_dependency_quality_errors(q))
+    e.extend(_two_point_recall_errors(q))
     e.extend(_answer_distance_errors(q))
+    e.extend(_four_point_direct_support_errors(q))
     if pts==4:
         aq=q.get("ai_quality",{}) or {}
         # 최종 A/B: judge 결과가 있으면 judge의 thinking_types 사용.
