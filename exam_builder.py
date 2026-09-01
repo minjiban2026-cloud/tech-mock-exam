@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-CORE-DIAG-R14D2-20260901"
+BUILDER_API_VERSION = "SAMPLE6-CORE-EXAM-R15-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -279,35 +279,36 @@ def _subnote_importance_score(a, page_text=""):
 
 
 def _past_exam_strength(a, page_text=""):
-    blob=" ".join([
+    local=" ".join([
         _norm_anchor_text(a.get("topic","")),
         _norm_anchor_text(a.get("evidence","")),
-        _norm_anchor_text(page_text),
     ])
     if (
-        re.search(r"★?\s*(?:20)?\d{2}\s*[AB]",blob,re.I)
-        or re.search(r"\b\d{2}[AB]\s*\(",blob,re.I)
-        or re.search(r"기금\s*\d{2}",blob)
-        or re.search(r"(임용|기출)",blob)
+        re.search(r"★?\s*(?:20)?\d{2}\s*[AB]",local,re.I)
+        or re.search(r"\b\d{2}[AB]\s*\(",local,re.I)
+        or re.search(r"기금\s*\d{2}",local)
+        or re.search(r"(임용|기출)",local)
     ):
         return 5
-    if re.search(r"\b(?:19|20)\d{2}\b",blob):
+    if re.search(r"\b(?:19|20)\d{2}\b",local):
         return 4
-    if re.search(r"(출제|문제풀이|기출유사)",blob):
+    if re.search(r"(출제|문제풀이|기출유사)",local):
         return 3
+    page=_norm_anchor_text(page_text)
+    if re.search(r"(임용|기출|★?\s*(?:20)?\d{2}\s*[AB]|\b(?:19|20)\d{2}\b)",page,re.I):
+        return 2
     return 0
 
 def _core_subnote_importance(a, page_text=""):
     topic=_norm_anchor_text(a.get("topic",""))
     ev=_norm_anchor_text(a.get("evidence",""))
-    page=_norm_anchor_text(page_text)
-    blob=" ".join([topic,ev,page])
-    if re.search(r"(cf\)|참고|보충|부록|심화|기타|예시)",blob,re.I):
+    local=" ".join([topic,ev])
+    if re.search(r"(cf\)|참고|보충|부록|심화|기타|예시)",local,re.I):
         return 0
     score=2
-    if re.search(r"(공식|정리|핵심|원리|법칙|과정|공정|구조|작동|특징|비교)",blob):
+    if re.search(r"(공식|정리|핵심|원리|법칙|과정|공정|구조|작동|특징|비교)",local):
         score+=1
-    if re.search(r"(표|단계|조건|관계|계산|식\b|=)",blob):
+    if re.search(r"(표|단계|조건|관계|계산|식\b|=)",local):
         score+=1
     if _past_exam_strength(a,page_text)>=4:
         score+=1
@@ -362,17 +363,19 @@ def _peripherality_score(a, page_text=""):
     topic=_norm_anchor_text(a.get("topic",""))
     ev=_norm_anchor_text(a.get("evidence",""))
     ans=_norm_anchor_text(a.get("answer",""))
-    page=_norm_anchor_text(page_text)
-    blob=" ".join([topic,ev,page])
+    local=" ".join([topic,ev])
     score=0
-    if re.search(r"(cf\)|참고|보충|부록|심화|기타|예시)",blob,re.I):
+    if re.search(r"(cf\)|참고|보충|부록|심화|기타|예시)",local,re.I):
         score+=3
-    if re.search(r"(특정|고유|예외|희귀|특수|세부|사례명|종명|균명)",blob):
+    if re.search(r"(특정|고유|예외|희귀|특수|세부|사례명|종명|균명)",local):
         score+=2
     if len(ans)<=18 and re.search(r"(미생물|균|종류|명칭|이름|고유명)",topic+ans):
         score+=1
-    if re.search(r"(원리|법칙|공식|구조|작동|공정|과정|주요|핵심)",blob):
+    if re.search(r"(원리|법칙|공식|구조|작동|공정|과정|주요|핵심)",local):
         score-=1
+    page=_norm_anchor_text(page_text)
+    if score<=0 and re.search(r"(cf\)|참고|보충|부록|심화|예시)",page,re.I):
+        score+=1
     return max(0,min(5,score))
 
 def _core_exam_score(a, page_text=""):
@@ -697,6 +700,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "same_source_reject":0,
         "page_distance_reject":0,
         "support_only_reject":0,
+        "support_only_fallback":0,
         "two_point_label_reject":0,
         "candidate_accept":0,
         "reject_examples":{
@@ -858,8 +862,14 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             natural=_natural_unit_score(chosen)
 
             support_count=sum(1 for t in core_tiers if t=="SUPPORT")
-            # 세부/지엽 내용만으로 정답 bundle을 만들지는 않는다.
-            if support_count==len(chosen):
+
+            # R15: SUPPORT라는 등급 하나만으로 하드 탈락시키지 않는다.
+            # 대신 모든 anchor가 실제 지엽성 4점 이상일 때만 직접 차단한다.
+            peripheral_scores=[
+                int((x.get("core_exam_breakdown") or {}).get("peripherality",0) or 0)
+                for x in chosen
+            ]
+            if peripheral_scores and all(v>=4 for v in peripheral_scores):
                 _pd["support_only_reject"]+=1
                 if len(_pd["reject_examples"]["support_only"])<5:
                     _pd["reject_examples"]["support_only"].append({
@@ -867,9 +877,23 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                         "answers":[str(x.get("answer","")) for x in chosen],
                         "tiers":core_tiers,
                         "core_scores":[float(x.get("core_exam_score") or 0) for x in chosen],
-                        "breakdowns":[copy.deepcopy(x.get("core_exam_breakdown",{})) for x in chosen],
+                        "peripherality":peripheral_scores,
+                        "r15_action":"rejected_as_truly_peripheral",
                     })
                 continue
+
+            support_only=(support_count==len(chosen))
+            if support_only:
+                _pd["support_only_fallback"]+=1
+                if len(_pd["reject_examples"]["support_only"])<5:
+                    _pd["reject_examples"]["support_only"].append({
+                        "topics":[str(x.get("topic","")) for x in chosen],
+                        "answers":[str(x.get("answer","")) for x in chosen],
+                        "tiers":core_tiers,
+                        "core_scores":[float(x.get("core_exam_score") or 0) for x in chosen],
+                        "breakdowns":[copy.deepcopy(x.get("core_exam_breakdown",{})) for x in chosen],
+                        "r15_action":"kept_with_strong_penalty",
+                    })
 
             score_total=(
                 graph_score
@@ -878,6 +902,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 + exam_value*1.50
                 + core_exam*0.18
                 - support_count*1.75
+                - (4.0 if support_only else 0.0)
             )
             if str(pattern_id).upper().startswith("T4"):
                 # R12에서 안정된 4점 선택 로직은 변경하지 않는다.
