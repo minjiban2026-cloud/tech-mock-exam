@@ -23,7 +23,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R14-20260901")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R14D1-20260901")
 
 def secret(name, default=""):
     try:
@@ -296,6 +296,61 @@ with tabs[2]:
                         st.write("출처:",q.get("source_basis"))
                     if q.get("evidence"):
                         st.write("근거:",q.get("evidence"))
+
+                # R14D1: 실제 후보 점수 진단. PDF에는 넣지 않고 화면에서만 확인한다.
+                _sd=q.get("_score_diagnostic",{})
+                if _sd:
+                    with st.expander("🔎 R14 핵심도 점수 진단",expanded=True):
+                        _sel=_sd.get("selected",{})
+                        st.caption(
+                            f"선택 순위: TOP {_sd.get('selected_rank','-')} · "
+                            f"최종 selector score: {_sel.get('final_selector_score','-')} · "
+                            f"평균 core_exam_score: {_sel.get('avg_core_exam_score','-')}"
+                        )
+                        st.write(
+                            "점수 기여:",
+                            {
+                                "기존 importance":_sel.get("importance_contribution"),
+                                "기존 exam_value":_sel.get("exam_value_contribution"),
+                                "core_exam":_sel.get("core_exam_contribution"),
+                                "SUPPORT 패널티":_sel.get("support_penalty"),
+                                "natural_unit":_sel.get("natural_unit_score"),
+                            }
+                        )
+
+                        st.markdown("**선택된 정답 anchor별 core_exam_score**")
+                        for _a in _sel.get("anchors",[]):
+                            _b=_a.get("breakdown",{})
+                            st.write(
+                                f"• [{_a.get('core_exam_tier','SUPPORT')}] "
+                                f"{_a.get('topic','')} → {_a.get('answer','')} "
+                                f"(총 {_a.get('core_exam_score',0):.1f})"
+                            )
+                            st.caption(
+                                "  기출 {past_exam}×4 / 서브노트 {subnote_importance}×3 / "
+                                "대표 {representative}×3 / 반복 {repeatability}×4 / "
+                                "연결 {centrality}×3 / 지엽 {peripherality}×(-2)".format(
+                                    past_exam=_b.get("past_exam",0),
+                                    subnote_importance=_b.get("subnote_importance",0),
+                                    representative=_b.get("representative",0),
+                                    repeatability=_b.get("repeatability",0),
+                                    centrality=_b.get("centrality",0),
+                                    peripherality=_b.get("peripherality",0),
+                                )
+                            )
+
+                        st.markdown("**이 슬롯의 상위 후보**")
+                        for _row in _sd.get("leaderboard",[])[:5]:
+                            st.write(
+                                f"TOP {_row.get('rank')} · selector {_row.get('final_selector_score')} · "
+                                f"core 평균 {_row.get('avg_core_exam_score')} · "
+                                f"tier {','.join(_row.get('tiers',[]))}"
+                            )
+                            st.caption(" → ".join(_row.get("topics",[])))
+
+                        st.caption(
+                            "이 화면은 진단 전용입니다. R14의 후보 필터·가중치·랜덤 선택은 바꾸지 않았습니다."
+                        )
 
         spdf=export_pdf(sample,False)
         sapdf=export_pdf(sample,True)

@@ -1,4 +1,5 @@
-BUILDER_API_VERSION = "SAMPLE6-CORE-EXAM-R14-20260901"
+import copy
+BUILDER_API_VERSION = "SAMPLE6-CORE-DIAG-R14D1-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -825,8 +826,63 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         if len(uniq)>=8:
             break
 
+    # DIAGNOSTIC ONLY:
+    # 선택 로직은 R14와 완전히 동일하다. 아래 정보는 화면 표시용이며
+    # 후보 순위나 랜덤 선택에는 영향을 주지 않는다.
+    def _candidate_diag(score0, chosen0, rank0):
+        importance0=sum(float(x.get("importance_score") or 0) for x in chosen0)/len(chosen0)
+        exam_value0=sum(float(x.get("exam_value_score") or 0) for x in chosen0)/len(chosen0)
+        core_exam0=sum(float(x.get("core_exam_score") or 0) for x in chosen0)/len(chosen0)
+        tiers0=[str(x.get("core_exam_tier") or "SUPPORT") for x in chosen0]
+        support0=sum(1 for t in tiers0 if t=="SUPPORT")
+        natural0=_natural_unit_score(chosen0)
+        try:
+            conf0=sum(float(x.get("confidence") or 0) for x in chosen0)/len(chosen0)
+        except Exception:
+            conf0=0.0
+
+        # graph_score는 candidate 생성 시 이미 계산되어 score0에 포함되므로
+        # 여기서는 역산하지 않고, 우리가 조절한 핵심 가중치 항목을 그대로 표시한다.
+        return {
+            "rank":rank0,
+            "final_selector_score":round(float(score0),3),
+            "avg_importance_score":round(importance0,3),
+            "importance_contribution":round(importance0*1.05,3),
+            "avg_exam_value_score":round(exam_value0,3),
+            "exam_value_contribution":round(exam_value0*1.50,3),
+            "avg_core_exam_score":round(core_exam0,3),
+            "core_exam_contribution":round(core_exam0*0.18,3),
+            "support_count":support0,
+            "support_penalty":round(-support0*1.75,3),
+            "natural_unit_score":round(float(natural0),3),
+            "tiers":tiers0,
+            "topics":[str(x.get("topic","")) for x in chosen0],
+            "anchors":[
+                {
+                    "topic":str(x.get("topic","")),
+                    "answer":str(x.get("answer","")),
+                    "source_name":str(x.get("source_name","")),
+                    "page_no":x.get("page_no"),
+                    "core_exam_score":x.get("core_exam_score",0),
+                    "core_exam_tier":x.get("core_exam_tier","SUPPORT"),
+                    "core_exam_qualified":x.get("core_exam_qualified",False),
+                    "breakdown":copy.deepcopy(x.get("core_exam_breakdown",{})),
+                    "importance_score":x.get("importance_score",0),
+                    "exam_value_score":x.get("exam_value_score",0),
+                }
+                for x in chosen0
+            ],
+        }
+
+    leaderboard=[
+        _candidate_diag(sc,ch,idx+1)
+        for idx,(sc,ch) in enumerate(uniq[:8])
+    ]
+
     top=uniq[:min(2,len(uniq))]
-    score,chosen=top[rng.randrange(len(top))]
+    chosen_idx=rng.randrange(len(top))
+    score,chosen=top[chosen_idx]
+    selected_rank=chosen_idx+1
     topic_chain=" → ".join(_norm_anchor_text(x.get("topic","")) for x in chosen)
     relation_meta={
         "master_concept":_norm_anchor_text(chosen[0].get("topic","")) if chosen else "",
@@ -855,6 +911,26 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "relation_score":round(score,2),
         "selection_mode":"python_exam_value_direct_chain",
         "source_policy":"subnote_only_for_answer_content",
+        "score_diagnostic":{
+            "selected_rank":selected_rank,
+            "selected":_candidate_diag(score,chosen,selected_rank),
+            "leaderboard":leaderboard,
+            "core_exam_weights":{
+                "past_exam":4,
+                "subnote_importance":3,
+                "representative":3,
+                "repeatability":4,
+                "centrality":3,
+                "peripherality":-2,
+            },
+            "tier_thresholds":{
+                "CORE":"qualified and raw >= 58",
+                "NORMAL":"qualified and raw >= 40",
+                "SUPPORT":"otherwise",
+                "qualification":"past_exam >= 3 OR representative >= 4 OR repeatability >= 4",
+            },
+            "note":"진단 표시 전용. R14 후보 순위/가중치/선택 로직은 변경하지 않음.",
+        },
     }
     return chosen,relation_meta
 
@@ -1289,6 +1365,8 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                         fallbacks+=1
 
                     q=cand
+                    if tuning_mode and relation_meta.get("score_diagnostic"):
+                        q["_score_diagnostic"]=copy.deepcopy(relation_meta["score_diagnostic"])
                     used_answers.update(q["answer"])
                     for a in bundle:
                         used_topics.add(a["topic"])
