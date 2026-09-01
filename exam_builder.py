@@ -1,4 +1,4 @@
-BUILDER_API_VERSION = "SAMPLE6-RELATION-AUDIT-R6-20260901"
+BUILDER_API_VERSION = "SAMPLE6-CONTRACTFIX-R8-20260901"
 
 import random, math, re, sqlite3
 from formula_templates import generate_formula_question
@@ -556,7 +556,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
             # 한 문제 슬롯이 수십 번 반복되지 않도록 AI 후보 예산을 제한한다.
             # 품질 기준은 그대로이며, 실패 원인에 따라 다른 패턴으로 즉시 전환한다.
-            slot_candidate_budget = 1 if quality_active else (3 if tuning_mode else 32)
+            slot_candidate_budget = 1 if quality_active else (6 if tuning_mode else 32)
             slot_candidates_used = 0
             # selector 자체 호출도 슬롯당 제한한다. REJECT/timeout도 호출 1회로 계산한다.
             selector_attempt_limit = 1 if quality_active else (0 if tuning_mode else 32)
@@ -686,7 +686,13 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                 diag(slot,"candidate_shape_validator",
                                      " / ".join(shape_errs),
                                      pattern=pat.get("id"))
+                                if tuning_mode:
+                                    for _a in bundle:
+                                        local_rejected_topics.add(str(_a.get("topic","")))
                                 cand=None
+
+                        if tuning_mode and quality_active:
+                            raise RuntimeError("내부 모드 오류: tuning_mode에서 AI quality judge가 활성화되었습니다.")
 
                         if cand is not None and quality_active:
                             try:
@@ -721,17 +727,26 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                         # 최종 모드와 튜닝 모드 모두 DB/Python grounding은 확인한다.
                         if cand is not None:
                             grounded_errs=validate_grounded_question(
-                                cand,ctx,allow_ai_grounded=True
+                                cand,ctx,
+                                allow_ai_grounded=True,
+                                require_ai_quality=(not tuning_mode)
                             )
                             if grounded_errs:
                                 diag(slot,"grounded_python_validator",
-                                     " / ".join(map(str,grounded_errs)) if isinstance(grounded_errs,(list,tuple)) else str(grounded_errs),
+                                     "DB/Python 근거검증 미통과: " +
+                                     (" / ".join(map(str,grounded_errs)) if isinstance(grounded_errs,(list,tuple)) else str(grounded_errs)),
                                      pattern=pat.get("id"))
+                                if tuning_mode:
+                                    for _a in bundle:
+                                        local_rejected_topics.add(str(_a.get("topic","")))
                                 cand=None
                             elif too_similar(cand,prior+qs):
                                 diag(slot,"question_similarity",
                                      "기존 문항과 유사",
                                      pattern=pat.get("id"))
+                                if tuning_mode:
+                                    for _a in bundle:
+                                        local_rejected_topics.add(str(_a.get("topic","")))
                                 cand=None
                             elif tuning_mode:
                                 cand["ai_quality"]={

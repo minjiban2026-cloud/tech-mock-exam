@@ -1,4 +1,3 @@
-
 import re,json,hashlib,difflib,math
 from collections import Counter
 from concept_families import concept_family,families_for
@@ -11,9 +10,8 @@ def fingerprint(q):
     return hashlib.sha256(json.dumps(core,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:20]
 
 def complexity_score(q):
-    # 배점과 별개로 실제 사고 부담을 측정
     tasks=q.get("tasks",[])
-    score=len(tasks)                         # 답안 요소
+    score=len(tasks)
     score += sum(max(0,int(p)-1) for p in q.get("subpoints",[]))
     if q.get("verifier")=="python": score+=1
     if any(k in " ".join(tasks) for k in ["이유","근거","비교","설명","서술","판단"]): score+=1
@@ -32,16 +30,16 @@ def _basic(q):
     if "그림" in qtext and not q.get("visual_data"):e.append("실제 그림 없이 그림 언급")
     for a in q.get("answer",[]):
         if 2<=len(norm(a))<=45 and contains_loose(qtext,a):
-            # source_locked 지문은 [정답란]으로 마스킹되어야 함
             e.append(f"정답 노출:{a}")
     if pts==2 and len(q.get("passage",""))>900:e.append("2점 지문 과다")
     if pts==4:
-        if len(tasks)<3:e.append("4점 채점요소 부족(최소 3개 요구)")
+        # 중요: 2+2는 작성요구 2개가 정상이다.
+        # 기존 "최소 3개 요구"는 T4_ERR22 같은 2+2 패턴과 논리적으로 충돌했다.
+        if len(tasks)<2:e.append("4점 채점요소 부족(최소 2개 요구)")
         if complexity_score(q)<4:e.append("4점 복잡도 미달")
-        # 1+1+2이면 실제 3개 요구 강제
         if sp==[1,1,2] and len(tasks)!=3:e.append("1+1+2 요구 수 오류")
+        if sp==[2,2] and len(tasks)!=2:e.append("2+2 요구 수 오류")
     return e
-
 
 def _max_copy_similarity(passage,evidence,answer):
     """정답만 지우고 원문 정의를 거의 그대로 복사했는지 보수적으로 검사."""
@@ -52,7 +50,6 @@ def _max_copy_similarity(passage,evidence,answer):
     e=norm(ev)
     if len(e)<18 or len(p)<18:return 0.0
     if e in p:return 1.0
-    # evidence 길이와 비슷한 창에서 최대 유사도
     L=len(e)
     if len(p)<=L*2:
         return difflib.SequenceMatcher(None,p,e).ratio()
@@ -63,7 +60,7 @@ def _max_copy_similarity(passage,evidence,answer):
         best=max(best,difflib.SequenceMatcher(None,w,e).ratio())
     return best
 
-def static_quality_errors(q):
+def static_quality_errors(q,require_ai_quality=True):
     e=[]
     if q.get("premise_mode")!="ai_grounded":
         return e
@@ -74,8 +71,11 @@ def static_quality_errors(q):
             e.append("원문 정의/근거 과다복사")
             break
     if pts==4:
-        aq=q.get("ai_quality",{})
-        think={str(x).strip() for x in aq.get("thinking_types",[]) if str(x).strip()}
+        aq=q.get("ai_quality",{}) or {}
+        # 최종 A/B: judge 결과가 있으면 judge의 thinking_types 사용.
+        # 6문항 튜닝: judge를 의도적으로 생략하므로 writer의 intended_thinking_types 사용.
+        think_src=aq.get("thinking_types",[]) or q.get("intended_thinking_types",[])
+        think={str(x).strip() for x in think_src if str(x).strip()}
         if len(think)<2:e.append("4점 사고행동 다양성 부족")
         tasks=" ".join(q.get("tasks",[]))
         reasoning_terms=("이유","근거","관계","비교","판단","설명","계산","수정","적용","영향","과정","순서","해석","도출")
@@ -83,14 +83,19 @@ def static_quality_errors(q):
             e.append("4점 단순회상형")
     return e
 
-def validate_grounded_question(q,source_context,allow_ai_grounded=False):
+def validate_grounded_question(q,source_context,allow_ai_grounded=False,require_ai_quality=True):
+    """
+    최종 A/B: require_ai_quality=True -> ai_grounded는 AI judge PASS 필수.
+    6문항 튜닝: require_ai_quality=False -> AI judge 없이 deterministic 검증만 수행.
+    """
     e=_basic(q)
     if q.get("verifier")!="source":e.append("개념형 verifier 오류")
     mode=q.get("premise_mode")
     if mode=="ai_grounded":
         if not allow_ai_grounded:e.append("AI 생성 지문은 품질심사 전 통과 불가")
-        aq=q.get("ai_quality",{})
-        if allow_ai_grounded and not aq.get("pass"):e.append("AI 품질심사 미통과")
+        if require_ai_quality:
+            aq=q.get("ai_quality",{}) or {}
+            if allow_ai_grounded and not aq.get("pass"):e.append("AI 품질심사 미통과")
     elif mode!="source_locked":
         e.append("지문 전제 모드 오류")
     ev=q.get("evidence",[]); ans=q.get("answer",[])
@@ -99,7 +104,7 @@ def validate_grounded_question(q,source_context,allow_ai_grounded=False):
         if not v or not contains_loose(source_context,v):e.append("근거가 원자료에 없음")
         if len(norm(a))<=55 and not contains_loose(v,a):e.append(f"정답이 대응 근거에 없음:{a}")
     if not q.get("sources"):e.append("출처 없음")
-    e.extend(static_quality_errors(q))
+    e.extend(static_quality_errors(q,require_ai_quality=require_ai_quality))
     if q.get("premise_mode")=="ai_grounded":
         if not str(q.get("master_concept","")).strip():e.append("AI 지문 master concept 누락")
         if not str(q.get("relation","")).strip():e.append("AI 지문 개념 관계 누락")
