@@ -1,4 +1,4 @@
-BUILDER_API_VERSION = "SAMPLE6-NATURAL-UNIT-R12-20260901"
+BUILDER_API_VERSION = "SAMPLE6-TWO-POINT-FOCUS-R13-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -385,6 +385,46 @@ def _natural_unit_score(chosen):
 
     return score
 
+
+def _answer_is_simple_label(a):
+    ans=_norm_anchor_text(a.get("answer","")).strip()
+    topic=_norm_anchor_text(a.get("topic","")).strip()
+    ev=_norm_anchor_text(a.get("evidence","")).strip()
+    if not ans:
+        return True
+
+    # 실제 계산값/식/단위가 핵심인 답은 명칭회상으로 보지 않는다.
+    # '단상 2선식'처럼 명칭 안에 숫자가 들어가는 경우는 여기서 제외하지 않는다.
+    numeric_result=bool(
+        re.search(r"[=/%℃°]",ans)
+        or re.search(r"\d+(?:\.\d+)?\s*(?:Pa|MPa|kPa|N|kN|V|A|W|Hz|byte|bit|mm|cm|m|kg|s)\b",ans,re.I)
+    )
+    if numeric_result:
+        return False
+
+    # 설명형/관계형 정답은 단순 레이블이 아니다.
+    if len(ans)>=28 or re.search(r"(때문|따라|증가|감소|변화|관계|오류|영향|과정|작용|이용|조건)",ans):
+        return False
+
+    short_answer=len(ans)<=18
+    naming_hint=bool(re.search(r"(명칭|종류|분류|정의|의미|기법|방법|장치|재료|구조|방식|현상)",topic))
+    definition_like=bool(
+        len(ev)<=90
+        and not re.search(r"(때문|따라서|조건|경우|과정|단계|원인|결과|영향|작용|계산|비교|차이|오류|적용)",ev)
+    )
+    return bool(short_answer and (naming_hint or definition_like))
+
+def _two_point_bundle_penalty(chosen):
+    chosen=list(chosen or [])
+    if len(chosen)<2:
+        return 0.0,False
+    flags=[_answer_is_simple_label(x) for x in chosen[:2]]
+    if all(flags):
+        return -99.0,True
+    if any(flags):
+        return -1.75,False
+    return 1.0,False
+
 def _compact_material_limits(points):
     # 실제 임용형 자료는 '정보량'이 아니라 '판단'으로 난도를 만든다.
     if int(points)==2:
@@ -621,9 +661,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 + exam_value*1.85
             )
             if str(pattern_id).upper().startswith("T4"):
+                # R12에서 안정된 4점 선택 로직은 변경하지 않는다.
                 score_total += natural*1.35
             else:
                 score_total += max(-1.5,min(2.0,natural*0.55))
+                label_adjust,label_reject=_two_point_bundle_penalty(chosen)
+                if label_reject:
+                    # 두 채점요소가 모두 단순 명칭회상형이면 API 호출 전에 제거한다.
+                    continue
+                score_total += label_adjust
             candidates.append((score_total,chosen))
 
     if not candidates:
@@ -654,6 +700,10 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             4 if str(pattern_id).upper().startswith("T4") else 2
         ),
         "natural_unit_score":round(_natural_unit_score(chosen),2),
+        "two_point_label_policy":(
+            "두 채점요소 모두 단순 명칭회상 금지; 하나의 핵심개념 판단 + 같은 개념의 근거/오류수정/비교/적용 우선"
+            if not str(pattern_id).upper().startswith("T4") else ""
+        ),
         "quality_directive":_relation_directive(pattern_id,chosen),
         "selector_reason":f"Python exam-value relation score={score:.2f}",
         "relation_score":round(score,2),

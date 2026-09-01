@@ -53,6 +53,7 @@ master concept={relation_meta.get('master_concept','')}
 Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),ensure_ascii=False)}
 자료 길이 제한={json.dumps(relation_meta.get('material_limits',{}),ensure_ascii=False)}
 자연적 문제단위 점수={relation_meta.get('natural_unit_score','')}
+2점 후보 정책={relation_meta.get('two_point_label_policy','')}
 
 고정정답:
 {json.dumps(answers,ensure_ascii=False)}
