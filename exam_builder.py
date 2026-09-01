@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-ANCHOR-CLEAN-R16-20260901"
+BUILDER_API_VERSION = "SAMPLE6-ANCHOR-NORMALIZE-R16.1-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -104,8 +104,9 @@ def _strip_anchor_noise(text):
 
 def _anchor_fragment_reason(a):
     """
-    Conservative fragment detector: reject only clearly broken/non-independent
-    answer anchors. Valid short technical concepts, acronyms, and formulas pass.
+    R16.1 conservative fragment detector.
+    Leading bullets are normalization noise, not a rejection reason.
+    Reject only clearly incomplete parser fragments / grammatical location fragments.
     """
     topic=_strip_anchor_noise(a.get("topic",""))
     answer=_strip_anchor_noise(a.get("answer",""))
@@ -113,41 +114,35 @@ def _anchor_fragment_reason(a):
     if not topic or not answer:
         return "empty_topic_or_answer"
 
-    raw_topic=str(a.get("topic","") or "").strip()
-    raw_answer=str(a.get("answer","") or "").strip()
+    # Obvious parser remnants such as "(If", "(V", lone bracketed tokens.
+    if re.fullmatch(r"[\(\[]\s*[A-Za-z]{1,4}", topic) or re.fullmatch(r"[\(\[]\s*[A-Za-z]{1,4}", answer):
+        return "parser_fragment"
+    if re.fullmatch(r"[\(\[][^)\]]{0,5}", topic) or re.fullmatch(r"[\(\[][^)\]]{0,5}", answer):
+        return "unclosed_parser_fragment"
 
-    # Parser residue such as "· 허용대"
-    if raw_topic != topic or raw_answer != answer:
-        if re.match(r"^[·•○●◦▪■□◆◇▶▷]+", raw_topic) and len(topic) <= 12:
-            return "leading_parser_symbol"
-        if re.match(r"^[·•○●◦▪■□◆◇▶▷]+", raw_answer) and len(answer) <= 12:
-            return "leading_parser_symbol"
-
-    # Common grammatical/location fragments that are not independent answer concepts.
+    # Grammatical/location fragment: require a boundary/space so lexical words
+    # like '광전효과' are never mistaken for ending particle '과'.
     if len(answer) <= 18:
-        grammatical_suffixes = (
-            " 내"," 외","에서","에게","한테","의","에","으로","로",
-            "와","과","및","때","경우","위해","통해","따라","대한","관한"
+        spaced_endings = (
+            " 내"," 외"," 에"," 에서"," 으로"," 로"," 와"," 과"," 의",
+            " 및"," 때"," 경우"," 위해"," 통해"," 따라"," 대한"," 관한"
         )
-        lexical_exempt = {"실내","옥내","옥외","체내","관내"}
-        if answer not in lexical_exempt and any(answer.endswith(x) for x in grammatical_suffixes):
+        if any(answer.endswith(x) for x in spaced_endings):
             return "grammatical_fragment"
 
     if re.fullmatch(r"(실린더|기관|회로|재료|구조물|시스템|장치|부품|공간)\s*(내|안|밖|외)", answer):
         return "generic_place_fragment"
 
-    generic_identity = {
+    if topic == answer and answer in {
         "내부","외부","위치","부분","구간","영역","장소","공간",
         "실린더 내","기관 내","회로 내","재료 내","장치 내",
-    }
-    if topic == answer and answer in generic_identity:
+    }:
         return "generic_identity"
 
     if answer in {"내","외","안","밖","위","아래","앞","뒤","중","부분","위치","영역","구간"}:
         return "relational_only"
 
     return ""
-
 def _bundle_anchor_integrity(chosen):
     reasons=[]
     for x in chosen:
@@ -566,6 +561,22 @@ def _natural_unit_score(chosen):
                     "이용","계산","결과","원인","연결","작용","전달","변환","비교","오류")
     score += 0.35 * sum(1 for t in relation_terms if t in blob)
 
+    # 같은 기술명/계통명을 공유하는 병렬 개념은 하나의 자연스러운 출제 단위다.
+    # 예: 테브난 등가전압 / 테브난 등가저항, 전기자 철심 / 전기자 권선.
+    sibling_bonus=0.0
+    clean_topics=[_strip_anchor_noise(t) for t in topics]
+    first_tokens=[]
+    for t in clean_topics:
+        m=re.match(r"([가-힣A-Za-z0-9]+)",t)
+        first_tokens.append(m.group(1) if m else "")
+    meaningful=[x for x in first_tokens if len(x)>=2]
+    if len(meaningful)>=2:
+        from collections import Counter
+        common=Counter(meaningful).most_common(1)
+        if common and common[0][1]>=2:
+            sibling_bonus += 1.7
+    score += sibling_bonus
+
     # 한 anchor의 topic/answer가 다른 anchor evidence에 직접 등장하면 강한 자연 연결
     cross=0
     for i,a in enumerate(chosen):
@@ -779,6 +790,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "support_only_fallback":0,
         "two_point_label_reject":0,
         "anchor_fragment_reject":0,
+        "anchor_normalization_policy":"strip_bullets_then_validate",
         "bundle_fragment_reject":0,
         "candidate_accept":0,
         "reject_examples":{
@@ -799,8 +811,8 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
     seen=set()
     for r in rows:
         a=dict(r)
-        a["topic"]=_norm_anchor_text(a.get("topic"))
-        a["answer"]=_norm_anchor_text(a.get("answer"))
+        a["topic"]=_strip_anchor_noise(_norm_anchor_text(a.get("topic")))
+        a["answer"]=_strip_anchor_noise(_norm_anchor_text(a.get("answer")))
         a["evidence"]=_norm_anchor_text(a.get("evidence"))
         a["source_kind"]=source_kinds.get(str(a.get("source_name","")),"")
         if not _primary_source(a.get("source_name",""),a.get("source_kind","")):
@@ -1345,6 +1357,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
             wants_calc=False
 
         if wants_calc and dom in FORMULA_DOMAINS and formula_used<formula_cap:
+            _formula_enrich_failures=0
             for _ in range(16 if quality_active else 40):
                 cand=generate_formula_question(dom,rng)
                 if not cand:
@@ -1352,7 +1365,13 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                     break
                 cand=_enrich_formula(cand,pts)
                 if not cand:
+                    _formula_enrich_failures+=1
                     diag(slot,"formula_enrich","계산형 채점요소 조건 불충족")
+                    # Same template family repeatedly failing cannot improve by brute-force retries.
+                    # Fall back to the normal selector early to save time/API and avoid noisy loops.
+                    if _formula_enrich_failures>=4:
+                        diag(slot,"formula_fallback","계산 템플릿 채점요소 부족으로 일반 출제 경로 전환")
+                        break
                     continue
                 if too_similar(cand,prior+qs):
                     diag(slot,"formula_similarity","기존 문항과 유사")
