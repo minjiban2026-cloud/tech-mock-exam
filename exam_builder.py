@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-CORE-DIAG-R14D1-20260901"
+BUILDER_API_VERSION = "SAMPLE6-CORE-DIAG-R14D2-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -676,6 +676,38 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
     page_map=_page_text_map(con,{str(r["source_name"]) for r in rows})
     con.close()
 
+    _pd={
+        "domain":domain,
+        "pattern_id":pattern_id,
+        "required_count":need,
+        "raw_rows":len(rows),
+        "primary_source_pass":0,
+        "anchor_ok_pass":0,
+        "used_answer_reject":0,
+        "excluded_topic_reject":0,
+        "dedupe_reject":0,
+        "usable_anchors":0,
+        "pair_score_pass":0,
+        "cmp_relation_reject":0,
+        "edge_neighbor_pass":0,
+        "near_duplicate_reject":0,
+        "connected_reject":0,
+        "natural_unit_reject":0,
+        "direct_chain_reject":0,
+        "same_source_reject":0,
+        "page_distance_reject":0,
+        "support_only_reject":0,
+        "two_point_label_reject":0,
+        "candidate_accept":0,
+        "reject_examples":{
+            "support_only":[],
+            "two_point_label":[],
+            "same_source":[],
+            "page_distance":[],
+            "natural_unit":[],
+        },
+    }
+
     used_answers={_topic_core(x) for x in (used_answers or set())}
     excluded_topics={_topic_core(x) for x in (excluded_topics or set())}
 
@@ -689,8 +721,10 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         a["source_kind"]=source_kinds.get(str(a.get("source_name","")),"")
         if not _primary_source(a.get("source_name",""),a.get("source_kind","")):
             continue
+        _pd["primary_source_pass"]+=1
         if not _anchor_ok(a):
             continue
+        _pd["anchor_ok_pass"]+=1
         _page_text=page_map.get(
             (str(a.get("source_name","")),int(a.get("page_no",0) or 0)),""
         )
@@ -702,17 +736,22 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         a["core_exam_qualified"]=_core["qualified"]
         a["core_exam_breakdown"]=_core
         if _topic_core(a["answer"]) in used_answers:
+            _pd["used_answer_reject"]+=1
             continue
         if _topic_core(a["topic"]) in excluded_topics:
+            _pd["excluded_topic_reject"]+=1
             continue
         key=(_topic_core(a["topic"]),_topic_core(a["answer"]),a.get("source_name"),a.get("page_no"))
         if key in seen:
+            _pd["dedupe_reject"]+=1
             continue
         seen.add(key)
         anchors.append(a)
 
+    _pd["usable_anchors"]=len(anchors)
     if len(anchors)<need:
-        return [],{}
+        _pd["final_reason"]="usable_anchors_below_need"
+        return [],{"score_pipeline_diagnostic":_pd}
 
     candidates=[]
     for i,a in enumerate(anchors):
@@ -722,14 +761,17 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 continue
             s=_pair_relation_score(a,c)
             if s>=4.0:
+                _pd["pair_score_pass"]+=1
                 if str(pattern_id).upper()=="T2_CMP":
                     cross,shared=_cross_reference_strength(a,c)
                     if _near_duplicate_anchor(a,c) or (cross<1 and len(shared)<2):
+                        _pd["cmp_relation_reject"]+=1
                         continue
                 edges.append((s,c))
         edges.sort(key=lambda x:x[0],reverse=True)
         if len(edges)<need-1:
             continue
+        _pd["edge_neighbor_pass"]+=1
 
         pool=[x[1] for x in edges[:min(6,len(edges))]]
         trial_sets=[[a]+pool[:need-1]]
@@ -744,10 +786,12 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 for x in range(len(chosen))
                 for y in range(x+1,len(chosen))
             ):
+                _pd["near_duplicate_reject"]+=1
                 continue
 
             connected,graph_score=_bundle_connected(chosen,min_edge=4.0)
             if not connected:
+                _pd["connected_reject"]+=1
                 continue
 
             # R12:
@@ -757,25 +801,50 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
 
             if str(pattern_id).upper().startswith("T4"):
                 if natural_score < 3.0:
+                    _pd["natural_unit_reject"]+=1
+                    if len(_pd["reject_examples"]["natural_unit"])<5:
+                        _pd["reject_examples"]["natural_unit"].append({
+                            "topics":[str(x.get("topic","")) for x in chosen],
+                            "score":round(float(natural_score),2),
+                        })
                     continue
                 ordered,chain_score=_direct_chain_order(chosen)
                 if not ordered:
+                    _pd["direct_chain_reject"]+=1
                     continue
                 chosen=ordered
                 graph_score += min(5.0,chain_score*0.22) + min(4.0,natural_score)
             else:
                 # 2점은 너무 이질적인 두 anchor만 제외
                 if natural_score < 0.0:
+                    _pd["natural_unit_reject"]+=1
+                    if len(_pd["reject_examples"]["natural_unit"])<5:
+                        _pd["reject_examples"]["natural_unit"].append({
+                            "topics":[str(x.get("topic","")) for x in chosen],
+                            "score":round(float(natural_score),2),
+                        })
                     continue
                 graph_score += min(2.0,max(0.0,natural_score*0.4))
 
             if len({str(x.get("source_name","")) for x in chosen})!=1:
+                _pd["same_source_reject"]+=1
+                if len(_pd["reject_examples"]["same_source"])<5:
+                    _pd["reject_examples"]["same_source"].append({
+                        "topics":[str(x.get("topic","")) for x in chosen],
+                        "sources":[str(x.get("source_name","")) for x in chosen],
+                    })
                 continue
             try:
                 pages=[int(x.get("page_no",0)) for x in chosen]
             except Exception:
                 continue
             if max(pages)-min(pages)>2:
+                _pd["page_distance_reject"]+=1
+                if len(_pd["reject_examples"]["page_distance"])<5:
+                    _pd["reject_examples"]["page_distance"].append({
+                        "topics":[str(x.get("topic","")) for x in chosen],
+                        "pages":pages,
+                    })
                 continue
 
             try:
@@ -791,6 +860,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             support_count=sum(1 for t in core_tiers if t=="SUPPORT")
             # 세부/지엽 내용만으로 정답 bundle을 만들지는 않는다.
             if support_count==len(chosen):
+                _pd["support_only_reject"]+=1
+                if len(_pd["reject_examples"]["support_only"])<5:
+                    _pd["reject_examples"]["support_only"].append({
+                        "topics":[str(x.get("topic","")) for x in chosen],
+                        "answers":[str(x.get("answer","")) for x in chosen],
+                        "tiers":core_tiers,
+                        "core_scores":[float(x.get("core_exam_score") or 0) for x in chosen],
+                        "breakdowns":[copy.deepcopy(x.get("core_exam_breakdown",{})) for x in chosen],
+                    })
                 continue
 
             score_total=(
@@ -808,13 +886,23 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 score_total += max(-1.5,min(2.0,natural*0.55))
                 label_adjust,label_reject=_two_point_bundle_penalty(chosen)
                 if label_reject:
+                    _pd["two_point_label_reject"]+=1
+                    if len(_pd["reject_examples"]["two_point_label"])<5:
+                        _pd["reject_examples"]["two_point_label"].append({
+                            "topics":[str(x.get("topic","")) for x in chosen],
+                            "answers":[str(x.get("answer","")) for x in chosen],
+                            "tiers":[str(x.get("core_exam_tier") or "SUPPORT") for x in chosen],
+                            "core_scores":[float(x.get("core_exam_score") or 0) for x in chosen],
+                        })
                     # 두 채점요소가 모두 단순 명칭회상형이면 API 호출 전에 제거한다.
                     continue
                 score_total += label_adjust
             candidates.append((score_total,chosen))
+            _pd["candidate_accept"]+=1
 
     if not candidates:
-        return [],{}
+        _pd["final_reason"]="no_candidates_after_all_filters"
+        return [],{"score_pipeline_diagnostic":_pd}
 
     uniq=[]; seen_sets=set()
     for score,chosen in sorted(candidates,key=lambda x:x[0],reverse=True):
@@ -911,6 +999,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "relation_score":round(score,2),
         "selection_mode":"python_exam_value_direct_chain",
         "source_policy":"subnote_only_for_answer_content",
+        "score_pipeline_diagnostic":copy.deepcopy(_pd),
         "score_diagnostic":{
             "selected_rank":selected_rank,
             "selected":_candidate_diag(score,chosen,selected_rank),
@@ -1209,7 +1298,10 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                         if len(bundle)<need:
                             diag(slot,"python_exam_value_selector",
                                  f"출제 가치·관계성 후보 부족: 필요 {need}, 확보 {len(bundle)}",
-                                 pattern=pat.get("id"))
+                                 pattern=pat.get("id"),
+                                 score_pipeline_diagnostic=copy.deepcopy(
+                                     (relation_meta or {}).get("score_pipeline_diagnostic",{})
+                                 ))
                             break
                         slot_candidates_used += 1
                         if pts==2:

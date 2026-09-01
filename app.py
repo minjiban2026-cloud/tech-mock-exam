@@ -23,7 +23,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R14D1-20260901")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R14D2-20260901")
 
 def secret(name, default=""):
     try:
@@ -118,6 +118,47 @@ def exam_editor(exam,prefix):
     edited["verification_note"]="보관소에서 수동 수정됨: 원래의 자동검증 상태를 그대로 보장하지 않음"
     return edited
 
+
+def _show_score_pipeline_diagnostic(pd):
+    if not pd:
+        return
+    st.markdown("##### 🧪 후보 탈락 단계")
+    st.write({
+        "DB 원본 rows":pd.get("raw_rows",0),
+        "서브노트 출처 통과":pd.get("primary_source_pass",0),
+        "anchor_ok 통과":pd.get("anchor_ok_pass",0),
+        "사용/제외/중복 제거 후":pd.get("usable_anchors",0),
+        "관계점수≥4 pair":pd.get("pair_score_pass",0),
+        "충분한 이웃 보유 anchor":pd.get("edge_neighbor_pass",0),
+        "근접중복 탈락":pd.get("near_duplicate_reject",0),
+        "연결성 탈락":pd.get("connected_reject",0),
+        "natural-unit 탈락":pd.get("natural_unit_reject",0),
+        "direct-chain 탈락":pd.get("direct_chain_reject",0),
+        "다른 출처 탈락":pd.get("same_source_reject",0),
+        "페이지거리>2 탈락":pd.get("page_distance_reject",0),
+        "SUPPORT-only 탈락":pd.get("support_only_reject",0),
+        "2점 명칭+명칭 탈락":pd.get("two_point_label_reject",0),
+        "최종 candidate":pd.get("candidate_accept",0),
+    })
+    st.caption(
+        f"{pd.get('domain','')} / {pd.get('pattern_id','')} / "
+        f"필요 {pd.get('required_count','?')} · 최종원인={pd.get('final_reason','')}"
+    )
+    rej=pd.get("reject_examples",{})
+    labels=[
+        ("support_only","SUPPORT-only 탈락 예시"),
+        ("two_point_label","명칭+명칭 탈락 예시"),
+        ("same_source","다른 출처 탈락 예시"),
+        ("page_distance","페이지 거리 탈락 예시"),
+        ("natural_unit","natural-unit 탈락 예시"),
+    ]
+    for key,title in labels:
+        rows=rej.get(key,[])
+        if rows:
+            with st.expander(title):
+                for row in rows:
+                    st.json(row)
+
 def show_generation_diagnostics(exc):
     diagnostics=getattr(exc,"generation_diagnostics",None)
     if not diagnostics:
@@ -158,6 +199,8 @@ def show_generation_diagnostics(exc):
                     "/",
                     row.get("grounded_verdict","-")
                 )
+            if row.get("score_pipeline_diagnostic"):
+                _show_score_pipeline_diagnostic(row.get("score_pipeline_diagnostic",{}))
 
 tabs=st.tabs(["① DB 상태","② 출제범위 검색","③ A/B 생성","④ 모의고사 보관소","⑤ 검증 원리","⑥ 기출 구조"])
 
