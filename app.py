@@ -4,7 +4,7 @@ from datetime import datetime
 
 import streamlit as st
 
-from exam_builder import make_ab, DOMAINS
+from exam_builder import make_ab, make_quality_sample, DOMAINS
 from pdf_export import export_pdf
 from retrieval import search_pages
 from archive_store import (
@@ -19,7 +19,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-TUNING-20260831")
 
 def secret(name, default=""):
     try:
@@ -209,6 +209,80 @@ with tabs[2]:
         st.warning("SUPABASE_KEY는 발견했지만 보관소 자동 저장에는 SUPABASE_SERVICE_ROLE_KEY 사용을 권장합니다.")
     else:
         st.info("Supabase 보관소를 연결하면 새로고침 후에도 생성 결과가 유지됩니다.")
+
+    st.markdown("#### 🧪 품질 튜닝용 6문항")
+    st.caption(
+        "한 번에 2점 2문항 + 4점 4문항만 생성합니다. "
+        "이 단계에서는 최종 Blind/Grounded/섹션 심사를 생략하여 "
+        "문제 형태를 빠르게 확인합니다."
+    )
+
+    if st.button("6문항 빠른 품질 샘플 생성",type="primary",use_container_width=True):
+        with st.spinner("2점 2개 + 4점 4개 생성 중..."):
+            try:
+                sample=make_quality_sample(
+                    DB,domains=domains,api_key=key,model=model,
+                    ai_enabled=bool(use_ai and key),
+                    judge_model=judge_model,
+                    seed=int(seed)
+                )
+                st.session_state["QUALITY_SAMPLE"]=sample
+                st.success("6문항 품질 튜닝 샘플 생성 완료.")
+                ss=sample.get("generation_stats",{})
+                st.caption(
+                    f"문항작성 AI {ss.get('ai_calls',0)}회 · "
+                    f"관계성 선별 {ss.get('ai_selector_calls',0)}회 · "
+                    f"계산형 {ss.get('formula_questions',0)}문항"
+                )
+            except Exception as e:
+                st.error(str(e))
+                show_generation_diagnostics(e)
+
+    if "QUALITY_SAMPLE" in st.session_state:
+        sample=st.session_state["QUALITY_SAMPLE"]
+        st.markdown("### 🧪 6문항 품질 튜닝 결과")
+        st.warning("이 결과는 튜닝용입니다. 최종 A/B 자동검증 완료본으로 저장하지 않습니다.")
+        for q in sample.get("questions",[]):
+            badge="🧮 Python 검산" if q.get("verifier")=="python" else "📚 원문 근거검증"
+            with st.expander(
+                f"{q['number']}번 · {q['domain']} · {q.get('question_type','')} · "
+                f"{q['points']}점({'+'.join(map(str,q.get('subpoints',[])))}) · {badge}",
+                expanded=True
+            ):
+                st.caption(f"패턴: {q.get('pattern_id','-')} · 주제: {q.get('topic','')}")
+                st.write(q.get("passage",""))
+                if q.get("conditions"):
+                    st.markdown("**<조건>**")
+                    for x in q["conditions"]:
+                        st.write("○",x)
+                st.markdown("**<작성 방법>**")
+                for x in q.get("tasks",[]):
+                    st.write("○",x)
+                with st.popover("정답/검증근거"):
+                    st.write("정답:",q.get("answer",[]))
+                    st.write("해설:",q.get("solution",[]))
+                    if q.get("source_basis"):
+                        st.write("출처:",q.get("source_basis"))
+                    if q.get("evidence"):
+                        st.write("근거:",q.get("evidence"))
+
+        spdf=export_pdf(sample,False)
+        sapdf=export_pdf(sample,True)
+        c1,c2=st.columns(2)
+        c1.download_button(
+            "6문항 샘플 문제지 PDF",spdf,
+            file_name="품질튜닝_6문항_문제지.pdf",
+            mime="application/pdf",use_container_width=True
+        )
+        c2.download_button(
+            "6문항 샘플 정답·해설 PDF",sapdf,
+            file_name="품질튜닝_6문항_정답해설.pdf",
+            mime="application/pdf",use_container_width=True
+        )
+
+    st.divider()
+    st.markdown("#### 최종 A/B 생성")
+    st.caption("6문항 샘플 품질이 안정된 뒤 최종 A/B를 생성하세요.")
 
     if st.button("전공 A + B 생성",type="primary",use_container_width=True):
         with st.spinner("정답 고정 → 문항 생성 → 근거 대조 → 중복 검사 → A/B 편성 → 보관 중..."):

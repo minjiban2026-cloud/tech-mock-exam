@@ -22,9 +22,13 @@ def _ask_json(api_key, model, prompt, effort="medium"):
 def select_coherent_bundle(api_key, model, candidates, points, style_profile, need=None):
     items=[]
     for i,a in enumerate(candidates):
+        evidence=str(a.get("evidence","") or "")
         items.append({
-            "index":i,"topic":a.get("topic",""),"answer":a.get("answer",""),
-            "evidence":a.get("evidence",""),"source_name":a.get("source_name",""),
+            "index":i,
+            "topic":str(a.get("topic","") or "")[:120],
+            "answer":str(a.get("answer","") or "")[:160],
+            "evidence":evidence[:420],
+            "source_name":str(a.get("source_name","") or "")[:160],
             "page_no":a.get("page_no"),
         })
     need=int(need or (3 if points==4 else 2))
@@ -50,7 +54,7 @@ def select_coherent_bundle(api_key, model, candidates, points, style_profile, ne
 - 최소 2종 이상의 사고행동이 가능해야 하며 단순 병렬 암기는 REJECT한다.
 
 실제 기출의 구조적 특징:
-{style_profile}
+{str(style_profile)[:1400]}
 
 배점: {points}
 필요 anchor 수: {need}

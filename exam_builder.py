@@ -26,9 +26,16 @@ def _concept_patterns(rng,pts,first=None):
     return out
 
 def score_pattern(section,count,points):
-    defaults={"A":[2,2,2,2]+[4]*8,"B":[2,2]+[4]*9}
+    defaults={
+        "A":[2,2,2,2]+[4]*8,
+        "B":[2,2]+[4]*9,
+        "SAMPLE":[2,2,4,4,4,4],
+    }
     p=defaults.get(section,[])
-    if len(p)==count and sum(p)==points:return p[:]
+    if len(p)==count and sum(p)==points:
+        return p[:]
+    if section=="SAMPLE":
+        raise ValueError("SAMPLE은 6문항 20점(2,2,4,4,4,4)만 지원합니다.")
     raise ValueError("실제 A/B 기본 배점 구조만 지원합니다.")
 
 def _prepend_formula_element(q, task, answer, solution):
@@ -67,14 +74,16 @@ def _enrich_formula(q,pts):
 
 def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-luna",
                  ai_enabled=True,ai_quality_enabled=True,judge_model=None,seed=None,
-                 previous_questions=None,shared_answers=None):
+                 previous_questions=None,shared_answers=None,tuning_mode=False):
     rng=random.Random(seed)
     domains=list(domains or DOMAINS)
     scores=score_pattern(section,count,points)
     plan=blueprint(section,scores,domains,rng)
     style=official_style_profile(db_path)
     judge_model=judge_model or model
-    quality_active=bool(ai_enabled and ai_quality_enabled and api_key)
+    writer_active=bool(ai_enabled and api_key)
+    quality_active=bool(writer_active and ai_quality_enabled and not tuning_mode)
+    selector_active=bool(writer_active)
 
     prior=list(previous_questions or [])
     qs=[]
@@ -147,6 +156,8 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                              blind_verdict=review.get("blind_verdict"),
                              grounded_verdict=review.get("grounded_verdict"))
                         continue
+                elif tuning_mode:
+                    cand["ai_quality"]={"pass":None,"mode":"tuning_fast_python_checked"}
                 else:
                     cand["ai_quality"]={"pass":None,"mode":"not_run"}
 
@@ -158,28 +169,29 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
             # 한 문제 슬롯이 수십 번 반복되지 않도록 AI 후보 예산을 제한한다.
             # 품질 기준은 그대로이며, 실패 원인에 따라 다른 패턴으로 즉시 전환한다.
-            slot_candidate_budget = 1 if quality_active else 32
+            slot_candidate_budget = 1 if quality_active else (2 if tuning_mode else 32)
             slot_candidates_used = 0
 
             for pat in _concept_patterns(rng,pts,first_pat):
                 if quality_active and slot_candidates_used >= slot_candidate_budget:
                     diag(slot,"slot_budget",
-                         "AI 후보 생성 예산 1회 소진 - 즉시 실패/다음 청사진 전환",
+                         f"AI 후보 생성 예산 {slot_candidate_budget}회 소진 - 즉시 다음 단계로 전환",
                          pattern=pat.get("id"))
                     break
                 need=len(pat["subpoints"])
 
-                for _ in range(1 if quality_active else 32):
-                    if quality_active and slot_candidates_used >= slot_candidate_budget:
+                for _ in range(1 if quality_active else (2 if tuning_mode else 32)):
+                    if (quality_active or tuning_mode) and slot_candidates_used >= slot_candidate_budget:
                         break
                     relation_meta={}
                     bundle=[]
 
-                    if quality_active:
+                    if selector_active:
+                        compact_limit=max(5, min(6, need+2))
                         cluster=candidate_cluster(
                             db_path,dom,used_answers,
                             set(used_topics)|local_rejected_topics,
-                            limit=9
+                            limit=compact_limit
                         )
                         if len(cluster)<need:
                             diag(slot,"candidate_cluster",
@@ -239,7 +251,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                     ctx=bundle_context(db_path,bundle)
                     cand=None
 
-                    if quality_active:
+                    if selector_active:
                         try:
                             ai_calls+=1
                             cand=rewrite_bundle(
@@ -253,7 +265,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                  "AI 문항 작성 호출 실패: "+str(ex),
                                  pattern=pat.get("id"))
 
-                        if cand is not None:
+                        if cand is not None and quality_active:
                             try:
                                 judge_calls+=1
                                 review=judge_question(
@@ -282,20 +294,28 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                 elif bundle:
                                     local_rejected_topics.add(bundle[0]["topic"])
                                 cand=None
-                            else:
-                                grounded_errs=validate_grounded_question(
-                                    cand,ctx,allow_ai_grounded=True
-                                )
-                                if grounded_errs:
-                                    diag(slot,"grounded_python_validator",
-                                         " / ".join(map(str,grounded_errs)) if isinstance(grounded_errs,(list,tuple)) else str(grounded_errs),
-                                         pattern=pat.get("id"))
-                                    cand=None
-                                elif too_similar(cand,prior+qs):
-                                    diag(slot,"question_similarity",
-                                         "기존 문항과 유사",
-                                         pattern=pat.get("id"))
-                                    cand=None
+
+                        # 최종 모드와 튜닝 모드 모두 DB/Python grounding은 확인한다.
+                        if cand is not None:
+                            grounded_errs=validate_grounded_question(
+                                cand,ctx,allow_ai_grounded=True
+                            )
+                            if grounded_errs:
+                                diag(slot,"grounded_python_validator",
+                                     " / ".join(map(str,grounded_errs)) if isinstance(grounded_errs,(list,tuple)) else str(grounded_errs),
+                                     pattern=pat.get("id"))
+                                cand=None
+                            elif too_similar(cand,prior+qs):
+                                diag(slot,"question_similarity",
+                                     "기존 문항과 유사",
+                                     pattern=pat.get("id"))
+                                cand=None
+                            elif tuning_mode:
+                                cand["ai_quality"]={
+                                    "pass":None,
+                                    "mode":"tuning_fast_manual_review",
+                                    "note":"Blind/Grounded/섹션 AI 심사는 튜닝 속도를 위해 생략"
+                                }
 
                         if cand is None:
                             if bundle and not any(a["topic"] in local_rejected_topics for a in bundle):
@@ -354,7 +374,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
     exam={
       "exam_title":f"기술 임용 모의고사 전공 {section}",
-      "section":section,"total_points":points,"questions":qs,"verified":True,
+      "section":section,"total_points":points,"questions":qs,"verified":False if tuning_mode else True,
       "blueprint":plan,
       "generation_stats":{
           "ai_calls":ai_calls,
@@ -365,10 +385,10 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
           "ai_selector_calls":selector_calls,
       },
       "used_answers":list(used_answers),
-      "verification_note":"DB/Python 정답 고정 + 구조검증 + AI 독립 품질심사 통과"
+      "verification_note":("품질 튜닝용 6문항: DB/Python 정답·구조 검증 + AI 작성. 최종 AI 품질심사 생략" if tuning_mode else "DB/Python 정답 고정 + 구조검증 + AI 독립 품질심사 통과")
     }
 
-    if quality_active:
+    if quality_active and not tuning_mode:
         try:
             judge_calls+=1
             section_review=judge_exam(api_key,judge_model,exam,style)
@@ -393,9 +413,22 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
             }]
             raise err
     else:
-        exam["section_ai_quality"]={"pass":None,"mode":"not_run"}
+        exam["section_ai_quality"]={
+            "pass":None,
+            "mode":"tuning_fast_manual_review" if tuning_mode else "not_run"
+        }
 
     return exam
+
+
+def make_quality_sample(db_path,domains=None,api_key="",model="gpt-5.6-luna",
+                        ai_enabled=True,judge_model=None,seed=None):
+    """2점 2개 + 4점 4개 = 6문항 품질 튜닝용 빠른 샘플."""
+    return make_section(
+        db_path,"SAMPLE",6,20,domains,api_key,model,
+        ai_enabled,False,judge_model,seed=seed,
+        tuning_mode=True
+    )
 
 
 def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
