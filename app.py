@@ -4,7 +4,11 @@ from datetime import datetime
 
 import streamlit as st
 
-from exam_builder import make_ab, make_quality_sample, DOMAINS
+from exam_builder import make_ab, DOMAINS
+# 새 6문항 기능은 선택 기능으로 읽는다.
+# exam_builder.py가 아직 구버전이어도 앱 전체가 ImportError로 죽지 않는다.
+import exam_builder as _exam_builder
+make_quality_sample = getattr(_exam_builder, "make_quality_sample", None)
 from pdf_export import export_pdf
 from retrieval import search_pages
 from archive_store import (
@@ -19,7 +23,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-TUNING-20260831")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-VERIFIED-20260901")
 
 def secret(name, default=""):
     try:
@@ -218,25 +222,28 @@ with tabs[2]:
     )
 
     if st.button("6문항 빠른 품질 샘플 생성",type="primary",use_container_width=True):
-        with st.spinner("2점 2개 + 4점 4개 생성 중..."):
-            try:
-                sample=make_quality_sample(
-                    DB,domains=domains,api_key=key,model=model,
-                    ai_enabled=bool(use_ai and key),
-                    judge_model=judge_model,
-                    seed=int(seed)
-                )
-                st.session_state["QUALITY_SAMPLE"]=sample
-                st.success("6문항 품질 튜닝 샘플 생성 완료.")
-                ss=sample.get("generation_stats",{})
-                st.caption(
-                    f"문항작성 AI {ss.get('ai_calls',0)}회 · "
-                    f"관계성 선별 {ss.get('ai_selector_calls',0)}회 · "
-                    f"계산형 {ss.get('formula_questions',0)}문항"
-                )
-            except Exception as e:
-                st.error(str(e))
-                show_generation_diagnostics(e)
+        if make_quality_sample is None:
+            st.error("exam_builder.py가 아직 이전 버전입니다. ZIP의 exam_builder.py를 같은 이름으로 덮어쓴 뒤 앱을 재부팅하세요.")
+        else:
+            with st.spinner("2점 2개 + 4점 4개 생성 중..."):
+                try:
+                    sample=make_quality_sample(
+                        DB,domains=domains,api_key=key,model=model,
+                        ai_enabled=bool(use_ai and key),
+                        judge_model=judge_model,
+                        seed=int(seed)
+                    )
+                    st.session_state["QUALITY_SAMPLE"]=sample
+                    st.success("6문항 품질 튜닝 샘플 생성 완료.")
+                    ss=sample.get("generation_stats",{})
+                    st.caption(
+                        f"문항작성 AI {ss.get('ai_calls',0)}회 · "
+                        f"관계성 선별 {ss.get('ai_selector_calls',0)}회 · "
+                        f"계산형 {ss.get('formula_questions',0)}문항"
+                    )
+                except Exception as e:
+                    st.error(str(e))
+                    show_generation_diagnostics(e)
 
     if "QUALITY_SAMPLE" in st.session_state:
         sample=st.session_state["QUALITY_SAMPLE"]

@@ -12,6 +12,41 @@ from quality_judge import select_coherent_bundle,judge_question,judge_exam,judge
 DOMAINS=["기술교육론","발명","제조기술","건설기술","생명기술","전기·전자","통신기술","재료역학","수송기술"]
 FORMULA_DOMAINS={"재료역학","수송기술","통신기술"}
 
+def _compact_candidate_cluster(rows, need, limit=6):
+    """AI에 보내기 전 Python에서 같은 출처/근접 페이지 후보를 우선 압축한다."""
+    rows=list(rows or [])
+    if len(rows)<=limit:
+        return rows
+    groups={}
+    for r in rows:
+        src=str(r.get("source_name","") or "")
+        groups.setdefault(src,[]).append(r)
+    best=[]
+    for src,items in groups.items():
+        if not src:
+            continue
+        def page(x):
+            try:return int(x.get("page_no"))
+            except Exception:return 10**9
+        items=sorted(items,key=page)
+        for i in range(len(items)):
+            window=[]
+            p0=page(items[i])
+            for x in items[i:]:
+                px=page(x)
+                if p0!=10**9 and px!=10**9 and px-p0>2:
+                    break
+                if str(x.get("topic","")).strip() and not any(str(y.get("topic","")).strip()==str(x.get("topic","")).strip() for y in window):
+                    window.append(x)
+                if len(window)>=limit:
+                    break
+            if len(window)>=need and len(window)>len(best):
+                best=window
+    if len(best)>=need:
+        return best[:limit]
+    # 동일 출처 후보가 없으면 원래 순서를 유지하되 입력 수만 제한한다.
+    return rows[:limit]
+
 def _concept_patterns(rng,pts,first=None):
     from patterns import PATTERNS
     valid=[p for p in PATTERNS if p["points"]==pts and not p["calc"] and p.get("weight",1)>0]
@@ -171,28 +206,38 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
             # 품질 기준은 그대로이며, 실패 원인에 따라 다른 패턴으로 즉시 전환한다.
             slot_candidate_budget = 1 if quality_active else (2 if tuning_mode else 32)
             slot_candidates_used = 0
+            # selector 자체 호출도 슬롯당 제한한다. REJECT/timeout도 호출 1회로 계산한다.
+            selector_attempt_limit = 1 if quality_active else (2 if tuning_mode else 32)
+            selector_attempts = 0
 
             for pat in _concept_patterns(rng,pts,first_pat):
-                if quality_active and slot_candidates_used >= slot_candidate_budget:
+                if (quality_active or tuning_mode) and (
+                    slot_candidates_used >= slot_candidate_budget or
+                    selector_attempts >= selector_attempt_limit
+                ):
                     diag(slot,"slot_budget",
-                         f"AI 후보 생성 예산 {slot_candidate_budget}회 소진 - 즉시 다음 단계로 전환",
+                         f"AI 호출 예산 소진(candidate={slot_candidates_used}/{slot_candidate_budget}, selector={selector_attempts}/{selector_attempt_limit})",
                          pattern=pat.get("id"))
                     break
                 need=len(pat["subpoints"])
 
                 for _ in range(1 if quality_active else (2 if tuning_mode else 32)):
-                    if (quality_active or tuning_mode) and slot_candidates_used >= slot_candidate_budget:
+                    if (quality_active or tuning_mode) and (
+                        slot_candidates_used >= slot_candidate_budget or
+                        selector_attempts >= selector_attempt_limit
+                    ):
                         break
                     relation_meta={}
                     bundle=[]
 
                     if selector_active:
                         compact_limit=max(5, min(6, need+2))
-                        cluster=candidate_cluster(
+                        raw_cluster=candidate_cluster(
                             db_path,dom,used_answers,
                             set(used_topics)|local_rejected_topics,
-                            limit=compact_limit
+                            limit=12
                         )
+                        cluster=_compact_candidate_cluster(raw_cluster,need,compact_limit)
                         if len(cluster)<need:
                             diag(slot,"candidate_cluster",
                                  f"후보 anchor 부족: 필요 {need}, 확보 {len(cluster)}",
@@ -200,6 +245,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                             break
                         try:
                             selector_calls+=1
+                            selector_attempts+=1
                             selected=select_coherent_bundle(
                                 api_key,judge_model,cluster,pts,style,need=need
                             )
