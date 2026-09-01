@@ -23,7 +23,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-VERIFIED-20260901")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R6-20260901")
 
 def secret(name, default=""):
     try:
@@ -123,7 +123,7 @@ def show_generation_diagnostics(exc):
     if not diagnostics:
         return
     st.markdown("#### 생성 실패 진단")
-    st.caption("품질 기준을 낮추지 않고, 어느 단계에서 후보가 탈락했는지 표시합니다.")
+    st.caption("실제로 탈락한 단계만 표시합니다. 성공한 Python 관계선별은 이 목록에 표시하지 않습니다.")
     for i,row in enumerate(diagnostics,1):
         sec=row.get("section","")
         no=row.get("number","")
@@ -216,7 +216,7 @@ with tabs[2]:
 
     st.markdown("#### 🧪 품질 튜닝용 6문항")
     st.caption(f"현재 로드된 exam_builder: {BUILDER_API_VERSION}")
-    builder_ok=(BUILDER_API_VERSION=="SAMPLE6-PYREL-R4-20260901")
+    builder_ok=(BUILDER_API_VERSION=="SAMPLE6-RELATION-AUDIT-R6-20260901")
     if not builder_ok:
         st.error(
             "⚠️ app.py와 exam_builder.py 버전이 맞지 않습니다. "
@@ -225,7 +225,7 @@ with tabs[2]:
     st.caption(
         "한 번에 2점 2문항 + 4점 4문항만 생성합니다. "
         "이 단계에서는 AI 관계성 selector와 최종 Blind/Grounded/섹션 심사를 생략하고, "
-        "Python 관계묶음 + Luna 문항작성 + deterministic 검증만 사용합니다."
+        "Python 강한 관계 그래프 + Luna 문항작성 + deterministic 구조·근거 검증만 사용합니다."
     )
 
     if st.button(

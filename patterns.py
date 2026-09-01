@@ -15,9 +15,16 @@ PATTERNS = [
   "verbs":["식별","식별"],"calc":False,"weight":0},
  {"id":"T2_C11","points":2,"name":"식+계산","subpoints":[1,1],"verbs":["관계식","계산"],"calc":True,"weight":4},
 
- {"id":"T4_112","points":4,"name":"개념+개념+적용","subpoints":[1,1,2],"verbs":["식별","식별","적용"],"calc":False,"weight":8},
+ {"id":"T4_DATA112","points":4,"name":"자료해석→개념판단→적용","subpoints":[1,1,2],
+  "verbs":["자료해석","개념판단","적용"],"calc":False,"weight":9,
+  "quality_rule":"앞선 자료 해석과 개념 판단을 마지막 적용 판단의 근거로 사용하게 한다."},
+ {"id":"T4_ERR22","points":4,"name":"오류판단→수정·근거","subpoints":[2,2],
+  "verbs":["오류판단","수정/근거"],"calc":False,"weight":7,
+  "quality_rule":"자료의 오류를 판단하고, 같은 원리의 근거를 사용해 수정하게 한다. 두 요구는 독립 회상이 아니어야 한다."},
+ {"id":"T4_112","points":4,"name":"개념+개념+적용","subpoints":[1,1,2],"verbs":["식별","식별","적용"],"calc":False,"weight":6,
+  "quality_rule":"두 개념을 독립적으로 나열하지 말고 마지막 적용 판단에서 앞의 두 개념을 함께 사용하게 한다."},
  {"id":"T4_22","points":4,"name":"판단+근거","subpoints":[2,2],"verbs":["판단","서술"],"calc":False,"weight":0},
- {"id":"T4_1111","points":4,"name":"네 요소","subpoints":[1,1,1,1],"verbs":["식별"]*4,"calc":False,"weight":3},
+ {"id":"T4_1111","points":4,"name":"네 요소","subpoints":[1,1,1,1],"verbs":["식별"]*4,"calc":False,"weight":0},
  {"id":"T4_13","points":4,"name":"개념+심화서술","subpoints":[1,3],"verbs":["식별","서술"],"calc":False,"weight":0},
  {"id":"T4_C112","points":4,"name":"원리+중간값+계산","subpoints":[1,1,2],"verbs":["원리/식","중간값","계산"],"calc":True,"weight":10},
 ]

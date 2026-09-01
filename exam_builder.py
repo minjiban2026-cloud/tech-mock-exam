@@ -1,4 +1,4 @@
-BUILDER_API_VERSION = "SAMPLE6-PYREL-R4-20260901"
+BUILDER_API_VERSION = "SAMPLE6-RELATION-AUDIT-R6-20260901"
 
 import random, math, re, sqlite3
 from formula_templates import generate_formula_question
@@ -13,94 +13,215 @@ DOMAINS=["기술교육론","발명","제조기술","건설기술","생명기술"
 FORMULA_DOMAINS={"재료역학","수송기술","통신기술"}
 
 
+
 def _norm_anchor_text(s):
     s=re.sub(r"[\x00-\x1f]+"," ",str(s or ""))
     s=re.sub(r"\s+"," ",s).strip()
     return s
 
+_REL_STOP={
+    "기술","종류","특징","방법","과정","내용","관련","사용","이용","경우",
+    "한다","있다","대한","통해","위한","의한","것을","에서","으로","되는",
+    "설명","자료","다음","해당","구분","분류","단계","요소","기능","개념",
+    "목적","장점","단점","효과","원리","구조","형태","상태","의미","활용",
+    "적용","정의","특성","방식","구성","관계","조건","문제","예시","기타",
+    "따른","따라","위해","때문","또는","그리고","등을","등의","정도"
+}
+
 def _anchor_tokens(*parts):
     text=" ".join(_norm_anchor_text(x).lower() for x in parts)
     toks=re.findall(r"[가-힣A-Za-z0-9]{2,}",text)
-    stop={
-        "기술","종류","특징","방법","과정","내용","관련","사용","이용","경우",
-        "한다","있다","대한","통해","위한","의한","것을","에서","으로","되는",
-        "설명","자료","다음","해당","구분","분류","단계","요소","기능"
-    }
-    return {t for t in toks if t not in stop and not t.isdigit()}
+    return {t for t in toks if t not in _REL_STOP and not t.isdigit()}
 
-def _anchor_ok(a):
+def _topic_core(s):
+    s=_norm_anchor_text(s).lower()
+    s=re.sub(r"^[\(\[]?\d+[\)\].:\-]?\s*","",s)
+    s=re.sub(r"^(신재생에너지의|신재생에너지|재생에너지의|재생에너지)\s+","",s)
+    s=re.sub(r"[^가-힣a-z0-9]+","",s)
+    return s
+
+def _heading_like(text):
+    x=_norm_anchor_text(text)
+    if not x:
+        return True
+    bad_exact={
+        "종류","특징","개념","목적","장점","단점","활용","분류","구조","구성",
+        "형태","기능","원리","방법","과정","효과","특성","의미","내용"
+    }
+    if x in bad_exact:
+        return True
+    if re.search(r"(에\s*따라|에\s*따른|에\s*의한)\s*$",x):
+        return True
+    if re.search(r"(종류|분류|특징|장점|단점|구분|형태에 따른 분류)\s*$",x) and len(x)<=24:
+        return True
+    return False
+
+def _anchor_quality_reason(a):
     topic=_norm_anchor_text(a.get("topic",""))
     answer=_norm_anchor_text(a.get("answer",""))
     evidence=_norm_anchor_text(a.get("evidence",""))
-    if len(topic)<2 or len(answer)<1 or len(evidence)<8:
-        return False
+    if len(topic)<2:
+        return "topic_too_short"
+    if len(answer)<1:
+        return "answer_empty"
+    if len(evidence)<10:
+        return "evidence_too_short"
+    if len(topic)>110 or len(answer)>90:
+        return "text_too_long"
+    if topic.count("·")>=5:
+        return "topic_fragmented"
     junk=[
         r"^[\(\[]?\d+[\)\].]?$",
         r"^[가-힣A-Za-z]\)$",
         r"^(참고|기타|정리|예시|종류|특징|개요|내용)$",
     ]
-    if any(re.match(p,topic,re.I) for p in junk):
-        return False
-    if topic.count("·")>=5 or len(topic)>110 or len(answer)>120:
-        return False
-    return True
+    if any(re.match(q,topic,re.I) for q in junk):
+        return "heading_or_junk"
+    if re.match(r"^[가-힣]\s+[가-힣A-Za-z0-9]{4,}(?:\s|$)",topic):
+        return "ocr_broken_prefix"
+    if _heading_like(answer):
+        return "answer_is_heading"
+
+    acore=_topic_core(answer)
+    ecore=_topic_core(evidence)
+    if len(acore)>=3 and acore not in ecore:
+        atoks=_anchor_tokens(answer)
+        etoks=_anchor_tokens(evidence)
+        if atoks and not (atoks & etoks):
+            return "answer_not_supported_in_evidence"
+    return ""
+
+def _anchor_ok(a):
+    return _anchor_quality_reason(a)==""
+
+def _near_duplicate_anchor(a,b):
+    at=_topic_core(a.get("topic",""))
+    bt=_topic_core(b.get("topic",""))
+    aa=_topic_core(a.get("answer",""))
+    ba=_topic_core(b.get("answer",""))
+    for x,y in ((at,bt),(aa,ba),(at,ba),(aa,bt)):
+        if not x or not y:
+            continue
+        if x==y:
+            return True
+        short,long=(x,y) if len(x)<=len(y) else (y,x)
+        if len(short)>=4 and short in long and len(short)/max(1,len(long))>=0.60:
+            return True
+    ta=_anchor_tokens(a.get("topic"),a.get("answer"))
+    tb=_anchor_tokens(b.get("topic"),b.get("answer"))
+    if ta and tb:
+        j=len(ta & tb)/max(1,len(ta | tb))
+        if j>=0.82:
+            return True
+    return False
+
+def _cross_reference_strength(a,b):
+    ae=_norm_anchor_text(a.get("evidence","")).lower()
+    be=_norm_anchor_text(b.get("evidence","")).lower()
+    akeys=_anchor_tokens(a.get("topic"),a.get("answer"))
+    bkeys=_anchor_tokens(b.get("topic"),b.get("answer"))
+    cross=0
+    for t in list(akeys)[:10]:
+        if len(t)>=3 and t in be:
+            cross+=1
+    for t in list(bkeys)[:10]:
+        if len(t)>=3 and t in ae:
+            cross+=1
+    ea=_anchor_tokens(a.get("evidence",""))
+    eb=_anchor_tokens(b.get("evidence",""))
+    shared={t for t in (ea & eb) if len(t)>=3}
+    return cross,shared
 
 def _pair_relation_score(a,b):
+    """
+    강한 relation 신호가 없으면 같은 페이지여도 REJECT.
+    """
+    if not _anchor_ok(a) or not _anchor_ok(b):
+        return -999.0
+    if _near_duplicate_anchor(a,b):
+        return -999.0
     if str(a.get("source_name","")) != str(b.get("source_name","")):
         return -999.0
     try:
         gap=abs(int(a.get("page_no",0))-int(b.get("page_no",0)))
     except Exception:
-        gap=99
+        return -999.0
     if gap>2:
         return -999.0
 
-    ta=_anchor_tokens(a.get("topic"),a.get("answer"),a.get("evidence"))
-    tb=_anchor_tokens(b.get("topic"),b.get("answer"),b.get("evidence"))
-    shared=ta & tb
+    cross,shared=_cross_reference_strength(a,b)
+    if cross==0 and len(shared)<2:
+        return -999.0
 
-    score=0.0
-    if gap==0: score+=5.0
-    elif gap==1: score+=2.5
-    else: score+=0.5
+    score=cross*3.0 + min(8.0,len(shared)*2.0)
+    if gap==0:
+        score+=1.0
+    elif gap==1:
+        score+=0.5
 
-    score += min(6.0, len(shared)*2.0)
-
-    tta=_anchor_tokens(a.get("topic"),a.get("answer"))
-    ttb=_anchor_tokens(b.get("topic"),b.get("answer"))
-    score += min(3.0, len(tta & ttb)*1.5)
-
-    ea=_norm_anchor_text(a.get("evidence","")).lower()
-    eb=_norm_anchor_text(b.get("evidence","")).lower()
-    for tok in list(tta)[:8]:
-        if tok in eb: score+=0.7
-    for tok in list(ttb)[:8]:
-        if tok in ea: score+=0.7
-
-    if not shared and gap>0:
-        score-=3.0
+    ta=_anchor_tokens(a.get("topic"),a.get("answer"))
+    tb=_anchor_tokens(b.get("topic"),b.get("answer"))
+    score += min(3.0,len(ta & tb)*1.5)
     return score
 
-def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics, rng):
-    """
-    6문항 튜닝 모드 전용.
-    같은 영역의 잡다한 후보를 AI selector에 보내지 않고,
-    같은 source + 근접 page + 공통 핵심어 관계가 있는 anchor만 Python이 먼저 고른다.
-    """
+def _bundle_connected(bundle,min_edge=4.0):
+    n=len(bundle)
+    if n<=1:
+        return True,0.0
+    adj=[set() for _ in range(n)]
+    scores=[]
+    for i in range(n):
+        for j in range(i+1,n):
+            s=_pair_relation_score(bundle[i],bundle[j])
+            if s>=min_edge:
+                adj[i].add(j); adj[j].add(i); scores.append(s)
+    seen={0}; stack=[0]
+    while stack:
+        x=stack.pop()
+        for y in adj[x]:
+            if y not in seen:
+                seen.add(y); stack.append(y)
+    if len(seen)!=n:
+        return False,0.0
+    return True,(sum(scores)/len(scores) if scores else 0.0)
+
+def _pattern_thinking_types(pattern_id):
+    pid=str(pattern_id or "").upper()
+    return {
+        "T2_REL":["관계판단","근거서술"],
+        "T2_ERR":["오류판단","수정"],
+        "T2_CMP":["비교판단","구분근거"],
+        "T2_DATA":["자료해석","적용판단"],
+        "T4_DATA112":["자료해석","개념판단","적용"],
+        "T4_ERR22":["오류판단","수정","근거서술"],
+        "T4_112":["개념판단","관계설명","적용"],
+    }.get(pid,["자료해석","관계판단"])
+
+def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics, rng, pattern_id=""):
     con=sqlite3.connect(db_path)
     con.row_factory=sqlite3.Row
+
+    cols={r[1] for r in con.execute("PRAGMA table_info(anchors)").fetchall()}
+    required={"domain","topic","answer","evidence","source_name","page_no"}
+    missing=sorted(required-cols)
+    if missing:
+        con.close()
+        raise RuntimeError("knowledge.db anchors 스키마 누락: "+", ".join(missing))
+
+    has_conf="confidence" in cols
+    conf_expr="COALESCE(confidence,0)" if has_conf else "0"
     rows=con.execute(
-        """SELECT domain,topic,answer,evidence,source_name,page_no,
-                  COALESCE(confidence,0) AS confidence
-           FROM anchors
-           WHERE domain=?
-           ORDER BY COALESCE(confidence,0) DESC, source_name, page_no""",
+        f"""SELECT domain,topic,answer,evidence,source_name,page_no,
+                   {conf_expr} AS confidence
+            FROM anchors
+            WHERE domain=?
+            ORDER BY {conf_expr} DESC, source_name, page_no""",
         (domain,)
     ).fetchall()
     con.close()
 
-    used_answers={_norm_anchor_text(x) for x in (used_answers or set())}
-    excluded_topics={_norm_anchor_text(x) for x in (excluded_topics or set())}
+    used_answers={_topic_core(x) for x in (used_answers or set())}
+    excluded_topics={_topic_core(x) for x in (excluded_topics or set())}
 
     anchors=[]
     seen=set()
@@ -109,85 +230,180 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         a["topic"]=_norm_anchor_text(a.get("topic"))
         a["answer"]=_norm_anchor_text(a.get("answer"))
         a["evidence"]=_norm_anchor_text(a.get("evidence"))
-        if not _anchor_ok(a): continue
-        if a["answer"] in used_answers or a["topic"] in excluded_topics: continue
-        key=(a["topic"],a["answer"],a.get("source_name"),a.get("page_no"))
-        if key in seen: continue
+        if not _anchor_ok(a):
+            continue
+        if _topic_core(a["answer"]) in used_answers:
+            continue
+        if _topic_core(a["topic"]) in excluded_topics:
+            continue
+        key=(_topic_core(a["topic"]),_topic_core(a["answer"]),a.get("source_name"),a.get("page_no"))
+        if key in seen:
+            continue
         seen.add(key)
         anchors.append(a)
 
-    best=[]
+    if len(anchors)<need:
+        return [],{}
+
+    candidates=[]
     for i,a in enumerate(anchors):
-        neighbors=[]
+        edges=[]
         for j,c in enumerate(anchors):
-            if i==j: continue
+            if i==j:
+                continue
             s=_pair_relation_score(a,c)
-            if s>0:
-                neighbors.append((s,c))
-        neighbors.sort(key=lambda x:x[0], reverse=True)
-        if len(neighbors)<need-1:
+            if s>=4.0:
+                if str(pattern_id).upper()=="T2_CMP":
+                    cross,shared=_cross_reference_strength(a,c)
+                    if _near_duplicate_anchor(a,c) or (cross<1 and len(shared)<2):
+                        continue
+                edges.append((s,c))
+        edges.sort(key=lambda x:x[0],reverse=True)
+        if len(edges)<need-1:
             continue
 
-        chosen=[a]+[x[1] for x in neighbors[:need-1]]
-        pair_scores=[]
-        ok=True
-        for x in range(len(chosen)):
-            for y in range(x+1,len(chosen)):
-                ps=_pair_relation_score(chosen[x],chosen[y])
-                pair_scores.append(ps)
-                if ps<3.0:
-                    ok=False
-        if not ok:
+        pool=[x[1] for x in edges[:min(6,len(edges))]]
+        trial_sets=[[a]+pool[:need-1]]
+        for shift in range(1,min(3,len(pool))):
+            tail=pool[shift:shift+need-1]
+            if len(tail)==need-1:
+                trial_sets.append([a]+tail)
+
+        for chosen in trial_sets:
+            if any(
+                _near_duplicate_anchor(chosen[x],chosen[y])
+                for x in range(len(chosen))
+                for y in range(x+1,len(chosen))
+            ):
+                continue
+
+            connected,graph_score=_bundle_connected(chosen,min_edge=4.0)
+            if not connected:
+                continue
+
+            if len({str(x.get("source_name","")) for x in chosen})!=1:
+                continue
+            try:
+                pages=[int(x.get("page_no",0)) for x in chosen]
+            except Exception:
+                continue
+            if max(pages)-min(pages)>2:
+                continue
+
+            try:
+                conf=sum(float(x.get("confidence") or 0) for x in chosen)/len(chosen)
+            except Exception:
+                conf=0.0
+            candidates.append((graph_score+min(1.0,max(0.0,conf)),chosen))
+
+    if not candidates:
+        return [],{}
+
+    uniq=[]; seen_sets=set()
+    for score,chosen in sorted(candidates,key=lambda x:x[0],reverse=True):
+        k=tuple(sorted(_topic_core(x.get("answer","")) for x in chosen))
+        if k in seen_sets:
             continue
+        seen_sets.add(k)
+        uniq.append((score,chosen))
+        if len(uniq)>=8:
+            break
 
-        cluster_score=sum(pair_scores)/len(pair_scores)
-        conf=sum(float(x.get("confidence") or 0) for x in chosen)/len(chosen)
-        cluster_score += min(1.0,conf)
-        best.append((cluster_score,chosen))
-
-    if not best:
-        return [], {}
-
-    best.sort(key=lambda x:x[0], reverse=True)
-    top=best[:min(3,len(best))]
+    top=uniq[:min(4,len(uniq))]
     score,chosen=top[rng.randrange(len(top))]
-
     relation_meta={
-        "master_concept":"같은 원문 범위의 직접 연관 개념",
-        "relation":"동일 출처·근접 문맥·공통 핵심어로 연결된 관계",
-        "thinking_types":["자료해석","관계판단"],
-        "selector_reason":f"Python relation score={score:.2f}",
+        "master_concept":"동일 원문 문맥에서 직접 연결되는 개념군",
+        "relation":"교차참조 또는 공통 핵심 문맥으로 연결된 관계",
+        "thinking_types":_pattern_thinking_types(pattern_id),
+        "selector_reason":f"Python strong-relation score={score:.2f}",
         "relation_score":round(score,2),
-        "selection_mode":"python_relation_cluster",
+        "selection_mode":"python_strong_relation_graph",
     }
     return chosen,relation_meta
 
 def _compact_candidate_cluster(rows, need, limit=6):
     rows=[dict(r) for r in (rows or []) if _anchor_ok(r)]
     if len(rows)<need:
-        return rows
-
+        return []
     ranked=[]
     for i,a in enumerate(rows):
         neighbors=[]
         for j,c in enumerate(rows):
-            if i==j: continue
+            if i==j:
+                continue
             s=_pair_relation_score(a,c)
-            if s>0: neighbors.append((s,c))
+            if s>=4.0:
+                neighbors.append((s,c))
         neighbors.sort(key=lambda x:x[0],reverse=True)
         if len(neighbors)>=need-1:
-            chosen=[a]+[x[1] for x in neighbors[:min(limit-1,len(neighbors))]]
-            ranked.append((sum(x[0] for x in neighbors[:need-1]),chosen))
+            chosen=[a]+[x[1] for x in neighbors[:need-1]]
+            connected,score=_bundle_connected(chosen,4.0)
+            if connected:
+                ranked.append((score,chosen))
     if not ranked:
         return []
     ranked.sort(key=lambda x:x[0],reverse=True)
     return ranked[0][1][:limit]
 
+def _candidate_shape_errors(cand, pat, pts):
+    if not isinstance(cand,dict):
+        return ["문항 객체가 dict가 아님"]
+    errs=[]
+    expected=list(pat.get("subpoints",[]))
+    if int(cand.get("points",pts) or 0)!=int(pts):
+        errs.append("배점 불일치")
+    sub=list(cand.get("subpoints",[]))
+    if sub and sub!=expected:
+        errs.append(f"부분점수 불일치: {sub} != {expected}")
+    tasks=list(cand.get("tasks",[]) or [])
+    answers=list(cand.get("answer",[]) or [])
+    solutions=list(cand.get("solution",[]) or [])
+    evidence=list(cand.get("evidence",[]) or [])
+    if len(tasks)!=len(expected):
+        errs.append(f"작성방법 수 불일치({len(tasks)}/{len(expected)})")
+    if len(answers)!=len(expected):
+        errs.append(f"정답 수 불일치({len(answers)}/{len(expected)})")
+    if solutions and len(solutions)!=len(expected):
+        errs.append(f"해설 수 불일치({len(solutions)}/{len(expected)})")
+    if evidence and len(evidence)!=len(expected):
+        errs.append(f"근거 수 불일치({len(evidence)}/{len(expected)})")
+    cores=[_topic_core(x) for x in answers if _topic_core(x)]
+    if len(cores)!=len(set(cores)):
+        errs.append("정답 중복")
+    if any(_heading_like(ans) for ans in answers):
+        errs.append("목차/분류형 답안 포함")
+    pid=str(cand.get("pattern_id","") or "")
+    if pid and pid!=str(pat.get("id","")):
+        errs.append(f"패턴 ID 불일치({pid}/{pat.get('id')})")
+    if sum(expected)!=pts:
+        errs.append("패턴 부분점수 합계 오류")
+    return errs
+
+def _validate_sample_exam(qs):
+    errs=[]
+    if len(qs)!=6:
+        errs.append(f"문항수 {len(qs)} != 6")
+    got=[int(q.get("points",0) or 0) for q in qs]
+    if got!=[2,2,4,4,4,4]:
+        errs.append(f"배점 구조 {got} != [2,2,4,4,4,4]")
+    if sum(got)!=20:
+        errs.append(f"총점 {sum(got)} != 20")
+    for i,q in enumerate(qs,1):
+        subs=list(q.get("subpoints",[]) or [])
+        if sum(subs)!=int(q.get("points",0) or 0):
+            errs.append(f"{i}번 부분점수 합 불일치")
+        if len(q.get("tasks",[]) or [])!=len(subs):
+            errs.append(f"{i}번 작성방법/부분점수 수 불일치")
+        if len(q.get("answer",[]) or [])!=len(subs):
+            errs.append(f"{i}번 정답/부분점수 수 불일치")
+    return errs
+
 def _concept_patterns(rng,pts,first=None):
     from patterns import PATTERNS
     valid=[p for p in PATTERNS if p["points"]==pts and not p["calc"] and p.get("weight",1)>0]
     if pts==4:
-        valid=sorted(valid,key=lambda p:(0 if p["id"]=="T4_112" else 1,-p.get("weight",1)))
+        priority={"T4_DATA112":0,"T4_ERR22":1,"T4_112":2}
+        valid=sorted(valid,key=lambda p:(priority.get(p["id"],9),-p.get("weight",1)))
     else:
         valid=sorted(valid,key=lambda p:-p.get("weight",1))
     out=[]
@@ -340,7 +556,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
             # 한 문제 슬롯이 수십 번 반복되지 않도록 AI 후보 예산을 제한한다.
             # 품질 기준은 그대로이며, 실패 원인에 따라 다른 패턴으로 즉시 전환한다.
-            slot_candidate_budget = 1 if quality_active else (2 if tuning_mode else 32)
+            slot_candidate_budget = 1 if quality_active else (3 if tuning_mode else 32)
             slot_candidates_used = 0
             # selector 자체 호출도 슬롯당 제한한다. REJECT/timeout도 호출 1회로 계산한다.
             selector_attempt_limit = 1 if quality_active else (0 if tuning_mode else 32)
@@ -351,9 +567,12 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                     slot_candidates_used >= slot_candidate_budget or
                     (not tuning_mode and selector_attempts >= selector_attempt_limit)
                 ):
-                    diag(slot,"slot_budget",
-                         f"AI 호출 예산 소진(candidate={slot_candidates_used}/{slot_candidate_budget}, selector={selector_attempts}/{selector_attempt_limit})",
-                         pattern=pat.get("id"))
+                    _budget_reason=(
+                        f"샘플 후보 예산 소진(candidate={slot_candidates_used}/{slot_candidate_budget})"
+                        if tuning_mode else
+                        f"AI 호출 예산 소진(candidate={slot_candidates_used}/{slot_candidate_budget}, selector={selector_attempts}/{selector_attempt_limit})"
+                    )
+                    diag(slot,"slot_budget",_budget_reason,pattern=pat.get("id"))
                     break
                 need=len(pat["subpoints"])
 
@@ -370,18 +589,16 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                         if tuning_mode:
                             bundle,relation_meta=_smart_relation_bundle(
                                 db_path,dom,need,used_answers,
-                                set(used_topics)|local_rejected_topics,rng
+                                set(used_topics)|local_rejected_topics,rng,
+                                pattern_id=pat.get("id","")
                             )
                             if len(bundle)<need:
                                 diag(slot,"python_relation_cluster",
-                                     f"연관 anchor 묶음 부족: 필요 {need}, 확보 {len(bundle)}",
+                                     f"강한 관계 anchor 묶음 부족: 필요 {need}, 확보 {len(bundle)}",
                                      pattern=pat.get("id"))
                                 break
                             slot_candidates_used += 1
-                            diag(slot,"python_relation_cluster_pass",
-                                 relation_meta.get("selector_reason",""),
-                                 pattern=pat.get("id"),
-                                 candidate_topics=[str(x.get("topic","")) for x in bundle])
+                            # 성공한 관계 묶음은 실패 진단에 기록하지 않는다.
                         else:
                             compact_limit=max(5, min(6, need+2))
                             raw_cluster=candidate_cluster(
@@ -462,6 +679,14 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                             diag(slot,"question_writer_call",
                                  "AI 문항 작성 호출 실패: "+str(ex),
                                  pattern=pat.get("id"))
+
+                        if cand is not None:
+                            shape_errs=_candidate_shape_errors(cand,pat,pts)
+                            if shape_errs:
+                                diag(slot,"candidate_shape_validator",
+                                     " / ".join(shape_errs),
+                                     pattern=pat.get("id"))
+                                cand=None
 
                         if cand is not None and quality_active:
                             try:
@@ -561,7 +786,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
         qs.append(q)
         used_patterns.append(q.get("pattern_id"))
 
-    errs=validate_exam(qs,count,points)
+    errs=_validate_sample_exam(qs) if tuning_mode else validate_exam(qs,count,points)
     if errs:
         err=RuntimeError("시험 자동검증 실패: "+" / ".join(errs))
         err.generation_diagnostics=diagnostics[-15:]+[{
@@ -584,7 +809,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
           "tuning_relation_selector":"python" if tuning_mode else "ai",
       },
       "used_answers":list(used_answers),
-      "verification_note":("품질 튜닝용 6문항: DB/Python 정답·구조 검증 + AI 작성. 최종 AI 품질심사 생략" if tuning_mode else "DB/Python 정답 고정 + 구조검증 + AI 독립 품질심사 통과")
+      "verification_note":("품질 튜닝용 6문항: 강한 관계 그래프 선별 + DB/Python 정답·구조 검증 + AI 작성. 최종 AI 품질심사 생략" if tuning_mode else "DB/Python 정답 고정 + 구조검증 + AI 독립 품질심사 통과")
     }
 
     if quality_active and not tuning_mode:
