@@ -116,6 +116,46 @@ def _two_point_recall_errors(q):
             e.append("2점 명칭회상 후속 사고요구 부족")
     return e
 
+
+def _material_length_errors(q):
+    e=[]
+    pts=int(q.get("points",0))
+    passage=str(q.get("passage",""))
+    conditions=[str(x) for x in q.get("conditions",[])]
+    tasks=[str(x) for x in q.get("tasks",[])]
+
+    # 너무 긴 지문은 실제 임용 난도보다 '읽기량'으로 어려워지는 문제를 만든다.
+    if pts==2:
+        if len(passage)>650:
+            e.append("2점 자료 과다장문")
+        if len(conditions)>2:
+            e.append("2점 조건 과다")
+        if any(len(t)>170 for t in tasks):
+            e.append("2점 작성요구 과다장문")
+    elif pts==4:
+        if len(passage)>1150:
+            e.append("4점 자료 과다장문")
+        if len(conditions)>3:
+            e.append("4점 조건 과다")
+        if any(len(t)>210 for t in tasks):
+            e.append("4점 작성요구 과다장문")
+    return e
+
+def _independent_fact_listing_errors(q):
+    """
+    쉼표/세미콜론/번호 나열이 과도하고 서로 다른 사례·종류가 병렬 제시되는 지문을 보수적으로 감점한다.
+    """
+    e=[]
+    passage=str(q.get("passage",""))
+    pts=int(q.get("points",0))
+    list_marks = passage.count(",") + passage.count("·") + passage.count(";")
+    enumerators = sum(passage.count(x) for x in ("A","B","C","D","①","②","③","④"))
+    if pts==2 and (list_marks>=8 or enumerators>=5):
+        e.append("2점 독립사실 나열 과다")
+    if pts==4 and (list_marks>=16 or enumerators>=8):
+        e.append("4점 독립사실 나열 과다")
+    return e
+
 def _four_point_direct_support_errors(q):
     """
     4점에서 자료가 사실상 정답표처럼 되어 있는 경우를 보수적으로 차단한다.
@@ -176,6 +216,8 @@ def static_quality_errors(q,require_ai_quality=True):
     e.extend(_two_point_recall_errors(q))
     e.extend(_answer_distance_errors(q))
     e.extend(_four_point_direct_support_errors(q))
+    e.extend(_material_length_errors(q))
+    e.extend(_independent_fact_listing_errors(q))
     if pts==4:
         aq=q.get("ai_quality",{}) or {}
         # 최종 A/B: judge 결과가 있으면 judge의 thinking_types 사용.

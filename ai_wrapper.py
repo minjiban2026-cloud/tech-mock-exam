@@ -51,6 +51,8 @@ master concept={relation_meta.get('master_concept','')}
 출제 핵심지시={relation_meta.get('quality_directive','')}
 실제 임용형 문항 골격={relation_meta.get('exam_skeleton','')}
 Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),ensure_ascii=False)}
+자료 길이 제한={json.dumps(relation_meta.get('material_limits',{}),ensure_ascii=False)}
+자연적 문제단위 점수={relation_meta.get('natural_unit_score','')}
 
 고정정답:
 {json.dumps(answers,ensure_ascii=False)}
@@ -84,9 +86,13 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 - 같은 요구를 표현만 바꾸어 반복하지 않는다.
 - 각 task는 해당 고정정답 요소와 명확하게 대응되어야 한다.
 - 2점은 짧고 명확하게 쓰되 두 채점요소가 가능하면 하나의 판단관계 안에 있어야 한다.
-- 2점에서 첫 요구가 단순히 '명칭/용어를 쓰시오'라면, 두 번째 요구가 반드시 그 명칭을 전제로 한 판단·근거·오류수정·비교 중 하나가 되게 한다.
+- 2점은 '서로 다른 개념 2개를 억지로 연결'하지 않는다. 하나의 핵심 개념/방법/원리와 그 근거·오류·적용을 중심으로 만든다.
+- 2점에서 첫 요구가 단순히 '명칭/용어를 쓰시오'라면, 두 번째 요구가 반드시 같은 핵심개념을 전제로 한 판단·근거·오류수정·비교 중 하나가 되게 한다.
 - 2점의 두 요구가 모두 명칭/용어 회상이면 안 된다.
+- 2점 자료는 필요한 정보만 짧게 제시한다. 난도를 올리기 위해 독립 사실·사례·활용처를 여러 개 나열하지 않는다.
+- 4점은 원자료에 원래 존재하는 하나의 과정/장치/현상/계산관계를 중심으로 만든다. 독립 개념 3개를 억지로 한 지문에 합치지 않는다.
 - 4점 자료에는 고정정답의 정의·조건·수치관계를 완성된 문장으로 그대로 나열하지 않는다. 수험생이 최소 한 번 계산·비교·판단해야 답이 나오게 한다.
+- 난도는 지문 길이와 정보량이 아니라 사고과정으로 만든다.
 - 자료형은 실제 답 풀이에 필요한 형태여야 하고 장식용이면 안 된다.
 - JSON 하나만 출력한다.
 {{

@@ -1,4 +1,4 @@
-BUILDER_API_VERSION = "SAMPLE6-EXAM-REALISM-R11-20260901"
+BUILDER_API_VERSION = "SAMPLE6-NATURAL-UNIT-R12-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -333,6 +333,74 @@ def _exam_value_score(a, page_text=""):
 
     return score
 
+
+def _natural_unit_score(chosen):
+    """
+    같은 주제라는 이유만으로 억지로 묶지 않고,
+    서브노트 근거 자체에 원래 존재하는 하나의 문제해결 단위인지 점수화한다.
+    """
+    chosen=list(chosen or [])
+    if not chosen:
+        return -99.0
+
+    topics=[_norm_anchor_text(x.get("topic","")) for x in chosen]
+    evidences=[_norm_anchor_text(x.get("evidence","")) for x in chosen]
+    blob=" ".join(evidences)
+
+    score=0.0
+
+    # 같은 출처/근접 페이지는 약한 보조 신호
+    if len({str(x.get("source_name","")) for x in chosen})==1:
+        score += 0.8
+    pages=[int(x.get("page_no",0) or 0) for x in chosen]
+    if pages and max(pages)-min(pages)<=1:
+        score += 0.8
+
+    # 실제 인과·과정·조건·계산 연결어가 여러 근거에 반복 등장하면 자연적 단위 가능성이 높다.
+    relation_terms=("때문","따라","따라서","증가","감소","변화","조건","과정","단계",
+                    "이용","계산","결과","원인","연결","작용","전달","변환","비교","오류")
+    score += 0.35 * sum(1 for t in relation_terms if t in blob)
+
+    # 한 anchor의 topic/answer가 다른 anchor evidence에 직접 등장하면 강한 자연 연결
+    cross=0
+    for i,a in enumerate(chosen):
+        ta=_topic_core(a.get("topic",""))
+        aa=_topic_core(a.get("answer",""))
+        for j,b in enumerate(chosen):
+            if i==j:
+                continue
+            ev=_topic_core(b.get("evidence",""))
+            if (ta and ta in ev) or (aa and aa in ev):
+                cross += 1
+    score += min(4.0,cross*1.25)
+
+    # '서로 다른 독립 사례/종류/활용 예시'를 나열하는 성격은 감점
+    if sum(1 for t in topics if re.search(r"(활용|사례|종류|예시|용도|분류)",t)) >= 2:
+        score -= 2.0
+
+    # 찬반/단순명칭 anchor가 섞이면 강한 감점
+    simple_answers={"찬성","반대","예","아니오","장점","단점"}
+    if any(_norm_anchor_text(x.get("answer","")).strip() in simple_answers for x in chosen):
+        score -= 2.5
+
+    return score
+
+def _compact_material_limits(points):
+    # 실제 임용형 자료는 '정보량'이 아니라 '판단'으로 난도를 만든다.
+    if int(points)==2:
+        return {
+            "passage_max_chars":520,
+            "conditions_max":2,
+            "tasks_max_chars_each":140,
+            "policy":"핵심 상황 1개 + 필요한 근거만. 장황한 설명 금지."
+        }
+    return {
+        "passage_max_chars":900,
+        "conditions_max":3,
+        "tasks_max_chars_each":170,
+        "policy":"하나의 상황/과정/장치 중심. 독립 사실 나열 금지."
+    }
+
 def _skeleton_for_pattern(pattern_id):
     """
     실제 임용에서 자주 보이는 '문항 골격'만 고정한다.
@@ -359,12 +427,18 @@ def _scoring_plan(pattern, chosen):
     answers=[_norm_anchor_text(x.get("answer","")) for x in chosen]
     rows=[]
     for i,(pt,topic,ans) in enumerate(zip(sp,topics,answers),1):
-        if i==1:
-            role="자료에서 핵심 조건/오류/차이를 해석·판단"
-        elif i==len(sp):
-            role="앞선 판단을 실제로 이용해 관계·적용·결과를 도출"
+        if len(sp)==2:
+            if i==1:
+                role="하나의 핵심 개념/방법/원리를 짧은 자료에서 판단"
+            else:
+                role="첫 판단과 같은 핵심개념에 대해 근거·오류수정·비교·적용 중 하나를 수행"
         else:
-            role="첫 판단과 마지막 적용을 이어 주는 중간 판단"
+            if i==1:
+                role="자료에서 핵심 조건/오류/차이를 해석·판단"
+            elif i==len(sp):
+                role="앞선 판단을 실제로 이용해 관계·적용·결과를 도출"
+            else:
+                role="첫 판단과 마지막 적용을 이어 주는 중간 판단"
         rows.append({
             "order":i,"points":int(pt),"topic":topic,
             "fixed_answer":ans,"role":role
@@ -505,13 +579,24 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             if not connected:
                 continue
 
-            # 4점은 단순 공통단어 연결이 아니라 직접 교차참조가 이어지는 사고 사슬만 허용
+            # R12:
+            # 2점은 억지 관계사슬을 만들지 않고 하나의 핵심 개념 + 근거 판단을 허용한다.
+            # 4점만 '원래 존재하는 자연적 문제해결 단위'와 직접 사슬을 요구한다.
+            natural_score=_natural_unit_score(chosen)
+
             if str(pattern_id).upper().startswith("T4"):
+                if natural_score < 3.0:
+                    continue
                 ordered,chain_score=_direct_chain_order(chosen)
                 if not ordered:
                     continue
                 chosen=ordered
-                graph_score += min(6.0,chain_score*0.25)
+                graph_score += min(5.0,chain_score*0.22) + min(4.0,natural_score)
+            else:
+                # 2점은 너무 이질적인 두 anchor만 제외
+                if natural_score < 0.0:
+                    continue
+                graph_score += min(2.0,max(0.0,natural_score*0.4))
 
             if len({str(x.get("source_name","")) for x in chosen})!=1:
                 continue
@@ -528,13 +613,18 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 conf=0.0
             importance=sum(float(x.get("importance_score") or 0) for x in chosen)/len(chosen)
             exam_value=sum(float(x.get("exam_value_score") or 0) for x in chosen)/len(chosen)
-            candidates.append((
+            natural=_natural_unit_score(chosen)
+            score_total=(
                 graph_score
                 + min(1.0,max(0.0,conf))
-                + importance*1.25
-                + exam_value*2.0,
-                chosen
-            ))
+                + importance*1.20
+                + exam_value*1.85
+            )
+            if str(pattern_id).upper().startswith("T4"):
+                score_total += natural*1.35
+            else:
+                score_total += max(-1.5,min(2.0,natural*0.55))
+            candidates.append((score_total,chosen))
 
     if not candidates:
         return [],{}
@@ -560,6 +650,10 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "scoring_plan":_scoring_plan(
             {"id":pattern_id,"subpoints":[1]*len(chosen)}, chosen
         ),
+        "material_limits":_compact_material_limits(
+            4 if str(pattern_id).upper().startswith("T4") else 2
+        ),
+        "natural_unit_score":round(_natural_unit_score(chosen),2),
         "quality_directive":_relation_directive(pattern_id,chosen),
         "selector_reason":f"Python exam-value relation score={score:.2f}",
         "relation_score":round(score,2),

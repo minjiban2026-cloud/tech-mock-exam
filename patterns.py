@@ -6,7 +6,7 @@ PATTERNS = [
   "verbs":["오류판단","수정"],"calc":False,"weight":6,
   "quality_rule":"자료의 잘못된 적용/설명을 판단한 뒤 고정정답에 근거해 수정하게 한다."},
  {"id":"T2_CMP","points":2,"name":"비교→구분근거형","subpoints":[1,1],
-  "verbs":["비교판단","구분근거"],"calc":False,"weight":3,
+  "verbs":["비교판단","구분근거"],"calc":False,"weight":2,
   "quality_rule":"두 요소의 차이를 자료에서 판단하고, 그 판단 근거를 연결해 쓰게 한다."},
  {"id":"T2_DATA","points":2,"name":"자료해석→적용판단형","subpoints":[1,1],
   "verbs":["자료해석","적용판단"],"calc":False,"weight":6,
