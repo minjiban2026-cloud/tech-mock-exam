@@ -23,7 +23,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R15-20260901")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R15.1-20260901")
 
 def secret(name, default=""):
     try:
@@ -144,6 +144,10 @@ def _show_score_pipeline_diagnostic(pd):
     st.caption(
         f"{pd.get('domain','')} / {pd.get('pattern_id','')} / "
         f"필요 {pd.get('required_count','?')} · 최종원인={pd.get('final_reason','')}"
+    )
+    st.code(
+        f"builder={pd.get('builder_version','MISSING')}\n"
+        f"support_policy={pd.get('support_policy','MISSING')}"
     )
     rej=pd.get("reject_examples",{})
     labels=[

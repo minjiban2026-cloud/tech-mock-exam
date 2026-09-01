@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-CORE-EXAM-R15-20260901"
+BUILDER_API_VERSION = "SAMPLE6-CORE-EXAM-R15.1-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -683,6 +683,8 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "domain":domain,
         "pattern_id":pattern_id,
         "required_count":need,
+        "builder_version":BUILDER_API_VERSION,
+        "support_policy":"R15.1_SUPPORT_ONLY_FALLBACK_PERIPHERALITY_GE4_HARD_REJECT",
         "raw_rows":len(rows),
         "primary_source_pass":0,
         "anchor_ok_pass":0,
