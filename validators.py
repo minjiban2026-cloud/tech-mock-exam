@@ -301,10 +301,15 @@ def validate_grounded_question(q,source_context,allow_ai_grounded=False,require_
     elif mode!="source_locked":
         e.append("지문 전제 모드 오류")
     ev=q.get("evidence",[]); ans=q.get("answer",[])
+    derived=list(q.get("derived_answer_flags",[]) or [])
     if len(ev)!=len(ans):e.append("근거-정답 수 불일치")
-    for a,v in zip(ans,ev):
+    for i,(a,v) in enumerate(zip(ans,ev)):
         if not v or not contains_loose(source_context,v):e.append("근거가 원자료에 없음")
-        if len(norm(a))<=55 and not contains_loose(v,a):e.append(f"정답이 대응 근거에 없음:{a}")
+        is_derived=(i<len(derived) and bool(derived[i]))
+        # ㉠/㉡ 같은 Python 결정형 답은 원자료의 사실을 근거로 계산된 채점값이므로
+        # answer 문자열 자체가 evidence에 있을 필요는 없다.
+        if (not is_derived) and len(norm(a))<=55 and not contains_loose(v,a):
+            e.append(f"정답이 대응 근거에 없음:{a}")
     if not q.get("sources"):e.append("출처 없음")
     e.extend(static_quality_errors(q,require_ai_quality=require_ai_quality))
     if q.get("premise_mode")=="ai_grounded":

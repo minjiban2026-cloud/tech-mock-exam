@@ -38,15 +38,24 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
     answers=[a["answer"] for a in bundle]
     relation_meta=relation_meta or {}
     evidence=[a["evidence"] for a in bundle]
-    source_context=source_context or "\n".join(evidence)
     selection_mode=str(relation_meta.get("selection_mode",""))
-    if int(points)==2 and selection_mode in {
+    derived_answer_flags=[False]*len(answers)
+    if int(points)==2 and selection_mode=="python_exam_value_decision_first_t2":
+        answers=[str(relation_meta.get("correct_option","㉠")), answers[1]]
+        derived_answer_flags=[True,False]
+    source_context=source_context or "\n".join(evidence)
+    if int(points)==2 and selection_mode=="python_exam_value_decision_first_t2":
+        # R27: core/support + Python이 고른 sibling contrast만 제공한다.
+        _parts=[str(x) for x in evidence if str(x).strip()]
+        _cc=str(relation_meta.get("contrast_context","") or "").strip()
+        if _cc:
+            _parts.append("[비교용 비정답 원문] "+_cc)
+        source_context="\n".join(_parts)
+    elif int(points)==2 and selection_mode in {
         "python_exam_value_one_anchor_t2",
         "python_exam_value_one_anchor_distinct_t2",
         "python_exam_value_one_anchor_inference_t2",
     }:
-        # ONE-ANCHOR T2는 페이지 전체의 다른 항목을 섞지 않는다.
-        # 중심 anchor + 같은 anchor의 채점근거만 Writer에게 제공한다.
         source_context="\n".join(str(x) for x in evidence if str(x).strip())
     prompt=f"""
 너는 대한민국 중등 기술 임용시험 문항 초안 작성자다.
@@ -64,6 +73,9 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 자연적 문제단위 점수={relation_meta.get('natural_unit_score','')}
 2점 후보 정책={relation_meta.get('two_point_label_policy','')}
 2점 비교용 비정답 원문={relation_meta.get('contrast_context','')}
+비교용 비정답 개념={relation_meta.get('contrast_answer','')}
+숨은 중심개념(정답으로 직접 묻지 않음)={relation_meta.get('hidden_core_answer','')}
+정답 옵션={relation_meta.get('correct_option','')}
 선택 모드={selection_mode}
 임용 핵심도 프로필={json.dumps(relation_meta.get('core_exam_profile',[]),ensure_ascii=False)}
 
@@ -103,10 +115,11 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 - 부분점수 2점짜리 task만 하나의 고정정답을 중심으로 필요한 근거 설명·비교·적용을 함께 요구할 수 있다.
 - 자료에서 직접 뒷받침되지 않는 후속 물리현상으로 확장하지 않는다. 예: 고정정답이 '유체의 운동량'이면 원문에 없는 관벽의 힘·압력·충격까지 새로 묻지 않는다.
 - 2점은 짧고 명확하게 쓰되 두 채점요소가 가능하면 하나의 판단관계 안에 있어야 한다.
-- 2점은 ONE-ANCHOR-DISTINCT 구조를 사용한다. 첫 번째 고정답은 중심개념이고, 두 번째 고정답은 같은 DB 원문에서 Python이 선별한 별도의 조건·비교·절차·효과·적용 채점근거다.
-- 2점에서 두 번째 고정답을 별도의 개념명처럼 묻지 않는다. 또한 첫 명칭을 맞히게 한 동일 특징을 반대로 고치거나 그대로 반복 설명하게 하지 않는다. 두 번째 1점은 반드시 별도 조건·비교·절차·효과·적용 판단으로 채점되게 한다.
+- 2점 DECISION-FIRST에서는 첫 번째 고정답은 개념명이 아니라 Python이 지정한 ㉠/㉡ 선택지다. passage에 두 개의 설명·절차·적용을 ㉠/㉡으로 제시하고, 정답 옵션에만 hidden core의 관계를 사실에 맞게 재구성한다.
+- DECISION-FIRST의 오답 옵션은 contrast context에서 만들고, 두 옵션 모두 개념명을 직접 쓰지 않는다. 첫 task는 반드시 "㉠/㉡ 중 적절한 것을 고르시오" 같은 판단 1개만 요구한다.
+- 두 번째 고정답은 별도 조건·효과·절차·수정 한 가지다. 그 문장을 passage나 conditions에 그대로 주지 말고, 첫 선택을 해야만 무엇을 고쳐야/적용해야 하는지 알 수 있게 만든다.
 - 2점은 '서로 다른 개념 2개를 억지로 연결'하지 않는다.
-- 첫 요구가 명칭/용어 판단이라면 두 번째 요구는 반드시 같은 핵심개념을 전제로 한 판단·근거·오류수정·비교·적용 중 하나가 되게 한다.
+- 2점 DECISION-FIRST에서는 첫 요구를 명칭/용어 회상으로 만들지 않는다. 첫 판단 결과(㉠/㉡)를 두 번째 요구가 실제로 참조하도록 쓴다.
 - 2점의 두 요구가 모두 명칭/용어 회상이면 안 된다.
 - ONE-ANCHOR 2점에서는 passage에 독립 사실을 나열하지 말고, 중심개념을 판단하는 상황 1개와 두 번째 채점근거에 필요한 정보 1개만 쓴다.
 - ONE-ANCHOR 2점의 passage는 첫 고정정답의 정의를 거의 완성해서 주지 않는다. 가능하면 비교용 비정답 원문을 이용해 두 절차/상황의 차이를 판단하게 하고, 수험생이 최소 한 번 '어느 설명이 맞는가/어떤 조건이 필요한가'를 구별한 뒤 중심개념을 쓰게 한다.
@@ -131,6 +144,12 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 """
     r=client.responses.create(model=model,input=prompt,reasoning={"effort":"medium"})
     x=json.loads(_strip_json(r.output_text))
+    _sources=[{"source_name":a["source_name"],"page_no":a["page_no"]} for a in bundle]
+    if int(points)==2 and selection_mode=="python_exam_value_decision_first_t2":
+        _cs=str(relation_meta.get("contrast_source_name","") or "")
+        _cp=relation_meta.get("contrast_page_no")
+        if _cs and not any(str(z.get("source_name",""))==_cs and z.get("page_no")==_cp for z in _sources):
+            _sources.append({"source_name":_cs,"page_no":_cp})
     q={
       "domain":bundle[0]["domain"],
       "topic":" · ".join(a["topic"] for a in bundle),
@@ -142,10 +161,11 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
       "conditions":[str(v).strip() for v in x.get("conditions",[]) if str(v).strip()],
       "tasks":[str(v).strip() for v in x.get("tasks",[]) if str(v).strip()],
       "answer":answers,
-      "solution":[f"{LABELS[i]}: {a['answer']}" for i,a in enumerate(bundle)],
+      "solution":[f"{LABELS[i]}: {answers[i]}" for i in range(len(answers))],
       "evidence":evidence,
-      "sources":[{"source_name":a["source_name"],"page_no":a["page_no"]} for a in bundle],
-      "source_basis":"; ".join(f"{a['source_name']} p.{a['page_no']}" for a in bundle),
+      "derived_answer_flags":derived_answer_flags,
+      "sources":_sources,
+      "source_basis":"; ".join(f"{z['source_name']} p.{z['page_no']}" for z in _sources),
       "premise_mode":"ai_grounded",
       "master_concept":relation_meta.get("master_concept",""),
       "relation":relation_meta.get("relation",""),

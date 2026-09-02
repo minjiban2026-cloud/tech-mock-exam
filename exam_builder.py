@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "FINAL-T2-INFERENCE-R26-20260902"
+BUILDER_API_VERSION = "FINAL-T2-DECISION-R27-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -1346,6 +1346,69 @@ def _t2_near_copy_errors(cand, bundle):
                 return list(dict.fromkeys(errs))
     return list(dict.fromkeys(errs))
 
+def _two_point_refine_support(core_anchor, support_text):
+    """정의 전체가 아니라 둘째 1점에 쓸 추가 조건/효과/절차 한 조각을 고른다."""
+    t=_norm_anchor_text(support_text).strip()
+    if not t:
+        return t
+    parts=[x.strip(" -") for x in re.split(r"(?<=[.!?])\s+|\s+---\s+|\s+⇛\s+",t) if x.strip(" -")]
+    if len(parts)<=1:
+        parts=[t]
+    signal=re.compile(r"(경우|조건|때|따라|때문|촉진|증가|감소|향상|개선|방지|유용|활용|적용|"
+                      r"반복|제출|기록|평형|파손|급\s*상승|오차|제거|필요)")
+    ev=_norm_anchor_text(core_anchor.get("evidence",""))
+    et=set(_anchor_tokens(ev))
+    ranked=[]
+    for part in parts:
+        if len(part)<10:
+            continue
+        pt=set(_anchor_tokens(part))
+        overlap=len(pt&et)/max(1,len(pt)) if pt else 1.0
+        score=(2.5 if signal.search(part) else 0.0)+min(1.5,len(part)/90.0)-overlap*1.2
+        ranked.append((score,part))
+    return max(ranked,key=lambda x:x[0])[1] if ranked else t
+
+
+def _two_point_contrast_anchor(core_anchor, anchors):
+    """같은 출처·동일/인접 페이지에서 비교용 sibling anchor를 고른다."""
+    generic={"역할","원인","결과","특징","정의","과정","방법","종류","활용","원료","사람",
+             "겨울철","여름철","봄철","가을철","목적","효과","기준","조건","절차"}
+    src=str(core_anchor.get("source_name",""))
+    page=int(core_anchor.get("page_no",0) or 0)
+    core_ans=_topic_core(core_anchor.get("answer",""))
+    ca=_anchor_tokens(core_anchor.get("topic"),core_anchor.get("answer"),core_anchor.get("evidence"))
+    rows=[]
+    for b0 in anchors:
+        b=_two_point_core_anchor_clean(b0)
+        if str(b.get("source_name",""))!=src:
+            continue
+        bp=int(b.get("page_no",0) or 0)
+        gap=abs(bp-page)
+        if gap>1:
+            continue
+        ans=_norm_anchor_text(b.get("answer","")).strip()
+        if not ans or _topic_core(ans)==core_ans:
+            continue
+        if ans.replace(" ","") in {x.replace(" ","") for x in generic}:
+            continue
+        if not _two_point_core_target_ok(b):
+            continue
+        ev=_norm_anchor_text(b.get("evidence","")).strip()
+        if len(ev)<10:
+            continue
+        cb=_anchor_tokens(b.get("topic"),b.get("answer"),b.get("evidence"))
+        shared={x for x in ca&cb if len(x)>=2}
+        if gap==1 and not shared:
+            continue
+        score=(5.0 if gap==0 else 1.5)+min(3.0,len(shared)*0.8)
+        if re.search(r"(방법|기법|단자|처리|번식|오차|주형|평가|사고|방정식|법칙)",ans+" "+ev):
+            score+=1.0
+        rows.append((score,b))
+    if not rows:
+        return None
+    rows.sort(key=lambda x:x[0],reverse=True)
+    return rows[0][1]
+
 def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id):
     """
     T2 전용 selector.
@@ -1371,6 +1434,11 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
         if _topic_core(support.get("answer",""))==_topic_core(a.get("answer","")):
             continue
 
+        _refined=_two_point_refine_support(a,support.get("answer",""))
+        if _refined:
+            support["answer"]=_refined
+            support["evidence"]=_refined
+
         support_quality=_two_point_support_quality(a,support.get("answer",""),page_text)
         if not support_quality.get("ok"):
             pd.setdefault("two_point_support_distinct_reject",0)
@@ -1385,6 +1453,13 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
                 })
             continue
         support["support_quality"]=copy.deepcopy(support_quality)
+
+        contrast_anchor=_two_point_contrast_anchor(a,anchors)
+        if not contrast_anchor:
+            pd.setdefault("two_point_no_contrast_reject",0)
+            pd["two_point_no_contrast_reject"]+=1
+            continue
+        support["contrast_anchor"]=copy.deepcopy(contrast_anchor)
 
         try:
             conf=float(a.get("confidence") or 0)
@@ -1410,6 +1485,8 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             score+=1.0
         # R25: 둘째 1점이 첫 명칭 식별과 실제로 구별되는 정도를 selector 점수에 직접 반영.
         score += float((support.get("support_quality") or {}).get("score",0.0))*1.8
+        if support.get("contrast_anchor"):
+            score += 2.0
 
         ranked.append((score,[a,support]))
 
@@ -1480,9 +1557,9 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
     score,bundle=uniq[0]
     selected_rank=1
     core_anchor=bundle[0]
-    _ck=(str(core_anchor.get("source_name","")),int(core_anchor.get("page_no",0) or 0))
-    _cpage=raw_page_map.get(_ck) or page_map.get(_ck,"")
-    _contrast=_two_point_contrast_text(core_anchor,_cpage,bundle[1].get("answer","") if len(bundle)>1 else "")
+    _contrast_anchor=copy.deepcopy(bundle[1].get("contrast_anchor") or {})
+    _contrast=_norm_anchor_text(_contrast_anchor.get("evidence","")).strip()
+    _correct_option="㉠" if rng.random()<0.5 else "㉡"
 
     relation_meta={
         "master_concept":_norm_anchor_text(core_anchor.get("topic","")),
@@ -1492,8 +1569,14 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
         "scoring_plan":_scoring_plan({"id":pattern_id,"subpoints":[1,1]},bundle),
         "material_limits":_compact_material_limits(2),
         "natural_unit_score":None,
-        "two_point_label_policy":"ONE_ANCHOR-INFERENCE: 첫 1점은 비교/오류/상황 자료를 종합해 중심개념을 판별하고, 둘째 1점은 같은 개념의 별도 조건·효과·절차·적용을 판단. 정의 한 문장으로 명칭을 바로 찾게 하지 말 것.",
+        "two_point_label_policy":"DECISION-FIRST: 첫 1점은 ㉠/㉡ 중 원자료에 부합하는 설명·절차·적용을 선택하는 판단이다. 중심개념 명칭 자체를 첫 정답으로 묻지 않는다. 둘째 1점은 선택한 항목을 근거로 별도 조건·효과·절차·수정을 한 가지 수행한다.",
         "contrast_context":_contrast,
+        "contrast_topic":_norm_anchor_text(_contrast_anchor.get("topic","")).strip(),
+        "contrast_answer":_norm_anchor_text(_contrast_anchor.get("answer","")).strip(),
+        "contrast_source_name":str(_contrast_anchor.get("source_name","")),
+        "contrast_page_no":_contrast_anchor.get("page_no"),
+        "correct_option":_correct_option,
+        "hidden_core_answer":_norm_anchor_text(core_anchor.get("answer","")).strip(),
         "core_exam_profile":[{
             "topic":core_anchor.get("topic",""),
             "score":core_anchor.get("core_exam_score",0),
@@ -1501,16 +1584,15 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             "breakdown":core_anchor.get("core_exam_breakdown",{}),
         }],
         "quality_directive":(
-            "2점은 ONE-ANCHOR-INFERENCE 구조다. 서로 다른 두 개념을 정답으로 결합하지 말 것. "
-            "첫 정답의 정의를 한 문장으로 제시해 명칭만 찾게 하지 말고, Python이 제공한 comparison context가 있으면 "
-            "오답 사례·비교 조건으로 활용하여 최소 한 번 구별/판단을 거치게 할 것. comparison context의 개념명은 정답으로 묻지 말 것. "
-            "첫 요구는 중심개념을 자료에서 판단하게 한다. 두 번째 요구는 같은 개념에 대한 별도의 "
-            "조건·비교·절차·효과·적용 판단이어야 한다. 첫 명칭을 맞히는 데 사용한 동일 특징을 반대로 고치거나 "
-            "그대로 재진술해서 두 번째 1점을 만들지 말 것. 두 번째 고정답은 별도 개념명이 아니라 원문 채점근거다."
+            "2점은 DECISION-FIRST 구조다. 서로 다른 두 개념을 정답으로 묻지 말 것. "
+            "첫 1점은 Python이 지정한 correct_option(㉠ 또는 ㉡)을 선택하는 자료판단으로 만들고 중심개념 명칭은 묻지 않는다. "
+            "correct option에는 hidden core의 원문을 그대로 복사하지 말고 상황/절차로 재구성한다. incorrect option은 contrast context를 이용한다. "
+            "두 옵션 모두 개념명을 직접 쓰지 않는다. 둘째 1점은 첫 선택을 전제로 고정 support의 조건·효과·절차·수정 중 한 가지만 요구한다. "
+            "두 번째 support 문장을 자료에 그대로 제시하고 옮겨 쓰게 하지 않는다."
         ),
         "selector_reason":f"Python one-anchor exam-value score={score:.2f}",
         "relation_score":round(score,2),
-        "selection_mode":"python_exam_value_one_anchor_inference_t2",
+        "selection_mode":"python_exam_value_decision_first_t2",
         "source_policy":"subnote_only_for_answer_content",
         "score_pipeline_diagnostic":copy.deepcopy(pd),
         "score_diagnostic":{
@@ -1527,7 +1609,7 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
                 "SUPPORT":"otherwise",
                 "qualification":"past_exam >= 3 OR representative >= 4 OR repeatability >= 4",
             },
-            "note":"T2는 DB answer anchor 1개 + 동일 페이지의 독립적 source-grounded 채점근거 1개로 구성. 동일 특징 재진술 후보는 Writer 전에 제거.",
+            "note":"T2는 중심개념 명칭을 직접 답으로 묻지 않고 sibling contrast와 비교해 ㉠/㉡ 판단 + source-grounded 후속 1점으로 구성.",
         },
     }
     return bundle,relation_meta
@@ -2494,6 +2576,12 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                         ).strip()
 
                     ctx=bundle_context(db_path,bundle)
+                    # R27: DECISION-FIRST의 비교용 sibling도 Writer/Judge가 검증할 수 있는
+                    # source context에 포함한다. 같은 출처/인접 페이지에서 Python이 고른 원문만 사용한다.
+                    if pts==2 and relation_meta.get("selection_mode")=="python_exam_value_decision_first_t2":
+                        _cc=str(relation_meta.get("contrast_context","") or "").strip()
+                        if _cc:
+                            ctx=(ctx+"\n[비교용 비정답 원문]\n"+_cc).strip()
                     cand=None
 
                     if selector_active:
