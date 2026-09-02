@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-REASONING-CHAIN-R22-20260902"
+BUILDER_API_VERSION = "SAMPLE6-DIVERSITY-R23-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -1559,10 +1559,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 _reason_prof=_four_point_reasoning_chain_profile(chosen)
                 _pd["generic_only_chain_pairs"] += int(_reason_prof.get("generic_only_pairs",0))
                 _shortcut_penalty=_four_point_shortcut_penalty(chosen)
+                _reason_score=float(_reason_prof.get("score",0.0))
+                # R23: 정의합성 shortcut이 감지되면 그 정의문 때문에 생긴 exact-link 보너스를
+                # 실제 풀이 연결성으로 다시 보상하지 않는다.
+                if float(_shortcut_penalty) < 0:
+                    _reason_score=min(0.0,_reason_score)
                 graph_score += (
                     min(5.0,chain_score*0.22)
                     + min(4.0,natural_score)
-                    + float(_reason_prof.get("score",0.0))
+                    + _reason_score
                     + float(_shortcut_penalty)
                 )
             else:
@@ -1740,7 +1745,13 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             "support_penalty":round(-support0*1.75,3),
             "natural_unit_score":round(float(natural0),3),
             "reasoning_chain_profile":(
-                _four_point_reasoning_chain_profile(chosen0)
+                (lambda _rp,_sp: dict(_rp, effective_score=round(
+                    min(0.0,float(_rp.get("score",0.0))) if float(_sp)<0
+                    else float(_rp.get("score",0.0)),3
+                )))(
+                    _four_point_reasoning_chain_profile(chosen0),
+                    _four_point_shortcut_penalty(chosen0)
+                )
                 if len(chosen0)>=2 else {}
             ),
             "shortcut_penalty":round(float(_four_point_shortcut_penalty(chosen0)),3),
@@ -1966,6 +1977,79 @@ def _enrich_formula(q,pts):
     q["fingerprint"]=fingerprint(q)
     return q
 
+
+def _question_content_tokens(q):
+    vals=[]
+    vals.extend(str(x) for x in (q.get("answer",[]) or []))
+    vals.append(str(q.get("topic","")))
+    toks=set()
+    for v in vals:
+        for t in _anchor_tokens(v):
+            if len(t)>=3:
+                toks.add(t)
+    return toks
+
+
+def _content_family_key(q):
+    """
+    broad families_for보다 세밀한 시험지 내용군.
+    정답/주제의 핵심 토큰을 이용하여 같은 세부 내용의 반복을 잡는다.
+    """
+    domain=str(q.get("domain") or q.get("blueprint_domain") or "")
+    toks=sorted(_question_content_tokens(q))
+    return domain+"|"+"|".join(toks[:8])
+
+
+def _content_overlap_too_high(q, previous, same_section=True):
+    """
+    exact answer 중복 + 세부 concept token 중복을 차단한다.
+    대영역 자체의 재출제는 허용하되, 같은 세부 개념군 재탕은 막는다.
+    """
+    qa={_topic_core(x) for x in (q.get("answer",[]) or []) if _topic_core(x)}
+    qt=_question_content_tokens(q)
+    qdom=str(q.get("domain") or q.get("blueprint_domain") or "")
+    for p in previous or []:
+        pa={_topic_core(x) for x in (p.get("answer",[]) or []) if _topic_core(x)}
+        if qa & pa:
+            return True,"exact_answer"
+        pdom=str(p.get("domain") or p.get("blueprint_domain") or "")
+        if qdom and pdom and qdom!=pdom:
+            continue
+        pt=_question_content_tokens(p)
+        common=qt & pt
+        # 같은 영역에서 핵심 토큰 2개 이상 겹치면 같은 세부 내용군으로 본다.
+        if len(common)>=2:
+            return True,"concept_neighborhood"
+    return False,""
+
+
+def _source_neighborhood_key_from_bundle(bundle):
+    if not bundle:
+        return set()
+    out=set()
+    for a in bundle:
+        src=str(a.get("source_name",""))
+        try:
+            page=int(a.get("page_no",0) or 0)
+        except Exception:
+            page=0
+        if src:
+            out.add((src,page))
+    return out
+
+
+def _source_neighborhood_conflict(bundle, used_source_pages):
+    """
+    같은 서브노트의 같은/인접 페이지에서 정답 anchor를 계속 뽑는 것을 억제.
+    단, 후보 고갈을 막기 위해 selector 단계의 soft reject로 사용한다.
+    """
+    for src,page in _source_neighborhood_key_from_bundle(bundle):
+        for usrc,upage in used_source_pages:
+            if src==usrc and abs(page-upage)<=1:
+                return True
+    return False
+
+
 def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-luna",
                  ai_enabled=True,ai_quality_enabled=True,judge_model=None,seed=None,
                  previous_questions=None,shared_answers=None,tuning_mode=False):
@@ -1984,6 +2068,16 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
     used_topics=set()
     used_answers=set(shared_answers or [])
     used_patterns=[]
+    used_source_pages=set()
+    for _pq in prior:
+        for _src in (_pq.get("sources",[]) or []):
+            _sn=str(_src.get("source_name",""))
+            try:
+                _pn=int(_src.get("page_no",0) or 0)
+            except Exception:
+                _pn=0
+            if _sn:
+                used_source_pages.add((_sn,_pn))
     ai_calls=0; fallbacks=0; formula_used=0
     judge_calls=0; judge_rejects=0; selector_calls=0
     formula_cap=2
@@ -2145,6 +2239,17 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                  pattern=pat.get("id"))
                             break
 
+                    # 최종 A/B에서는 같은 서브노트의 같은/인접 페이지가 정답원으로 반복되지 않게 한다.
+                    # 6문항 튜닝은 버전 비교 가능성을 위해 이 제한을 적용하지 않는다.
+                    if (not tuning_mode) and _source_neighborhood_conflict(bundle,used_source_pages):
+                        diag(slot,"content_source_diversity",
+                             "같은 출처의 인접 페이지 내용 반복 방지",
+                             pattern=pat.get("id"),
+                             candidate_topics=[str(x.get("topic","")) for x in bundle])
+                        if bundle:
+                            local_rejected_topics.add(str(bundle[0].get("topic","")))
+                        continue
+
                     # AI 호출 전에 Python이 채점 논리와 기출형 골격을 확정한다.
                     if relation_meta:
                         relation_meta["exam_skeleton"]=_skeleton_for_pattern(pat.get("id",""))
@@ -2239,6 +2344,15 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                     for _a in bundle:
                                         local_rejected_topics.add(str(_a.get("topic","")))
                                 cand=None
+                            elif (not tuning_mode) and _content_overlap_too_high(cand,prior+qs)[0]:
+                                _dup,_why=_content_overlap_too_high(cand,prior+qs)
+                                diag(slot,"content_diversity",
+                                     "같은 세부 내용 반복 방지: "+str(_why),
+                                     pattern=pat.get("id"),
+                                     candidate_topics=[str(x.get("topic","")) for x in bundle])
+                                for _a in bundle:
+                                    local_rejected_topics.add(str(_a.get("topic","")))
+                                cand=None
                             elif tuning_mode:
                                 cand["ai_quality"]={
                                     "pass":None,
@@ -2274,6 +2388,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                     used_answers.update(q["answer"])
                     for a in bundle:
                         used_topics.add(a["topic"])
+                    used_source_pages.update(_source_neighborhood_key_from_bundle(bundle))
                     break
 
                 if q is not None:
@@ -2445,9 +2560,14 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
                     shared_answers=set(A.get("used_answers",[]))
                 )
                 bf=set().union(*(families_for(q) for q in B["questions"]))
-                if af & bf:
+                _ab_dup=[]
+                for _bq in B["questions"]:
+                    _dup,_why=_content_overlap_too_high(_bq,A["questions"])
+                    if _dup:
+                        _ab_dup.append((_bq.get("number"),_why,_bq.get("topic","")))
+                if _ab_dup:
                     last_error=RuntimeError(
-                        "A/B concept-family 중복 발견: "+", ".join(sorted(af&bf))
+                        "A/B 세부 내용 중복 발견: "+str(_ab_dup[:5])
                     )
                     collect_error(last_error,f"A-{a_try+1}/B-{b_try+1}")
                     continue
