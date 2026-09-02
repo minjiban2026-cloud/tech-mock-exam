@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-DIVERSITY-R23-20260902"
+BUILDER_API_VERSION = "SAMPLE6-FINAL-STABILITY-R24-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -788,14 +788,51 @@ def _four_point_reasoning_chain_profile(chosen):
 
 def _four_point_shortcut_penalty(chosen):
     """
-    세 anchor 중 하나의 근거가 나머지 두 정답을 '+' 등으로 그대로 합성 정의하면,
-    실제 추론 사슬보다 '정의 보고 명칭 맞히기'가 되기 쉬워 감점한다.
-    예: 허용대 : 충만대 + 전도대
+    4점 문항에서 '실제 풀이'가 아니라 정의의 포함/합성 관계만으로
+    여러 점수를 채우는 후보를 감점한다.
+
+    - 2-anchor: 상위범주/하위개념 또는 A의 정의에 B가 그대로 들어가는 경우
+      예) 허용대 ↔ 충만대
+    - 3-anchor: 하나의 정의가 나머지 둘을 '+' 등으로 그대로 합성하는 경우
+      예) 허용대 : 충만대 + 전도대
+
+    단순히 서로의 용어가 근거에 등장한다는 이유만으로는 감점하지 않는다.
+    정의·포함·구성 신호가 함께 있어야 한다.
     """
     b=list(chosen or [])
-    if len(b)<3:
+    if len(b)<2:
         return 0.0
+
+    def _definition_link(a, other):
+        raw=_norm_anchor_text(a.get("evidence",""))
+        ev=_topic_core(raw)
+        ot=_topic_core(other.get("answer","")) or _topic_core(other.get("topic",""))
+        if not ot or ot not in ev:
+            return False
+
+        # 정의/범주/합성 신호. '+'는 강한 정의합성 신호로 취급한다.
+        relation_signal=(
+            bool(re.search(r"\s\+\s",raw))
+            or bool(re.search(
+                r"(포함|구성|범주|종류|일종|나뉘|구분|묶|전체|하위|상위|"
+                r"채워진\s*허용대|비어\s*있는\s*허용대)",
+                raw
+            ))
+        )
+        # 단순한 'A : B' 정의 표기만으로는 감점하지 않는다.
+        # 예: '동소 변태 : 동소체의 변화'는 실제 과정 관계라 4점 문항으로 유효할 수 있다.
+        return relation_signal
+
     penalty=0.0
+
+    if len(b)==2:
+        # 양쪽 중 한쪽이라도 다른 anchor를 정의상 포함하는 구조면 4점 2+2의
+        # 독립 채점요소로 보기 어렵다. 강하게 감점한다.
+        if _definition_link(b[0],b[1]) or _definition_link(b[1],b[0]):
+            penalty -= 7.0
+        return penalty
+
+    # 3개 이상: 하나의 근거가 나머지 두 정답을 그대로 합성 정의하는 경우.
     for i,a in enumerate(b):
         ev=_topic_core(a.get("evidence",""))
         others=[
@@ -804,10 +841,9 @@ def _four_point_shortcut_penalty(chosen):
         ]
         if len(others)>=2 and all(x and x in ev for x in others[:2]):
             raw=_norm_anchor_text(a.get("evidence",""))
-            if "+" in raw or re.search(r"(합|묶|구성|포함)",raw):
+            if "+" in raw or re.search(r"(합|묶|구성|포함|범주|전체)",raw):
                 penalty -= 5.0
     return penalty
-
 
 def _direct_chain_order(bundle):
     """
@@ -2040,12 +2076,13 @@ def _source_neighborhood_key_from_bundle(bundle):
 
 def _source_neighborhood_conflict(bundle, used_source_pages):
     """
-    같은 서브노트의 같은/인접 페이지에서 정답 anchor를 계속 뽑는 것을 억제.
-    단, 후보 고갈을 막기 위해 selector 단계의 soft reject로 사용한다.
+    최종 A/B에서 같은 서브노트의 '같은 페이지'를 정답원으로 재사용하지 않는다.
+    인접 페이지까지 무조건 차단하면 23문항 편성에서 후보 고갈이 생길 수 있으므로,
+    인접 페이지의 내용 중복은 exact answer / concept-neighborhood 검사에 맡긴다.
     """
     for src,page in _source_neighborhood_key_from_bundle(bundle):
         for usrc,upage in used_source_pages:
-            if src==usrc and abs(page-upage)<=1:
+            if src==usrc and page==upage:
                 return True
     return False
 
@@ -2239,11 +2276,11 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                  pattern=pat.get("id"))
                             break
 
-                    # 최종 A/B에서는 같은 서브노트의 같은/인접 페이지가 정답원으로 반복되지 않게 한다.
+                    # 최종 A/B에서는 같은 서브노트의 같은 페이지가 정답원으로 반복되지 않게 한다.
                     # 6문항 튜닝은 버전 비교 가능성을 위해 이 제한을 적용하지 않는다.
                     if (not tuning_mode) and _source_neighborhood_conflict(bundle,used_source_pages):
                         diag(slot,"content_source_diversity",
-                             "같은 출처의 인접 페이지 내용 반복 방지",
+                             "같은 출처의 동일 페이지 내용 반복 방지",
                              pattern=pat.get("id"),
                              candidate_topics=[str(x.get("topic","")) for x in bundle])
                         if bundle:
