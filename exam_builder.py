@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-RELATION-INTEGRITY-R17-20260901"
+BUILDER_API_VERSION = "SAMPLE6-TWOPOINT-SINGLECORE-R18-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -749,12 +749,94 @@ def _relation_directive(pattern_id, chosen):
             "자료는 답 풀이에 반드시 사용되게 할 것. 관계 사슬: " + chain
         )
     return (
-        "2점도 두 개의 독립 암기문항으로 만들지 말 것. "
-        "자료 해석 또는 첫 판단이 두 번째 판단의 근거가 되게 구성하고, "
+        "2점 문항은 서로 다른 두 개념을 억지로 연결하지 말 것. "
+        "가능하면 하나의 중심개념을 정답 대상으로 두고, 다른 1점은 같은 개념의 근거·오류수정·비교·적용으로 구성할 것. "
+        "자료 해석 또는 첫 판단이 두 번째 판단의 근거가 되게 하고, "
         "정답 정의를 거의 그대로 제시한 뒤 명칭만 묻지 말 것. 관계: " + chain
     )
 
 
+
+
+def _two_point_single_core_profile(chosen):
+    """
+    2점 문항은 '서로 다른 두 개념'보다
+    '하나의 중심개념 + 같은 개념의 근거/오류수정/적용'을 우선한다.
+    """
+    if len(chosen) != 2:
+        return {"single_core": False, "score": 0.0, "reason": "not_two"}
+
+    a, b = chosen
+    ta = _topic_core(a.get("topic", ""))
+    tb = _topic_core(b.get("topic", ""))
+    aa = _topic_core(a.get("answer", ""))
+    ab = _topic_core(b.get("answer", ""))
+    ea = _norm_anchor_text(a.get("evidence", ""))
+    eb = _norm_anchor_text(b.get("evidence", ""))
+
+    signals = 0
+    if ta and (ta in tb or ta in ab or ta in eb):
+        signals += 1
+    if tb and (tb in ta or tb in aa or tb in ea):
+        signals += 1
+    if aa and aa != ta and (aa in tb or aa in eb):
+        signals += 1
+    if ab and ab != tb and (ab in ta or ab in ea):
+        signals += 1
+
+    _, shared = _cross_reference_strength(a, b)
+    shared_n = len(shared)
+
+    simple_a = _answer_is_simple_label(a.get("answer", ""))
+    simple_b = _answer_is_simple_label(b.get("answer", ""))
+    mixed_role = (simple_a != simple_b)
+
+    score = min(
+        3.0,
+        signals * 1.1
+        + min(1.2, shared_n * 0.4)
+        + (0.5 if mixed_role else 0.0),
+    )
+    return {
+        "single_core": bool(signals >= 1 or shared_n >= 2),
+        "score": round(score, 3),
+        "signals": int(signals),
+        "shared_terms": list(shared)[:8],
+        "mixed_role": bool(mixed_role),
+    }
+
+
+def _two_point_unrelated_dual_target(chosen):
+    """
+    박테리아 + 조림 CO2 고정 한계처럼
+    서로 다른 syllabus target을 한 문제에 억지로 붙인 경우만 차단한다.
+    """
+    if len(chosen) != 2:
+        return False, {}
+
+    prof = _two_point_single_core_profile(chosen)
+    natural = float(_natural_unit_score(chosen))
+    pair = float(_pair_relation_score(chosen[0], chosen[1]))
+    cross, shared = _cross_reference_strength(chosen[0], chosen[1])
+
+    a_ans = _topic_core(chosen[0].get("answer", ""))
+    b_ans = _topic_core(chosen[1].get("answer", ""))
+
+    reject = (
+        not prof["single_core"]
+        and natural < 2.2
+        and int(cross) < 1
+        and len(shared) < 2
+        and a_ans != b_ans
+    )
+
+    return reject, {
+        "single_core_score": prof["score"],
+        "natural_unit": round(natural, 3),
+        "pair_relation": round(pair, 3),
+        "cross_reference": int(cross),
+        "shared_terms": list(shared)[:8],
+    }
 
 def _two_point_relation_integrity(chosen):
     if len(chosen)!=2:
@@ -825,6 +907,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "support_only_fallback":0,
         "two_point_label_reject":0,
         "two_point_relation_reject":0,
+        "two_point_dual_target_reject":0,
         "anchor_fragment_reject":0,
         "anchor_contradiction_reject":0,
         "anchor_normalization_policy":"strip_bullets_then_validate",
@@ -834,6 +917,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             "support_only":[],
             "two_point_label":[],
             "two_point_relation":[],
+            "two_point_dual_target":[],
             "anchor_fragment":[],
             "anchor_contradiction":[],
             "bundle_fragment":[],
@@ -998,6 +1082,17 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                             "score":round(float(natural_score),2),
                         })
                     continue
+                _dual_reject,_dual_diag=_two_point_unrelated_dual_target(chosen)
+                if _dual_reject:
+                    _pd["two_point_dual_target_reject"]+=1
+                    if len(_pd["reject_examples"]["two_point_dual_target"])<5:
+                        _pd["reject_examples"]["two_point_dual_target"].append({
+                            "topics":[str(x.get("topic","")) for x in chosen],
+                            "answers":[str(x.get("answer","")) for x in chosen],
+                            **_dual_diag,
+                        })
+                    continue
+
                 _rel_ok,_rel_diag=_two_point_relation_integrity(chosen)
                 if not _rel_ok:
                     _pd["two_point_relation_reject"]+=1
@@ -1089,6 +1184,8 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 score_total += natural*1.65
             else:
                 score_total += max(-1.5,min(2.0,natural*0.55))
+                _single_prof=_two_point_single_core_profile(chosen)
+                score_total += min(2.5,float(_single_prof.get("score",0.0))*0.85)
                 label_adjust,label_reject=_two_point_bundle_penalty(chosen)
                 if label_reject:
                     _pd["two_point_label_reject"]+=1
@@ -1190,7 +1287,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         ),
         "natural_unit_score":round(_natural_unit_score(chosen),2),
         "two_point_label_policy":(
-            "두 채점요소 모두 단순 명칭회상 금지; 하나의 핵심개념 판단 + 같은 개념의 근거/오류수정/비교/적용 우선"
+            "2점은 하나의 중심개념을 우선 선택하고 1점+1점은 개념 판단 + 같은 개념의 근거/오류수정/비교/적용으로 구성; 서로 다른 두 개념 억지 연결 금지"
             if not str(pattern_id).upper().startswith("T4") else ""
         ),
         "core_exam_profile":[
