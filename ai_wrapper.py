@@ -40,7 +40,11 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
     evidence=[a["evidence"] for a in bundle]
     source_context=source_context or "\n".join(evidence)
     selection_mode=str(relation_meta.get("selection_mode",""))
-    if int(points)==2 and selection_mode=="python_exam_value_one_anchor_t2":
+    if int(points)==2 and selection_mode in {
+        "python_exam_value_one_anchor_t2",
+        "python_exam_value_one_anchor_distinct_t2",
+        "python_exam_value_one_anchor_inference_t2",
+    }:
         # ONE-ANCHOR T2는 페이지 전체의 다른 항목을 섞지 않는다.
         # 중심 anchor + 같은 anchor의 채점근거만 Writer에게 제공한다.
         source_context="\n".join(str(x) for x in evidence if str(x).strip())
@@ -58,7 +62,9 @@ master concept={relation_meta.get('master_concept','')}
 Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),ensure_ascii=False)}
 자료 길이 제한={json.dumps(relation_meta.get('material_limits',{}),ensure_ascii=False)}
 자연적 문제단위 점수={relation_meta.get('natural_unit_score','')}
-2점 후보 정책={relation_meta.get('two_point_label_policy','')}\n선택 모드={selection_mode}
+2점 후보 정책={relation_meta.get('two_point_label_policy','')}
+2점 비교용 비정답 원문={relation_meta.get('contrast_context','')}
+선택 모드={selection_mode}
 임용 핵심도 프로필={json.dumps(relation_meta.get('core_exam_profile',[]),ensure_ascii=False)}
 
 고정정답:
@@ -103,7 +109,9 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 - 첫 요구가 명칭/용어 판단이라면 두 번째 요구는 반드시 같은 핵심개념을 전제로 한 판단·근거·오류수정·비교·적용 중 하나가 되게 한다.
 - 2점의 두 요구가 모두 명칭/용어 회상이면 안 된다.
 - ONE-ANCHOR 2점에서는 passage에 독립 사실을 나열하지 말고, 중심개념을 판단하는 상황 1개와 두 번째 채점근거에 필요한 정보 1개만 쓴다.
-- ONE-ANCHOR 2점의 passage에는 첫 고정정답을 다른 유사개념과 구별할 수 있는 핵심 특징/조건을 최소 1개 포함한다. 단, 정답명이나 원문 정의 전체를 그대로 노출하지 않는다.
+- ONE-ANCHOR 2점의 passage는 첫 고정정답의 정의를 거의 완성해서 주지 않는다. 가능하면 비교용 비정답 원문을 이용해 두 절차/상황의 차이를 판단하게 하고, 수험생이 최소 한 번 '어느 설명이 맞는가/어떤 조건이 필요한가'를 구별한 뒤 중심개념을 쓰게 한다.
+- 비교용 비정답 원문은 오답·대조 자료일 뿐이며 그 개념명 자체를 정답으로 요구하지 않는다.
+- 고정 근거의 긴 문구를 passage/conditions에 그대로 복사하지 않는다. 핵심 관계를 분산·재구성하되 새로운 기술 사실은 추가하지 않는다.
 - 두 번째 task는 첫 판단을 전제로 같은 anchor의 근거/특징/오류수정/적용을 묻게 한다. 별도 개념을 새로 묻지 않는다.
 - ONE-ANCHOR 2점에서는 A/B/C 사례 나열, ①②③ 열거, 여러 종류·장점·활용처의 병렬 나열을 금지한다.
 - 2점 자료는 필요한 정보만 짧게 제시한다. 난도를 올리기 위해 독립 사실·사례·활용처를 여러 개 나열하지 않는다.
@@ -121,7 +129,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
  "thinking_types":["..."]
 }}
 """
-    r=client.responses.create(model=model,input=prompt,reasoning={"effort":("medium" if points==4 else "low")})
+    r=client.responses.create(model=model,input=prompt,reasoning={"effort":"medium"})
     x=json.loads(_strip_json(r.output_text))
     q={
       "domain":bundle[0]["domain"],

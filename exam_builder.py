@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "FINAL-T2-DISTINCT-R25-20260902"
+BUILDER_API_VERSION = "FINAL-T2-INFERENCE-R26-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -1171,7 +1171,8 @@ def _two_point_core_target_ok(anchor):
     generic={
         "원료","용도","사용목적","주요 구성","과거","현재","가로축","세로축",
         "장점","단점","종류","특징","절차","정의","분류","기준","역할","사람",
-        "유지","성장","증식","수확","과정","방법","효과","목적"
+        "유지","성장","증식","수확","과정","방법","효과","목적","원인","이유","결과",
+        "조치","대책","겨울철","여름철","봄철","가을철","전제","조건","현상"
     }
     if ans.replace(" ","") in {x.replace(" ","") for x in generic}:
         return False
@@ -1268,6 +1269,82 @@ def _two_point_candidate_key(bundle):
         str(a.get("page_no","")),
         _topic_core(a.get("answer","")),
     ])
+
+def _two_point_contrast_text(anchor, page_text, support_text=""):
+    """
+    같은 페이지의 '다른 개념/다른 절차' 한 조각을 오답·비교 자료로만 제공한다.
+    정답 anchor로 쓰지 않으며, Writer가 첫 명칭을 정의 한 문장으로 노출하지 않게 하는
+    판별 거리(discrimination distance)를 확보하기 위한 context다.
+    """
+    core=_topic_core(anchor.get("answer",""))
+    support_comp=re.sub(r"\s+","",_norm_anchor_text(support_text))
+    lines=[re.sub(r"[ \t]+"," ",str(x)).strip() for x in str(page_text or "").splitlines() if str(x).strip()]
+    candidates=[]
+    for line in lines:
+        clean=re.sub(r"^\s*[-•·○▶□■]+\s*","",line).strip()
+        comp=re.sub(r"\s+","",clean)
+        if not clean or len(clean)<12 or len(clean)>180:
+            continue
+        if core and core in _topic_core(clean):
+            continue
+        if support_comp and (support_comp[:24] in comp or comp[:24] in support_comp):
+            continue
+        # sibling 정의/절차/상황처럼 비교에 실제 쓸 수 있는 행을 우선
+        structured=bool(re.search(r"[:：]|^\d+\)|^\d+\.|접붙|꺾꽂|브레인|SCAMPER|특징|상황|절차|원리",clean,re.I))
+        if not structured:
+            continue
+        # 문서 표지/목차 제외
+        if re.search(r"(서브노트|교과서|^\d+$|^B\d)",clean):
+            continue
+        score=0.0
+        if ":" in clean or "：" in clean: score+=2.0
+        if re.search(r"(방법|기법|특징|상황|절차|원리|경우|이용|적용|발생|변화)",clean): score+=1.2
+        if 24<=len(clean)<=120: score+=0.8
+        candidates.append((score,clean))
+    candidates.sort(key=lambda x:x[0],reverse=True)
+    return candidates[0][1] if candidates else ""
+
+
+def _t2_near_copy_errors(cand, bundle):
+    """
+    AI Judge 전에 2점 지문이 고정 원문/채점근거를 거의 복사했는지 검사한다.
+    정확한 정답명 노출 + 긴 원문 구절 복사를 deterministic하게 차단한다.
+    """
+    if int(cand.get("points",0) or 0)!=2:
+        return []
+    material=" ".join([
+        str(cand.get("intro","") or ""), str(cand.get("passage","") or ""),
+        " ".join(map(str,cand.get("conditions",[]) or [])),
+        " ".join(map(str,cand.get("tasks",[]) or [])),
+    ])
+    mc=re.sub(r"[^가-힣A-Za-z0-9]","",material).lower()
+    errs=[]
+    if not mc:
+        return ["2점 자료 없음"]
+    # 정답명 직접 노출
+    for i,a in enumerate(bundle or []):
+        if i>0 and a.get("derived_support"):
+            continue
+        ans=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(a.get("answer",""))).lower()
+        if len(ans)>=3 and ans in mc:
+            errs.append("중심 정답명 직접 노출")
+            break
+    # 원문/채점근거의 14자 이상 연속 구절 복사
+    for a in bundle or []:
+        for raw in (a.get("evidence",""), a.get("answer","")):
+            rc=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(raw)).lower()
+            if len(rc)<14:
+                continue
+            n=min(22,max(14,len(rc)//3))
+            hit=False
+            for j in range(0,max(1,len(rc)-n+1),max(1,n//3)):
+                frag=rc[j:j+n]
+                if len(frag)>=14 and frag in mc:
+                    hit=True; break
+            if hit:
+                errs.append("원문 채점근거 장구절 직접 복사")
+                return list(dict.fromkeys(errs))
+    return list(dict.fromkeys(errs))
 
 def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id):
     """
@@ -1403,6 +1480,9 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
     score,bundle=uniq[0]
     selected_rank=1
     core_anchor=bundle[0]
+    _ck=(str(core_anchor.get("source_name","")),int(core_anchor.get("page_no",0) or 0))
+    _cpage=raw_page_map.get(_ck) or page_map.get(_ck,"")
+    _contrast=_two_point_contrast_text(core_anchor,_cpage,bundle[1].get("answer","") if len(bundle)>1 else "")
 
     relation_meta={
         "master_concept":_norm_anchor_text(core_anchor.get("topic","")),
@@ -1412,7 +1492,8 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
         "scoring_plan":_scoring_plan({"id":pattern_id,"subpoints":[1,1]},bundle),
         "material_limits":_compact_material_limits(2),
         "natural_unit_score":None,
-        "two_point_label_policy":"ONE_ANCHOR-DISTINCT: 첫 1점은 중심개념 판단, 둘째 1점은 같은 개념의 별도 조건·비교·절차·효과·적용 판단. 첫 명칭을 맞힌 동일 특징을 그대로 재진술하지 말 것.",
+        "two_point_label_policy":"ONE_ANCHOR-INFERENCE: 첫 1점은 비교/오류/상황 자료를 종합해 중심개념을 판별하고, 둘째 1점은 같은 개념의 별도 조건·효과·절차·적용을 판단. 정의 한 문장으로 명칭을 바로 찾게 하지 말 것.",
+        "contrast_context":_contrast,
         "core_exam_profile":[{
             "topic":core_anchor.get("topic",""),
             "score":core_anchor.get("core_exam_score",0),
@@ -1420,14 +1501,16 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             "breakdown":core_anchor.get("core_exam_breakdown",{}),
         }],
         "quality_directive":(
-            "2점은 ONE-ANCHOR-DISTINCT 구조다. 서로 다른 두 개념을 결합하지 말 것. "
+            "2점은 ONE-ANCHOR-INFERENCE 구조다. 서로 다른 두 개념을 정답으로 결합하지 말 것. "
+            "첫 정답의 정의를 한 문장으로 제시해 명칭만 찾게 하지 말고, Python이 제공한 comparison context가 있으면 "
+            "오답 사례·비교 조건으로 활용하여 최소 한 번 구별/판단을 거치게 할 것. comparison context의 개념명은 정답으로 묻지 말 것. "
             "첫 요구는 중심개념을 자료에서 판단하게 한다. 두 번째 요구는 같은 개념에 대한 별도의 "
             "조건·비교·절차·효과·적용 판단이어야 한다. 첫 명칭을 맞히는 데 사용한 동일 특징을 반대로 고치거나 "
             "그대로 재진술해서 두 번째 1점을 만들지 말 것. 두 번째 고정답은 별도 개념명이 아니라 원문 채점근거다."
         ),
         "selector_reason":f"Python one-anchor exam-value score={score:.2f}",
         "relation_score":round(score,2),
-        "selection_mode":"python_exam_value_one_anchor_distinct_t2",
+        "selection_mode":"python_exam_value_one_anchor_inference_t2",
         "source_policy":"subnote_only_for_answer_content",
         "score_pipeline_diagnostic":copy.deepcopy(pd),
         "score_diagnostic":{
@@ -2436,6 +2519,17 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                 if tuning_mode:
                                     for _a in bundle:
                                         local_rejected_topics.add(str(_a.get("topic","")))
+                                cand=None
+
+                        if cand is not None and pts==2:
+                            _copy_errs=_t2_near_copy_errors(cand,bundle)
+                            if _copy_errs:
+                                diag(slot,"two_point_prejudge_leakage",
+                                     " / ".join(_copy_errs),
+                                     pattern=pat.get("id"),
+                                     candidate_topics=[str(x.get("topic","")) for x in bundle])
+                                if bundle:
+                                    local_rejected_topics.add(str(bundle[0].get("topic","")))
                                 cand=None
 
                         if tuning_mode and quality_active:
