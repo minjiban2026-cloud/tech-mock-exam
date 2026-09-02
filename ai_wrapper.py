@@ -104,6 +104,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 {style_profile}
 반드시 지킬 규칙:
 - passage/conditions/tasks만 작성한다. 정답은 수정하지 않는다.
+- 2점 reasoning-matrix에서는 case_correct와 case_wrong도 반드시 각각 작성한다. case_correct는 base_fact+linked_fact의 정답 사례, case_wrong은 base_fact+distractor_fact의 오답 사례다. 두 필드의 역할을 서로 바꾸지 않는다.
 - 기술적 사실, 수치, 인과관계는 위 출처 문맥이 직접 뒷받침하는 것만 사용한다.
 - 출처에 없는 실제 사례, 장치 조건, 수치, 효과를 꾸며내지 않는다.
 - 중립적 수업 상황 프레임("교사가 자료를 제시했다", "학생이 검토했다")은 허용하되 기술 사실을 추가하지 않는다.
@@ -151,6 +152,8 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 {{
  "intro":"...",
  "passage":"...",
+ "case_correct":"...",
+ "case_wrong":"...",
  "conditions":["..."],
  "tasks":["..."],
  "thinking_types":["..."]
@@ -168,8 +171,22 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
             "㉠과 ㉡ 중 두 사실의 관계가 서로 일관된 것을 고르시오.",
             "첫 판단을 근거로, 선택하지 않은 사례에서 잘못 연결된 내용을 바르게 수정하시오.",
         ]
+        # R31: AI가 ㉠/㉡의 역할을 뒤집거나 둘을 섞지 못하도록 사례 배치도 Python이 소유한다.
+        _case_correct=str(x.get("case_correct","") or "").strip()
+        _case_wrong=str(x.get("case_wrong","") or "").strip()
+        _co=str(relation_meta.get("correct_option","㉠") or "㉠")
+        if _case_correct and _case_wrong:
+            if _co=="㉡":
+                _writer_passage=f"㉠ {_case_wrong}\n㉡ {_case_correct}"
+            else:
+                _writer_passage=f"㉠ {_case_correct}\n㉡ {_case_wrong}"
+        else:
+            # 구형/불완전 Writer 응답은 그대로 살리지 않고 downstream prejudge에서 실패시키기 위해
+            # passage를 유지하되 구조 검사가 ㉠/㉡ 및 semantic contract를 확인한다.
+            _writer_passage=str(x.get("passage","")).strip()
     else:
         _writer_tasks=[str(v).strip() for v in x.get("tasks",[]) if str(v).strip()]
+        _writer_passage=str(x.get("passage","")).strip()
 
     _sources=[{"source_name":a["source_name"],"page_no":a["page_no"]} for a in bundle]
     if int(points)==2 and selection_mode in {"python_exam_value_decision_first_t2","python_exam_value_t2_reasoning_matrix"}:
@@ -184,7 +201,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
       "question_type":question_type,"material_form":material_form,
       "verifier":"source",
       "intro":x.get("intro","다음 자료를 읽고 <작성 방법>에 따라 쓰시오."),
-      "passage":str(x.get("passage","")).strip(),
+      "passage":_writer_passage,
       "conditions":[str(v).strip() for v in x.get("conditions",[]) if str(v).strip()],
       "tasks":_writer_tasks,
       "answer":answers,

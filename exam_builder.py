@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "GLOBAL-T2-CONTRACT-R30-20260902"
+BUILDER_API_VERSION = "GLOBAL-T2-SEMANTIC-CONTRACT-R31-20260902"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -1457,9 +1457,16 @@ def _two_point_contrast_anchor(core_anchor, anchors):
         fallback=[]
         for b0 in anchors:
             b=_two_point_core_anchor_clean(b0)
-            if not _two_point_core_target_ok(b):
+            # R31: contrast/distractor는 채점 정답이 아니다.
+            # 따라서 CORE/NORMAL 정답용 gate를 그대로 적용하면 얇은 영역에서
+            # 앞 문항 사용 후 비교자료가 고갈된다. 출처·완결성·동일항목 중복만 검사하고
+            # SUPPORT도 비교자료로 허용한다(주된 정답으로 승격하지 않음).
+            _b_ans=_norm_anchor_text(b.get("answer","")).strip()
+            _b_ev=_norm_anchor_text(b.get("evidence","")).strip()
+            if (not _b_ans or not _b_ev or _heading_like(_b_ans)
+                    or _anchor_fragment_reason(b) or _anchor_internal_contradiction_reason(b)):
                 continue
-            if _topic_core(b.get("answer",""))==core_ans or str(b.get("source_name",""))!=src:
+            if _topic_core(_b_ans)==core_ans or str(b.get("source_name",""))!=src:
                 continue
             try:
                 gap=abs(int(b.get("page_no",0) or 0)-page)
@@ -1537,6 +1544,12 @@ def _t2_reasoning_spec(core_anchor, support_anchor, contrast_anchor, rng):
         "wrong_option":wrong,
         "first_scoring_action":"두 익명 사례 중 base_fact와 linked_fact가 함께 성립하는 사례 선택",
         "second_scoring_action":"오답 사례에 섞인 distractor_fact를 linked_fact의 내용으로 수정",
+        "correction_contract":{
+            "wrong_option":wrong,
+            "wrong_fact":distractor,
+            "expected_replacement_fact":linked,
+            "replacement_source":"same_core_local_source_fact",
+        },
         "link_overlap":round(link_overlap,3),
         "link_text_similarity":round(link_text_similarity,3),
         "distractor_overlap":round(distract_overlap,3),
@@ -1567,11 +1580,39 @@ def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
         errs.append("2점 작성요구 2개 아님")
         return errs
 
+    # R31 semantic/scoring contract: 수정 대상과 채점답이 1:1로 대응해야 한다.
+    cc=spec.get("correction_contract") or {}
+    expected=_norm_anchor_text(cc.get("expected_replacement_fact","")).strip()
+    wrong_fact=_norm_anchor_text(cc.get("wrong_fact","")).strip()
+    wrong_option=str(cc.get("wrong_option","")).strip()
+    if not expected or not wrong_fact or wrong_option not in {"㉠","㉡"}:
+        errs.append("2점 오류수정 semantic contract 누락")
+    else:
+        answers=[_norm_anchor_text(x).strip() for x in (cand.get("answer",[]) or [])]
+        if len(answers)<2 or _topic_core(answers[1])!=_topic_core(expected):
+            errs.append("2점 수정대상-채점답 불일치")
+
     # 첫 요구는 선택/판단, 둘째는 첫 판단을 참조한 수정/적용이어야 한다.
     if not re.search(r"(고르|선택|판단|적절|타당)",tasks[0]):
         errs.append("2점 첫 요구가 자료판단이 아님")
     if not re.search(r"(선택|판단|오류|잘못|수정|바르게|고쳐|근거|적용)",tasks[1]):
         errs.append("2점 둘째 요구가 첫 판단의 후속 사고가 아님")
+
+    # R31: 다른 사례에 수정 정답이 거의 그대로 제시되면 둘째 1점이 복사 문제가 된다.
+    # 의미 보존 재표현은 AI Judge가 보되, Python은 우선 높은 어휘 중복을 deterministic하게 차단한다.
+    def _case_text(label):
+        m=re.search(re.escape(label)+r"(.*?)(?=㉠|㉡|$)", passage+" "+conditions, re.S)
+        return (m.group(1) if m else "").strip()
+    def _lex_sim(a,b):
+        aa=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(a)).lower()
+        bb=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(b)).lower()
+        if not aa or not bb: return 0.0
+        return SequenceMatcher(None,aa,bb).ratio()
+    correct_option=str(spec.get("correct_option","")).strip()
+    if expected and correct_option in {"㉠","㉡"}:
+        correct_case=_case_text(correct_option)
+        if correct_case and _lex_sim(correct_case,expected)>=0.64:
+            errs.append("2점 수정정답이 다른 사례에 직접 제시")
 
     # 숨은 중심개념/비교개념 명칭을 자료에 직접 쓰지 않는다.
     for key in ("hidden_core_answer","hidden_contrast_answer"):
@@ -1904,7 +1945,7 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
         "exam_skeleton":"익명 사례 ㉠/㉡ 비교 → 일관된 사례 선택 → 다른 사례의 혼합 오류 수정",
         "scoring_plan":[
             {"points":1,"action":"㉠/㉡ 중 내부적으로 일관된 사례 판단","answer":_correct_option},
-            {"points":1,"action":"오답 사례의 섞인 사실 수정","answer":bundle[1].get("answer","")},
+            {"points":1,"action":"오답 사례의 섞인 사실 수정","answer":_norm_anchor_text((_reasoning_spec.get("correction_contract") or {}).get("expected_replacement_fact", bundle[1].get("answer",""))).strip()},
         ],
         "material_limits":_compact_material_limits(2),
         "natural_unit_score":None,
