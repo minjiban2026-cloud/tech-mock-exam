@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-TASK-SCOPE-R21-20260902"
+BUILDER_API_VERSION = "SAMPLE6-REASONING-CHAIN-R22-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -733,6 +733,82 @@ def _scoring_plan(pattern, chosen):
         })
     return rows
 
+
+def _exact_anchor_reference(a,b):
+    """
+    generic shared words가 아니라 anchor 개념 자체가 상대 근거에 실제 등장하는지 본다.
+    반환: 0/1/2 (a->b, b->a 각각 1점)
+    """
+    ae=_topic_core(a.get("evidence",""))
+    be=_topic_core(b.get("evidence",""))
+    akeys={
+        _topic_core(a.get("topic","")),
+        _topic_core(a.get("answer","")),
+    }
+    bkeys={
+        _topic_core(b.get("topic","")),
+        _topic_core(b.get("answer","")),
+    }
+    akeys={x for x in akeys if len(x)>=2}
+    bkeys={x for x in bkeys if len(x)>=2}
+    score=0
+    if any(x and x in be for x in akeys):
+        score+=1
+    if any(x and x in ae for x in bkeys):
+        score+=1
+    return score
+
+
+def _four_point_reasoning_chain_profile(chosen):
+    """
+    4점 후보의 '실제 풀이 연결성' 진단.
+    단순히 같은 페이지/같은 분야의 공통어만 공유하는 경우를 낮춘다.
+    """
+    b=list(chosen or [])
+    if len(b)<2:
+        return {"exact_links":0,"generic_only_pairs":0,"score":0.0}
+
+    exact_links=0
+    generic_only=0
+    for i in range(len(b)-1):
+        ex=_exact_anchor_reference(b[i],b[i+1])
+        exact_links += ex
+        if ex==0:
+            generic_only += 1
+
+    # exact anchor 참조는 실제 개념 연결의 강한 신호.
+    # generic-only 인접쌍은 '유체/방정식/흐름' 같은 공통어 때문에 묶인 경우가 많아 감점.
+    score=exact_links*1.5 - generic_only*4.0
+    return {
+        "exact_links":int(exact_links),
+        "generic_only_pairs":int(generic_only),
+        "score":float(score),
+    }
+
+
+def _four_point_shortcut_penalty(chosen):
+    """
+    세 anchor 중 하나의 근거가 나머지 두 정답을 '+' 등으로 그대로 합성 정의하면,
+    실제 추론 사슬보다 '정의 보고 명칭 맞히기'가 되기 쉬워 감점한다.
+    예: 허용대 : 충만대 + 전도대
+    """
+    b=list(chosen or [])
+    if len(b)<3:
+        return 0.0
+    penalty=0.0
+    for i,a in enumerate(b):
+        ev=_topic_core(a.get("evidence",""))
+        others=[
+            _topic_core(x.get("answer","")) or _topic_core(x.get("topic",""))
+            for j,x in enumerate(b) if j!=i
+        ]
+        if len(others)>=2 and all(x and x in ev for x in others[:2]):
+            raw=_norm_anchor_text(a.get("evidence",""))
+            if "+" in raw or re.search(r"(합|묶|구성|포함)",raw):
+                penalty -= 5.0
+    return penalty
+
+
 def _direct_chain_order(bundle):
     """
     4점 문항은 '같은 분야'가 아니라 실제 교차참조가 이어지는 사슬이어야 한다.
@@ -1300,6 +1376,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "connected_reject":0,
         "natural_unit_reject":0,
         "direct_chain_reject":0,
+        "generic_only_chain_pairs":0,
         "same_source_reject":0,
         "page_distance_reject":0,
         "support_only_reject":0,
@@ -1479,7 +1556,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                     _pd["direct_chain_reject"]+=1
                     continue
                 chosen=ordered
-                graph_score += min(5.0,chain_score*0.22) + min(4.0,natural_score)
+                _reason_prof=_four_point_reasoning_chain_profile(chosen)
+                _pd["generic_only_chain_pairs"] += int(_reason_prof.get("generic_only_pairs",0))
+                _shortcut_penalty=_four_point_shortcut_penalty(chosen)
+                graph_score += (
+                    min(5.0,chain_score*0.22)
+                    + min(4.0,natural_score)
+                    + float(_reason_prof.get("score",0.0))
+                    + float(_shortcut_penalty)
+                )
             else:
                 # 2점은 4점과 같은 natural-unit 임계값을 쓰지 않는다.
                 # 여러 관계 신호가 모두 약한 조합만 제거하여 억지 연결만 차단한다.
@@ -1584,7 +1669,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 + min(1.0,max(0.0,conf))
                 + importance*1.05
                 + exam_value*1.50
-                + core_exam*0.18
+                + core_exam*0.35
                 - support_count*1.75
                 - (4.0 if support_only else 0.0)
             )
@@ -1650,10 +1735,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             "avg_exam_value_score":round(exam_value0,3),
             "exam_value_contribution":round(exam_value0*1.50,3),
             "avg_core_exam_score":round(core_exam0,3),
-            "core_exam_contribution":round(core_exam0*0.18,3),
+            "core_exam_contribution":round(core_exam0*0.35,3),
             "support_count":support0,
             "support_penalty":round(-support0*1.75,3),
             "natural_unit_score":round(float(natural0),3),
+            "reasoning_chain_profile":(
+                _four_point_reasoning_chain_profile(chosen0)
+                if len(chosen0)>=2 else {}
+            ),
+            "shortcut_penalty":round(float(_four_point_shortcut_penalty(chosen0)),3),
             "tiers":tiers0,
             "topics":[str(x.get("topic","")) for x in chosen0],
             "anchors":[
@@ -1678,8 +1768,12 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         for idx,(sc,ch) in enumerate(uniq[:8])
     ]
 
-    top=uniq[:min(2,len(uniq))]
-    chosen_idx=rng.randrange(len(top))
+    if str(pattern_id).upper().startswith("T4"):
+        top=uniq[:1]
+        chosen_idx=0
+    else:
+        top=uniq[:min(2,len(uniq))]
+        chosen_idx=rng.randrange(len(top))
     score,chosen=top[chosen_idx]
     selected_rank=chosen_idx+1
     topic_chain=" → ".join(_norm_anchor_text(x.get("topic","")) for x in chosen)
@@ -1729,7 +1823,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 "SUPPORT":"otherwise",
                 "qualification":"past_exam >= 3 OR representative >= 4 OR repeatability >= 4",
             },
-            "note":"진단 표시 전용. R14 후보 순위/가중치/선택 로직은 변경하지 않음.",
+            "note":"R22: 4점은 exact anchor 연결을 우선하고 generic-only 인접쌍을 감점. core_exam 메타가중치 0.35.",
         },
     }
     return chosen,relation_meta

@@ -23,7 +23,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R21-20260902")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R22-20260902")
 
 def secret(name, default=""):
     try:
@@ -370,6 +370,8 @@ with tabs[2]:
                                 "core_exam":_sel.get("core_exam_contribution"),
                                 "SUPPORT 패널티":_sel.get("support_penalty"),
                                 "natural_unit":_sel.get("natural_unit_score"),
+                                "실제 풀이 연결":(_sel.get("reasoning_chain_profile") or {}).get("score"),
+                                "정의합성 shortcut 패널티":_sel.get("shortcut_penalty"),
                             }
                         )
 
