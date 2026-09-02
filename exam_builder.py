@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-FINAL-STABILITY-R24-20260902"
+BUILDER_API_VERSION = "FINAL-T2-DISTINCT-R25-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -1170,7 +1170,8 @@ def _two_point_core_target_ok(anchor):
     # '무엇을 묻는가'가 아니라 표/목차의 열 이름에 가까운 메타 레이블
     generic={
         "원료","용도","사용목적","주요 구성","과거","현재","가로축","세로축",
-        "장점","단점","종류","특징","절차","정의","분류","기준"
+        "장점","단점","종류","특징","절차","정의","분류","기준","역할","사람",
+        "유지","성장","증식","수확","과정","방법","효과","목적"
     }
     if ans.replace(" ","") in {x.replace(" ","") for x in generic}:
         return False
@@ -1206,6 +1207,68 @@ def _two_point_support_ok(text):
         return False
     return True
 
+def _two_point_support_quality(core_anchor, support_text, page_text=""):
+    """
+    Writer/Judge 호출 전에 T2 support가 '첫 정답의 정의 재진술'인지 검사한다.
+    핵심은 문장 안에 단순 키워드가 있는지가 아니라, 첫 개념을 식별하는 정의부 외에
+    별도의 조건/효과/절차/비교 정보가 실제로 존재하는지다.
+    """
+    t=_norm_anchor_text(support_text).strip()
+    ev=_norm_anchor_text(core_anchor.get("evidence","")).strip()
+    if not _two_point_support_ok(t):
+        return {"ok":False,"score":-99.0,"reason":"support_not_explanatory","action":"reject"}
+
+    def toks(x):
+        stop={"정의","특징","개념","방법","기법","경우","대한","위한","하는","한다","된다","있다","사용","이용"}
+        return {z for z in re.findall(r"[가-힣A-Za-z0-9]{2,}",_norm_anchor_text(x)) if z not in stop}
+
+    st=toks(t); et=toks(ev)
+    overlap=(len(st & et)/max(1,len(st))) if st else 1.0
+
+    # 실제 두 번째 사실을 나타내는 구조: 원인→결과, 조건→결과, 추가 절차/효과, 명시 비교.
+    causal=bool(re.search(r"(때문|따라|하므로|하므로|하여.*(?:증가|감소|향상|발생|가능|파손|변화)|"
+                          r"(?:증가|감소|향상|발생|변화).*따라)",t))
+    condition=bool(re.search(r"(경우|조건|일\s*때|할\s*때|에서.*(?:가능|유용|사용|적용)|없이)",t))
+    compare=bool(re.search(r"(반면|달리|비교|차이|구별|보다\s+(?:크|작|높|낮)|대신)",t))
+    procedure=bool(re.search(r"(먼저|다음|이후|절차|단계|기록.*제출|제출.*반복|순서)",t))
+    effect=bool(re.search(r"(유용|향상|감소|증가|줄여|개선|방지|촉진|발휘|확장|파손|급\s*상승)",t))
+    application=bool(re.search(r"(적용.*(?:경우|대상|상황)|활용.*(?:경우|목적|분야)|선정.*기준)",t))
+    secondary=sum([causal,condition,compare,procedure,effect,application])
+
+    # 짧은 정의/단일 작용 및 evidence와 거의 동일한 support는 제거.
+    simple_action=bool(re.search(r"(먹고.*뱉|이용.*(?:발생|생성)|받아들.*내보|흡수.*배출)",t))
+    if simple_action and secondary==0:
+        return {"ok":False,"score":-8.0,"reason":"same_fact_action_restatement","action":"reject",
+                "overlap":round(overlap,3)}
+    if overlap>=0.72 and secondary==0:
+        return {"ok":False,"score":-7.0,"reason":"same_fact_definition_restatement","action":"reject",
+                "overlap":round(overlap,3)}
+    if overlap>=0.82 and secondary<=1 and not (causal or condition or compare or procedure):
+        return {"ok":False,"score":-6.5,"reason":"definition_dominates_second_task","action":"reject",
+                "overlap":round(overlap,3)}
+    if len(t)<34 and secondary==0:
+        return {"ok":False,"score":-6.0,"reason":"short_single_fact_support","action":"reject",
+                "overlap":round(overlap,3)}
+    if secondary==0:
+        return {"ok":False,"score":-4.0,"reason":"no_distinct_second_task_signal","action":"reject",
+                "overlap":round(overlap,3)}
+
+    score=secondary*1.6 + min(1.6,max(0.0,(len(t)-28)/60.0)) + max(0.0,0.7-overlap)
+    return {"ok":True,"score":round(float(score),3),"reason":"distinct_support_ready","action":"keep",
+            "overlap":round(overlap,3),
+            "signals":{"causal":causal,"condition":condition,"compare":compare,
+                       "procedure":procedure,"effect":effect,"application":application}}
+
+def _two_point_candidate_key(bundle):
+    if not bundle:
+        return ""
+    a=bundle[0]
+    return "|".join([
+        str(a.get("source_name","")),
+        str(a.get("page_no","")),
+        _topic_core(a.get("answer","")),
+    ])
+
 def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id):
     """
     T2 전용 selector.
@@ -1231,6 +1294,21 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
         if _topic_core(support.get("answer",""))==_topic_core(a.get("answer","")):
             continue
 
+        support_quality=_two_point_support_quality(a,support.get("answer",""),page_text)
+        if not support_quality.get("ok"):
+            pd.setdefault("two_point_support_distinct_reject",0)
+            pd["two_point_support_distinct_reject"]+=1
+            pd.setdefault("reject_examples",{}).setdefault("two_point_support_distinct",[])
+            if len(pd["reject_examples"]["two_point_support_distinct"])<8:
+                pd["reject_examples"]["two_point_support_distinct"].append({
+                    "topic":str(a.get("topic","")),
+                    "answer":str(a.get("answer","")),
+                    "support":str(support.get("answer",""))[:180],
+                    "reason":support_quality.get("reason",""),
+                })
+            continue
+        support["support_quality"]=copy.deepcopy(support_quality)
+
         try:
             conf=float(a.get("confidence") or 0)
         except Exception:
@@ -1253,6 +1331,8 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             score+=1.0
         if re.search(r"(때문|따라|과정|원인|결과|특징|달리|변화|작용|이용|판단|분해|전환|선정|발견)",ev):
             score+=1.0
+        # R25: 둘째 1점이 첫 명칭 식별과 실제로 구별되는 정도를 selector 점수에 직접 반영.
+        score += float((support.get("support_quality") or {}).get("score",0.0))*1.8
 
         ranked.append((score,[a,support]))
 
@@ -1312,15 +1392,16 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
                     "source_name":str(bundle0[1].get("source_name","")),
                     "page_no":bundle0[1].get("page_no"),
                     "derived_support":True,
+                    "support_quality":copy.deepcopy(bundle0[1].get("support_quality",{})),
                 },
             ],
         }
 
     leaderboard=[cand_diag(sc,b,idx+1) for idx,(sc,b) in enumerate(uniq)]
-    top=uniq[:min(2,len(uniq))]
-    chosen_idx=rng.randrange(len(top))
-    score,bundle=top[chosen_idx]
-    selected_rank=chosen_idx+1
+    # R25: T2는 Python prefilter 이후 가장 강한 후보를 우선한다.
+    # 임의 top2 선택은 쉬운 후보를 다시 끌어올릴 수 있으므로 제거한다.
+    score,bundle=uniq[0]
+    selected_rank=1
     core_anchor=bundle[0]
 
     relation_meta={
@@ -1331,7 +1412,7 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
         "scoring_plan":_scoring_plan({"id":pattern_id,"subpoints":[1,1]},bundle),
         "material_limits":_compact_material_limits(2),
         "natural_unit_score":None,
-        "two_point_label_policy":"ONE_ANCHOR: 첫 1점은 중심개념 판단, 둘째 1점은 같은 개념의 source-grounded 근거/오류수정/비교/적용. 둘째를 별도 개념명으로 묻지 말 것.",
+        "two_point_label_policy":"ONE_ANCHOR-DISTINCT: 첫 1점은 중심개념 판단, 둘째 1점은 같은 개념의 별도 조건·비교·절차·효과·적용 판단. 첫 명칭을 맞힌 동일 특징을 그대로 재진술하지 말 것.",
         "core_exam_profile":[{
             "topic":core_anchor.get("topic",""),
             "score":core_anchor.get("core_exam_score",0),
@@ -1339,13 +1420,14 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             "breakdown":core_anchor.get("core_exam_breakdown",{}),
         }],
         "quality_directive":(
-            "2점은 ONE-ANCHOR 구조다. 서로 다른 두 개념을 결합하지 말 것. "
-            "첫 요구는 중심개념을 자료에서 판단하게 하고, 두 번째 요구는 반드시 같은 중심개념에 대한 "
-            "근거·오류수정·비교·적용 중 하나를 요구한다. 두 번째 고정답은 별도 개념명이 아니라 원문 채점근거다."
+            "2점은 ONE-ANCHOR-DISTINCT 구조다. 서로 다른 두 개념을 결합하지 말 것. "
+            "첫 요구는 중심개념을 자료에서 판단하게 한다. 두 번째 요구는 같은 개념에 대한 별도의 "
+            "조건·비교·절차·효과·적용 판단이어야 한다. 첫 명칭을 맞히는 데 사용한 동일 특징을 반대로 고치거나 "
+            "그대로 재진술해서 두 번째 1점을 만들지 말 것. 두 번째 고정답은 별도 개념명이 아니라 원문 채점근거다."
         ),
         "selector_reason":f"Python one-anchor exam-value score={score:.2f}",
         "relation_score":round(score,2),
-        "selection_mode":"python_exam_value_one_anchor_t2",
+        "selection_mode":"python_exam_value_one_anchor_distinct_t2",
         "source_policy":"subnote_only_for_answer_content",
         "score_pipeline_diagnostic":copy.deepcopy(pd),
         "score_diagnostic":{
@@ -1362,7 +1444,7 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
                 "SUPPORT":"otherwise",
                 "qualification":"past_exam >= 3 OR representative >= 4 OR repeatability >= 4",
             },
-            "note":"T2는 DB answer anchor 1개 + 동일 페이지의 source-grounded 채점근거 1개로 구성.",
+            "note":"T2는 DB answer anchor 1개 + 동일 페이지의 독립적 source-grounded 채점근거 1개로 구성. 동일 특징 재진술 후보는 Writer 전에 제거.",
         },
     }
     return bundle,relation_meta
@@ -2074,6 +2156,26 @@ def _source_neighborhood_key_from_bundle(bundle):
     return out
 
 
+def _bundle_content_overlap_too_high(bundle, previous):
+    """AI 호출 전에 anchor 수준에서 최종 A/B 세부내용 중복을 차단한다."""
+    qa={_topic_core(x.get("answer","")) for x in (bundle or []) if _topic_core(x.get("answer",""))}
+    qdom=str((bundle or [{}])[0].get("domain","")) if bundle else ""
+    qt=set()
+    for x in bundle or []:
+        for v in (x.get("topic",""),x.get("answer","")):
+            qt.update(t for t in _anchor_tokens(v) if len(t)>=3)
+    for p in previous or []:
+        pa={_topic_core(x) for x in (p.get("answer",[]) or []) if _topic_core(x)}
+        if qa & pa:
+            return True,"exact_answer"
+        pdom=str(p.get("domain") or p.get("blueprint_domain") or "")
+        if qdom and pdom and qdom!=pdom:
+            continue
+        pt=_question_content_tokens(p)
+        if len(qt & pt)>=2:
+            return True,"concept_neighborhood"
+    return False,""
+
 def _source_neighborhood_conflict(bundle, used_source_pages):
     """
     최종 A/B에서 같은 서브노트의 '같은 페이지'를 정답원으로 재사용하지 않는다.
@@ -2201,7 +2303,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
             # 한 문제 슬롯이 수십 번 반복되지 않도록 AI 후보 예산을 제한한다.
             # 품질 기준은 그대로이며, 실패 원인에 따라 다른 패턴으로 즉시 전환한다.
-            slot_candidate_budget = 2 if quality_active else (4 if tuning_mode else 8)
+            slot_candidate_budget = ((4 if pts==2 else 2) if quality_active else (4 if tuning_mode else 8))
             slot_candidates_used = 0
             # selector 자체 호출도 슬롯당 제한한다. REJECT/timeout도 호출 1회로 계산한다.
             selector_attempt_limit = 0
@@ -2275,6 +2377,18 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                  f"원문 잠금 후보 부족: 필요 {need}, 확보 {len(bundle)}",
                                  pattern=pat.get("id"))
                             break
+
+                    # R25: 최종 A/B 세부내용 중복은 Writer/API 호출 전에 먼저 차단한다.
+                    if not tuning_mode:
+                        _predup,_prewhy=_bundle_content_overlap_too_high(bundle,prior+qs)
+                        if _predup:
+                            diag(slot,"content_diversity_pre_writer",
+                                 "AI 호출 전 세부 내용 반복 방지: "+str(_prewhy),
+                                 pattern=pat.get("id"),
+                                 candidate_topics=[str(x.get("topic","")) for x in bundle])
+                            if bundle:
+                                local_rejected_topics.add(str(bundle[0].get("topic","")))
+                            continue
 
                     # 최종 A/B에서는 같은 서브노트의 같은 페이지가 정답원으로 반복되지 않게 한다.
                     # 6문항 튜닝은 버전 비교 가능성을 위해 이 제한을 적용하지 않는다.
@@ -2352,7 +2466,9 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                 if _fatal & _hard:
                                     for a in bundle:
                                         local_rejected_topics.add(a["topic"])
-                                    relation_meta["force_pattern_switch"]=True
+                                    # R25: 2점은 Python distinct-support prefilter를 통과한 다른 anchor를
+                                    # 최대 4개까지만 시도한다. 같은 쉬운 anchor를 반복 호출하지 않는다.
+                                    relation_meta["force_pattern_switch"]=(pts!=2)
                                 elif bundle:
                                     local_rejected_topics.add(bundle[0]["topic"])
                                 cand=None
