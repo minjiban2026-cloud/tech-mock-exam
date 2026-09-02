@@ -44,16 +44,24 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
         "python_exam_value_decision_first_t2",
         "python_exam_value_t2_reasoning_matrix",
     }:
-        answers=[str(relation_meta.get("correct_option","㉠")), answers[1]]
+        if selection_mode=="python_exam_value_t2_reasoning_matrix":
+            _cc=(relation_meta.get("reasoning_spec") or {}).get("correction_contract") or {}
+            _replacement=str(_cc.get("expected_replacement_fact","") or "").strip()
+            answers=[str(relation_meta.get("correct_option","㉠")), _replacement or answers[1]]
+            # 둘째 채점근거도 실제 correction answer와 동일한 source fact로 고정한다.
+            evidence=[evidence[0], _replacement or evidence[1]]
+        else:
+            answers=[str(relation_meta.get("correct_option","㉠")), answers[1]]
         derived_answer_flags=[True,False]
     source_context=source_context or "\n".join(evidence)
     if int(points)==2 and selection_mode=="python_exam_value_t2_reasoning_matrix":
         # R28: Python이 이미 고정한 세 사실만 Writer에게 제공한다.
         _spec=relation_meta.get("reasoning_spec") or {}
         _parts=[
-            "[중심 사실] "+str(_spec.get("base_fact","")),
-            "[연결 사실] "+str(_spec.get("linked_fact","")),
-            "[혼합 오답용 sibling 사실] "+str(_spec.get("distractor_fact","")),
+            "[중심 item 사실1] "+str(_spec.get("core_base_fact","")),
+            "[중심 item 사실2] "+str(_spec.get("core_link_fact","")),
+            "[비교 item 사실1] "+str(_spec.get("contrast_base_fact","")),
+            "[비교 item 사실2] "+str(_spec.get("contrast_link_fact","")),
         ]
         source_context="\n".join(x for x in _parts if x.strip())
     elif int(points)==2 and selection_mode=="python_exam_value_decision_first_t2":
@@ -104,7 +112,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 {style_profile}
 반드시 지킬 규칙:
 - passage/conditions/tasks만 작성한다. 정답은 수정하지 않는다.
-- 2점 reasoning-matrix에서는 case_correct와 case_wrong도 반드시 각각 작성한다. case_correct는 base_fact+linked_fact의 정답 사례, case_wrong은 base_fact+distractor_fact의 오답 사례다. 두 필드의 역할을 서로 바꾸지 않는다.
+- 2점 paired-slot 모드에서는 core_base_clause, core_link_clause, contrast_base_clause, contrast_link_clause를 각각 작성한다. 각 필드는 대응하는 source fact 하나만 의미 보존 재표현하며 서로의 사실을 섞거나 역할을 바꾸지 않는다.
 - 기술적 사실, 수치, 인과관계는 위 출처 문맥이 직접 뒷받침하는 것만 사용한다.
 - 출처에 없는 실제 사례, 장치 조건, 수치, 효과를 꾸며내지 않는다.
 - 중립적 수업 상황 프레임("교사가 자료를 제시했다", "학생이 검토했다")은 허용하되 기술 사실을 추가하지 않는다.
@@ -130,13 +138,13 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 - 2점은 짧고 명확하게 쓰되 두 채점요소가 하나의 사고사슬이어야 한다.
 - selection_mode가 python_exam_value_t2_reasoning_matrix이면 Python 사고논리를 그대로 따른다.
 - 이 모드에서는 passage에 반드시 ㉠과 ㉡ 두 익명 사례를 제시한다. 두 사례 모두 기술 개념명을 직접 쓰지 않는다.
-- 정답 사례는 base_fact와 linked_fact가 같은 대상/원리에서 함께 성립하도록 의미를 보존해 재표현한다.
-- 오답 사례는 base_fact와 distractor_fact를 의도적으로 섞어 내부적으로 한 군데만 어긋나게 만든다.
+- Python이 사례를 직접 조립하므로 AI는 사례 전체를 만들지 않는다. core_base_clause/core_link_clause는 중심 item 사실1/2를, contrast_base_clause/contrast_link_clause는 비교 item 사실1/2를 각각 한 문장 이하로 재표현한다.
+- 각 clause에 다른 clause의 사실, 개념명, 새로운 사례·수치·효과를 추가하지 않는다.
 - 원문 문장, 정의, 숫자열을 그대로 복사하지 말고 문장 구조와 표현 순서를 바꾸어 재구성한다. 단, 기술적 의미·인과·수치는 바꾸지 않는다.
 - 첫 task와 둘째 task의 최종 문구는 Python이 고정하므로 AI가 만든 tasks는 사용되지 않는다. passage/conditions가 이 고정 과업과 정확히 맞도록 작성한다.
 - 고정 첫 task는 ㉠/㉡ 중 내부적으로 일관된 사례를 하나 고르는 판단이다.
-- 고정 둘째 task는 첫 판단을 이용하여 다른 사례에서 잘못 섞인 한 부분을 linked_fact에 맞게 수정하는 과업이다.
-- 둘째 정답 문구를 passage나 conditions에 그대로 제시하지 않는다.
+- 고정 둘째 task는 첫 판단을 이용하여 선택하지 않은 사례의 ②를 그 사례의 ①과 같은 source item에 속하는 contrast_link_fact에 맞게 수정하는 과업이다.
+- 둘째 정답인 contrast_link_fact의 내용은 passage나 conditions에 직접 또는 거의 같은 표현으로 제시하지 않는다. contrast_link_clause는 Python이 화면에 사용하지 않고 의미 검증용으로만 보관할 수 있으므로, passage/conditions에는 넣지 않는다.
 - 첫 task와 둘째 task를 서로 독립적으로 풀 수 있게 만들지 않는다. 둘째 task에는 "첫 판단을 근거로", "선택하지 않은 사례에서" 같은 연결 표현을 사용한다.
 - hidden_core_answer와 hidden_contrast_answer는 passage/conditions/tasks에 직접 쓰지 않는다.
 - 별도의 제3개념, 새로운 기술 사실, 새로운 수치, 새로운 효과를 추가하지 않는다.
@@ -152,8 +160,10 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 {{
  "intro":"...",
  "passage":"...",
- "case_correct":"...",
- "case_wrong":"...",
+ "core_base_clause":"...",
+ "core_link_clause":"...",
+ "contrast_base_clause":"...",
+ "contrast_link_clause":"...",
  "conditions":["..."],
  "tasks":["..."],
  "thinking_types":["..."]
@@ -169,20 +179,23 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
     if int(points)==2 and selection_mode=="python_exam_value_t2_reasoning_matrix":
         _writer_tasks=[
             "㉠과 ㉡ 중 두 사실의 관계가 서로 일관된 것을 고르시오.",
-            "첫 판단을 근거로, 선택하지 않은 사례에서 잘못 연결된 내용을 바르게 수정하시오.",
+            "첫 판단을 근거로, 선택하지 않은 사례의 ②를 그 사례의 ①과 일관되도록 바르게 수정하시오.",
         ]
-        # R31: AI가 ㉠/㉡의 역할을 뒤집거나 둘을 섞지 못하도록 사례 배치도 Python이 소유한다.
-        _case_correct=str(x.get("case_correct","") or "").strip()
-        _case_wrong=str(x.get("case_wrong","") or "").strip()
+        # R32: AI는 네 source fact를 각각 재표현만 하고, 사례/슬롯 배치는 Python이 직접 소유한다.
+        _cb=str(x.get("core_base_clause","") or "").strip()
+        _cl=str(x.get("core_link_clause","") or "").strip()
+        _xb=str(x.get("contrast_base_clause","") or "").strip()
+        _xl=str(x.get("contrast_link_clause","") or "").strip()
         _co=str(relation_meta.get("correct_option","㉠") or "㉠")
-        if _case_correct and _case_wrong:
+        # 화면에는 contrast_link_clause를 의도적으로 제시하지 않는다. 둘째 정답 복사 방지.
+        if _cb and _cl and _xb and _xl:
+            _case_correct=f"① {_cb}  ② {_cl}"
+            _case_wrong=f"① {_xb}  ② {_cl}"
             if _co=="㉡":
                 _writer_passage=f"㉠ {_case_wrong}\n㉡ {_case_correct}"
             else:
                 _writer_passage=f"㉠ {_case_correct}\n㉡ {_case_wrong}"
         else:
-            # 구형/불완전 Writer 응답은 그대로 살리지 않고 downstream prejudge에서 실패시키기 위해
-            # passage를 유지하되 구조 검사가 ㉠/㉡ 및 semantic contract를 확인한다.
             _writer_passage=str(x.get("passage","")).strip()
     else:
         _writer_tasks=[str(v).strip() for v in x.get("tasks",[]) if str(v).strip()]

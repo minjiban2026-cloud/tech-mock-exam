@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "GLOBAL-T2-SEMANTIC-CONTRACT-R31-20260902"
+BUILDER_API_VERSION = "GLOBAL-T2-PAIRED-SLOT-CONTRACT-R32-20260902"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -1389,7 +1389,7 @@ def _two_point_refine_support(core_anchor, support_text):
     return max(ranked,key=lambda x:x[0])[1] if ranked else t
 
 
-def _two_point_contrast_anchor(core_anchor, anchors):
+def _two_point_contrast_anchors(core_anchor, anchors):
     """같은 출처·동일/인접 페이지에서 비교용 sibling anchor를 고른다."""
     generic={"역할","원인","결과","특징","정의","과정","방법","종류","활용","원료","사람",
              "겨울철","여름철","봄철","가을철","목적","효과","기준","조건","절차"}
@@ -1453,107 +1453,122 @@ def _two_point_contrast_anchor(core_anchor, anchors):
         if re.search(r"(방법|기법|단자|처리|번식|오차|주형|평가|사고|방정식|법칙)",ans+" "+ev):
             score+=1.0
         rows.append((score,b))
-    if not rows:
-        fallback=[]
-        for b0 in anchors:
-            b=_two_point_core_anchor_clean(b0)
-            # R31: contrast/distractor는 채점 정답이 아니다.
-            # 따라서 CORE/NORMAL 정답용 gate를 그대로 적용하면 얇은 영역에서
-            # 앞 문항 사용 후 비교자료가 고갈된다. 출처·완결성·동일항목 중복만 검사하고
-            # SUPPORT도 비교자료로 허용한다(주된 정답으로 승격하지 않음).
-            _b_ans=_norm_anchor_text(b.get("answer","")).strip()
-            _b_ev=_norm_anchor_text(b.get("evidence","")).strip()
-            if (not _b_ans or not _b_ev or _heading_like(_b_ans)
-                    or _anchor_fragment_reason(b) or _anchor_internal_contradiction_reason(b)):
-                continue
-            if _topic_core(_b_ans)==core_ans or str(b.get("source_name",""))!=src:
-                continue
-            try:
-                gap=abs(int(b.get("page_no",0) or 0)-page)
-            except Exception:
-                continue
-            if gap!=0:
-                continue
-            ev=_norm_anchor_text(b.get("evidence",""))
-            if len(ev)<24 or _heading_like(b.get("answer","")):
-                continue
-            fallback.append((float(b.get("exam_value_score") or 0)+float(b.get("importance_score") or 0),b))
-        if not fallback:
-            return None
-        fallback.sort(key=lambda x:x[0],reverse=True)
-        return copy.deepcopy(fallback[0][1])
+    # 관계점수 후보를 우선하되, 같은 페이지의 완결된 sibling도 뒤에 보조 후보로 붙인다.
+    # scored 후보가 하나라도 있다는 이유로 fallback universe 전체를 버리지 않는다.
+    fallback=[]
+    scored_ids={(_topic_core(x[1].get("answer","")),str(x[1].get("source_name","")),int(x[1].get("page_no",0) or 0)) for x in rows}
+    for b0 in anchors:
+        b=_two_point_core_anchor_clean(b0)
+        _b_ans=_norm_anchor_text(b.get("answer","")).strip()
+        _b_ev=_norm_anchor_text(b.get("evidence","")).strip()
+        if (not _b_ans or not _b_ev or _heading_like(_b_ans)
+                or _anchor_fragment_reason(b) or _anchor_internal_contradiction_reason(b)):
+            continue
+        if _topic_core(_b_ans)==core_ans or str(b.get("source_name",""))!=src:
+            continue
+        try:
+            gap=abs(int(b.get("page_no",0) or 0)-page)
+        except Exception:
+            continue
+        if gap!=0:
+            continue
+        if len(_b_ev)<24 or _heading_like(b.get("answer","")):
+            continue
+        _id=(_topic_core(_b_ans),str(b.get("source_name","")),int(b.get("page_no",0) or 0))
+        if _id in scored_ids:
+            continue
+        fallback.append((float(b.get("exam_value_score") or 0)+float(b.get("importance_score") or 0),b))
     rows.sort(key=lambda x:x[0],reverse=True)
-    return copy.deepcopy(rows[0][1])
+    fallback.sort(key=lambda x:x[0],reverse=True)
+    merged=[copy.deepcopy(x[1]) for x in rows]+[copy.deepcopy(x[1]) for x in fallback]
+    return merged[:12]
 
-def _t2_reasoning_spec(core_anchor, support_anchor, contrast_anchor, rng):
+
+
+def _two_point_contrast_anchor(core_anchor, anchors):
+    """Backward-compatible single contrast accessor."""
+    rows=_two_point_contrast_anchors(core_anchor,anchors)
+    return copy.deepcopy(rows[0]) if rows else None
+
+def _t2_reasoning_spec(core_anchor, support_anchor, contrast_anchor, contrast_facts, rng):
     """
-    2점 문항의 사고 논리를 Python이 먼저 고정한다.
-    AI는 아래 세 사실을 새 지식 없이 재표현만 한다.
+    R32 paired-slot contract.
 
-    - base_fact: 중심개념의 원자료 사실
-    - linked_fact: 같은 중심개념의 별도 조건/효과/절차
-    - distractor_fact: 같은 출처의 sibling 개념 사실
+    서로 다른 두 source item에서 각각 두 사실을 확보한다.
+    - core_base/core_link: 중심 item의 두 사실
+    - contrast_base/contrast_link: sibling item의 두 사실
 
-    정답 사례 = base + linked
-    오답 사례 = base + distractor
-    따라서 첫 1점은 '어느 두 사실이 한 개념 안에서 함께 성립하는가'를 판단하고,
-    둘째 1점은 오답 사례의 섞인 사실을 linked_fact로 수정한다.
+    표시 사례는 Python이 다음 구조로 고정한다.
+      정답 사례: core_base + core_link
+      오답 사례: contrast_base + core_link
+    오답 사례의 ②는 contrast_link로 수정해야 한다.
+
+    따라서 둘째 정답(contrast_link)은 다른 사례 어디에도 미리 제시되지 않으며,
+    수정 대상 슬롯과 채점답이 구조적으로 1:1 대응한다.
     """
-    base=_norm_anchor_text(core_anchor.get("reasoning_base_fact") or core_anchor.get("evidence","")).strip()
-    linked=_norm_anchor_text(support_anchor.get("answer","")).strip()
-    distractor=_norm_anchor_text(contrast_anchor.get("evidence","")).strip()
-    if not (base and linked and distractor):
+    core_base=_norm_anchor_text(core_anchor.get("reasoning_base_fact") or core_anchor.get("evidence","")).strip()
+    core_link=_norm_anchor_text(support_anchor.get("evidence") or support_anchor.get("answer","")).strip()
+    cf=[_norm_anchor_text(x).strip() for x in (contrast_facts or []) if _norm_anchor_text(x).strip()]
+    if len(cf)<2:
+        return None
+    contrast_base,contrast_link=cf[0],cf[1]
+    if not (core_base and core_link and contrast_base and contrast_link):
         return None
 
     def meaningful_tokens(x):
         stop={"정의","특징","방법","기법","경우","대한","위한","하는","한다","된다","있다",
               "사용","이용","것","수","및","또는","때","원리","개념"}
         return {z for z in re.findall(r"[가-힣A-Za-z0-9]{2,}",x) if z not in stop}
-
-    bt=meaningful_tokens(base)
-    lt=meaningful_tokens(linked)
-    dt=meaningful_tokens(distractor)
-    if len(bt)<2 or len(lt)<2 or len(dt)<2:
+    def sim(a,b):
+        aa=re.sub(r"[^가-힣A-Za-z0-9]","",a).lower(); bb=re.sub(r"[^가-힣A-Za-z0-9]","",b).lower()
+        return SequenceMatcher(None,aa,bb).ratio() if aa and bb else 1.0
+    facts=[core_base,core_link,contrast_base,contrast_link]
+    def fact_has_content(x):
+        c=re.sub(r"[^가-힣A-Za-z0-9]","",x)
+        return len(meaningful_tokens(x))>=2 or len(c)>=14
+    if any(not fact_has_content(x) for x in facts):
         return None
 
-    # linked가 base의 단순 반복이면 추론형 2점이 되지 않는다.
-    link_overlap=len(bt & lt)/max(1,min(len(bt),len(lt)))
-    _bc=re.sub(r"[^가-힣A-Za-z0-9]","",base).lower()
-    _lc=re.sub(r"[^가-힣A-Za-z0-9]","",linked).lower()
-    link_text_similarity=SequenceMatcher(None,_bc,_lc).ratio() if _bc and _lc else 1.0
-    if link_overlap>=0.88 or link_text_similarity>=0.80:
+    # 같은 item 내부 두 사실은 단순 반복이면 안 된다.
+    if sim(core_base,core_link)>=0.80 or sim(contrast_base,contrast_link)>=0.80:
+        return None
+    # 오답에 들어갈 core_link와 실제 수정답 contrast_link가 사실상 같으면 안 된다.
+    if sim(core_link,contrast_link)>=0.78:
         return None
 
-    # distractor가 linked와 사실상 같으면 오답 역할을 못 한다.
-    distract_overlap=len(lt & dt)/max(1,min(len(lt),len(dt)))
-    _dc=re.sub(r"[^가-힣A-Za-z0-9]","",distractor).lower()
-    distract_text_similarity=SequenceMatcher(None,_lc,_dc).ratio() if _lc and _dc else 1.0
-    if distract_overlap>=0.78 or distract_text_similarity>=0.82:
+    # 숨은 개념명이 source fact 안에 그대로 박혀 있으면 Writer가 정의-명칭 매칭으로 무너지기 쉽다.
+    def contains_label(text,label):
+        t=re.sub(r"[^가-힣A-Za-z0-9]","",text).lower()
+        l=re.sub(r"[^가-힣A-Za-z0-9]","",label).lower()
+        return len(l)>=3 and l in t
+    core_label=_norm_anchor_text(core_anchor.get("answer","")).strip()
+    contrast_label=_norm_anchor_text(contrast_anchor.get("answer","")).strip()
+    if contains_label(core_base,core_label) or contains_label(core_link,core_label):
+        return None
+    if contains_label(contrast_base,contrast_label) or contains_label(contrast_link,contrast_label):
         return None
 
     correct="㉠" if rng.random()<0.5 else "㉡"
     wrong="㉡" if correct=="㉠" else "㉠"
     return {
-        "mode":"fact_pair_consistency",
-        "base_fact":base,
-        "linked_fact":linked,
-        "distractor_fact":distractor,
-        "hidden_core_answer":_norm_anchor_text(core_anchor.get("answer","")).strip(),
-        "hidden_contrast_answer":_norm_anchor_text(contrast_anchor.get("answer","")).strip(),
+        "mode":"paired_fact_slot_consistency",
+        "core_base_fact":core_base,
+        "core_link_fact":core_link,
+        "contrast_base_fact":contrast_base,
+        "contrast_link_fact":contrast_link,
+        "hidden_core_answer":core_label,
+        "hidden_contrast_answer":contrast_label,
         "correct_option":correct,
         "wrong_option":wrong,
-        "first_scoring_action":"두 익명 사례 중 base_fact와 linked_fact가 함께 성립하는 사례 선택",
-        "second_scoring_action":"오답 사례에 섞인 distractor_fact를 linked_fact의 내용으로 수정",
+        "first_scoring_action":"두 익명 사례 중 ①과 ②가 같은 source item에 속하는 사례 선택",
+        "second_scoring_action":"선택하지 않은 사례의 ②를 그 사례의 ①과 같은 item에 속하는 사실로 수정",
         "correction_contract":{
             "wrong_option":wrong,
-            "wrong_fact":distractor,
-            "expected_replacement_fact":linked,
-            "replacement_source":"same_core_local_source_fact",
+            "wrong_slot":"②",
+            "displayed_wrong_fact":core_link,
+            "expected_replacement_fact":contrast_link,
+            "replacement_source":"contrast_item_second_local_source_fact",
         },
-        "link_overlap":round(link_overlap,3),
-        "link_text_similarity":round(link_text_similarity,3),
-        "distractor_overlap":round(distract_overlap,3),
-        "distractor_text_similarity":round(distract_text_similarity,3),
         "minimum_inference_steps":2,
     }
 
@@ -1563,7 +1578,7 @@ def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
     if int(cand.get("points",0) or 0)!=2:
         return []
     spec=(relation_meta or {}).get("reasoning_spec") or {}
-    if spec.get("mode")!="fact_pair_consistency":
+    if spec.get("mode")!="paired_fact_slot_consistency":
         return ["2점 reasoning_spec 누락"]
 
     passage=str(cand.get("passage","") or "")
@@ -1580,12 +1595,35 @@ def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
         errs.append("2점 작성요구 2개 아님")
         return errs
 
-    # R31 semantic/scoring contract: 수정 대상과 채점답이 1:1로 대응해야 한다.
+    # R32 paired-slot layout contract: 두 사례 모두 ①/②가 있고, ②는 동일한 표시 사실이어야 한다.
+    # 오답 사례의 수정 위치를 Python이 ②로 고정했으므로 이후 Writer가 사례를 바꿔도 여기서 차단한다.
+    def _case_slots(label):
+        case=_case_text(label) if "_case_text" in locals() else ""
+        if not case:
+            m=re.search(re.escape(label)+r"(.*?)(?=㉠|㉡|$)", passage, re.S)
+            case=(m.group(1) if m else "").strip()
+        m1=re.search(r"①\s*(.*?)(?=②|$)",case,re.S)
+        m2=re.search(r"②\s*(.*)$",case,re.S)
+        return ((m1.group(1).strip() if m1 else ""),(m2.group(1).strip() if m2 else ""))
+    _a1,_a2=_case_slots("㉠"); _b1,_b2=_case_slots("㉡")
+    if not all((_a1,_a2,_b1,_b2)):
+        errs.append("2점 ①/② 슬롯 구조 누락")
+    else:
+        def _slot_comp(x): return re.sub(r"[^가-힣A-Za-z0-9]","",x).lower()
+        if _slot_comp(_a2)!=_slot_comp(_b2):
+            errs.append("2점 두 사례의 ② 표시사실 불일치")
+        if _slot_comp(_a1)==_slot_comp(_b1):
+            errs.append("2점 두 사례의 ① 구분단서 동일")
+    if "②" not in tasks[1]:
+        errs.append("2점 둘째 요구의 수정 슬롯 ② 미지정")
+
+    # R32 semantic/scoring contract: 수정 대상 슬롯과 채점답이 1:1로 대응해야 한다.
     cc=spec.get("correction_contract") or {}
     expected=_norm_anchor_text(cc.get("expected_replacement_fact","")).strip()
-    wrong_fact=_norm_anchor_text(cc.get("wrong_fact","")).strip()
+    wrong_fact=_norm_anchor_text(cc.get("displayed_wrong_fact","")).strip()
     wrong_option=str(cc.get("wrong_option","")).strip()
-    if not expected or not wrong_fact or wrong_option not in {"㉠","㉡"}:
+    wrong_slot=str(cc.get("wrong_slot","")).strip()
+    if not expected or not wrong_fact or wrong_option not in {"㉠","㉡"} or wrong_slot!="②":
         errs.append("2점 오류수정 semantic contract 누락")
     else:
         answers=[_norm_anchor_text(x).strip() for x in (cand.get("answer",[]) or [])]
@@ -1608,11 +1646,18 @@ def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
         bb=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(b)).lower()
         if not aa or not bb: return 0.0
         return SequenceMatcher(None,aa,bb).ratio()
-    correct_option=str(spec.get("correct_option","")).strip()
-    if expected and correct_option in {"㉠","㉡"}:
-        correct_case=_case_text(correct_option)
-        if correct_case and _lex_sim(correct_case,expected)>=0.64:
-            errs.append("2점 수정정답이 다른 사례에 직접 제시")
+    if expected:
+        _visible=" ".join([passage,conditions])
+        if _lex_sim(_visible,expected)>=0.52:
+            errs.append("2점 수정정답이 자료에 직접 제시")
+        else:
+            # 긴 핵심구절이 어느 사례/조건에라도 그대로 있으면 복사형으로 본다.
+            ec=re.sub(r"[^가-힣A-Za-z0-9]","",expected).lower()
+            vc=re.sub(r"[^가-힣A-Za-z0-9]","",_visible).lower()
+            if len(ec)>=12:
+                n=min(18,max(12,len(ec)//3))
+                if any(ec[j:j+n] in vc for j in range(0,max(1,len(ec)-n+1),max(1,n//3))):
+                    errs.append("2점 수정정답 핵심구절 자료 노출")
 
     # 숨은 중심개념/비교개념 명칭을 자료에 직접 쓰지 않는다.
     for key in ("hidden_core_answer","hidden_contrast_answer"):
@@ -1624,7 +1669,7 @@ def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
 
     # 세 원문 사실의 긴 구절 복사를 모두 차단한다.
     mc=re.sub(r"[^가-힣A-Za-z0-9]","",compact).lower()
-    for key in ("base_fact","linked_fact","distractor_fact"):
+    for key in ("core_base_fact","core_link_fact","contrast_base_fact","contrast_link_fact"):
         raw=re.sub(r"[^가-힣A-Za-z0-9]","",str(spec.get(key,""))).lower()
         if len(raw)<14:
             continue
@@ -1772,6 +1817,53 @@ def _t2_atomic_facts(anchor, local_segment):
     # 앞으로 튀어 올라오는 것을 막아 현재 anchor에 가장 가까운 두 사실을 사용한다.
     return facts[:8]
 
+
+def _t2_choose_fact_pair(anchor, facts):
+    """R32: local block의 첫 두 줄이 아니라 출제 가능한 두 source fact를 전역 규칙으로 고른다."""
+    label=_norm_anchor_text(anchor.get("answer","")).strip()
+    def compact(x): return re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(x)).lower()
+    def contains_label(x):
+        l=compact(label); t=compact(x)
+        return len(l)>=3 and l in t
+    def meaningful(x):
+        stop={"정의","특징","방법","기법","경우","대한","위한","하는","한다","된다","있다","사용","이용","것","수","및","또는","때","원리","개념"}
+        return {z for z in re.findall(r"[가-힣A-Za-z0-9]{2,}",x) if z not in stop}
+    signal=re.compile(r"(때|경우|조건|따라|때문|원인|결과|효과|장점|단점|목적|과정|단계|활용|적용|증가|감소|향상|개선|방지|필요|가능|도움|유용|선정|분석|발전|발견|비교|판단|변화|작용|촉진|억제|반복|집단|개인|시간)")
+    usable=[]
+    for idx,f0 in enumerate(facts or []):
+        f=_norm_anchor_text(f0).strip()
+        if not (12<=len(f)<=180): continue
+        _fc=compact(f)
+        if len(meaningful(f))<2 and len(_fc)<14: continue
+        if contains_label(f): continue
+        # 괄호 속 영문명/약어, 목록 표지만으로 된 조각은 자료판단 사실이 아니다.
+        if re.fullmatch(r"[\[(（]?[A-Za-z][A-Za-z0-9 ,./&+-]{1,50}[\])）]?",f): continue
+        if re.match(r"^[①-⑳ⓐ-ⓩ]\s*[^가-힣]{0,30}$",f): continue
+        score=0.0
+        if 22<=len(f)<=120: score+=1.0
+        if signal.search(f): score+=1.5
+        if re.search(r"(정의|의미|라고도|일컫|말한다)$",f): score-=1.0
+        usable.append((idx,score,f))
+    if len(usable)<2: return None
+    best=None
+    for i in range(len(usable)):
+        for j in range(i+1,len(usable)):
+            i0,si,a=usable[i]; j0,sj,b=usable[j]
+            ac=compact(a); bc=compact(b)
+            sim=SequenceMatcher(None,ac,bc).ratio() if ac and bc else 1.0
+            if sim>=0.80: continue
+            ta=meaningful(a); tb=meaningful(b)
+            overlap=len(ta&tb)/max(1,min(len(ta),len(tb)))
+            if overlap>=0.88: continue
+            # 둘 다 단순 정의 문장인 조합보다 조건/효과/과정 등이 섞인 조합을 우선한다.
+            relational=(1 if signal.search(a) else 0)+(1 if signal.search(b) else 0)
+            pair_score=si+sj+relational*0.8-min(1.2,overlap)
+            # 너무 멀리 떨어진 subsection 조합보다 로컬 인접 사실을 선호한다.
+            pair_score-=min(1.0,abs(j0-i0)*0.08)
+            row=(pair_score,-j0,i0,a,b)
+            if best is None or row>best: best=row
+    return (best[3],best[4]) if best else None
+
 def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id):
     """
     T2 전용 selector.
@@ -1793,15 +1885,16 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
         atomic_facts=_t2_atomic_facts(a,page_text)
 
         support=None
-        if len(atomic_facts)>=2:
-            # Python이 동일 local item 안의 서로 다른 두 사실을 직접 고른다.
-            a["reasoning_base_fact"]=atomic_facts[0]
+        _core_pair=_t2_choose_fact_pair(a,atomic_facts)
+        if _core_pair:
+            # R32: 첫 두 줄이 아니라 local item 전체에서 관계형으로 쓸 수 있는 두 사실을 고른다.
+            a["reasoning_base_fact"]=_core_pair[0]
             support=copy.deepcopy(a)
             support["topic"]=f"{_norm_anchor_text(a.get('topic','')).strip()} · 연결사실"
-            support["answer"]=atomic_facts[1]
-            support["evidence"]=atomic_facts[1]
+            support["answer"]=_core_pair[1]
+            support["evidence"]=_core_pair[1]
             support["derived_support"]=True
-            support_quality={"ok":True,"score":3.5,"reason":"atomic_two_fact_ready","action":"keep",
+            support_quality={"ok":True,"score":4.2,"reason":"atomic_best_pair_ready","action":"keep",
                              "atomic_fact_count":len(atomic_facts)}
         else:
             # 기존 support 추출은 보조 경로로만 사용한다.
@@ -1822,18 +1915,35 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
 
         support["support_quality"]=copy.deepcopy(support_quality)
 
-        contrast_anchor=_two_point_contrast_anchor(a,anchors)
+        contrast_anchor=None
+        contrast_facts=None
+        for _ca in _two_point_contrast_anchors(a,anchors):
+            _ck=(str(_ca.get("source_name","")),int(_ca.get("page_no",0) or 0))
+            _cpage=raw_page_map.get(_ck) or page_map.get(_ck,"")
+            _clocal=_t2_local_item_segment(_ca,_cpage,anchors)
+            _cfacts=_t2_atomic_facts(_ca,_clocal)
+            _cpair=_t2_choose_fact_pair(_ca,_cfacts)
+            if not _cpair:
+                # 같은 local block 안에서만 보조 사실을 추출한다. 다른 페이지/개념으로 확장하지 않는다.
+                _csup=_make_two_point_support_anchor(_ca,_clocal)
+                _base=_norm_anchor_text((_cfacts[0] if _cfacts else _ca.get("evidence",""))).strip()
+                _extra=_norm_anchor_text((_csup or {}).get("answer","")).strip()
+                _cpair=(_base,_extra) if _base and _extra and _topic_core(_base)!=_topic_core(_extra) else None
+            if not _cpair:
+                continue
+            _trial=_t2_reasoning_spec(a,support,_ca,list(_cpair),rng)
+            if _trial:
+                contrast_anchor=copy.deepcopy(_ca)
+                contrast_facts=list(_cpair)
+                reasoning_spec=_trial
+                break
         if not contrast_anchor:
-            pd.setdefault("two_point_no_contrast_reject",0)
-            pd["two_point_no_contrast_reject"]+=1
+            pd.setdefault("two_point_no_contrast_pair_reject",0)
+            pd["two_point_no_contrast_pair_reject"]+=1
             continue
         support["contrast_anchor"]=copy.deepcopy(contrast_anchor)
-
-        reasoning_spec=_t2_reasoning_spec(a,support,contrast_anchor,rng)
-        if not reasoning_spec:
-            pd.setdefault("two_point_reasoning_spec_reject",0)
-            pd["two_point_reasoning_spec_reject"]+=1
-            continue
+        support["contrast_facts"]=copy.deepcopy(contrast_facts)
+        support["reasoning_spec"]=copy.deepcopy(reasoning_spec)
         support["reasoning_spec"]=copy.deepcopy(reasoning_spec)
 
         try:
@@ -1940,16 +2050,16 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
 
     relation_meta={
         "master_concept":_norm_anchor_text(core_anchor.get("topic","")),
-        "relation":"동일 개념에 속하는 두 사실의 일관성을 판단한 뒤, 섞인 오답 사실을 원자료 근거로 수정",
+        "relation":"서로 다른 두 source item의 사실쌍을 비교해 일관된 사례를 판단한 뒤, 다른 사례의 ②를 그 사례의 ①과 일관되도록 수정",
         "thinking_types":["자료비교","관계판단","오류수정"],
-        "exam_skeleton":"익명 사례 ㉠/㉡ 비교 → 일관된 사례 선택 → 다른 사례의 혼합 오류 수정",
+        "exam_skeleton":"익명 사례 ㉠/㉡의 ①·② 관계 비교 → 일관된 사례 선택 → 다른 사례의 ② 수정",
         "scoring_plan":[
             {"points":1,"action":"㉠/㉡ 중 내부적으로 일관된 사례 판단","answer":_correct_option},
-            {"points":1,"action":"오답 사례의 섞인 사실 수정","answer":_norm_anchor_text((_reasoning_spec.get("correction_contract") or {}).get("expected_replacement_fact", bundle[1].get("answer",""))).strip()},
+            {"points":1,"action":"오답 사례의 ② 수정","answer":_norm_anchor_text((_reasoning_spec.get("correction_contract") or {}).get("expected_replacement_fact", bundle[1].get("answer",""))).strip()},
         ],
         "material_limits":_compact_material_limits(2),
         "natural_unit_score":None,
-        "two_point_label_policy":"REASONING-MATRIX: 개념명 회상이 아니라 두 source fact의 조합 일관성을 판단하고 혼합 오류를 수정한다.",
+        "two_point_label_policy":"PAIRED-SLOT: 두 source item의 사실쌍 관계를 판단하고, 선택하지 않은 사례의 ②를 그 사례의 ①에 맞게 수정한다.",
         "reasoning_spec":_reasoning_spec,
         "contrast_context":_norm_anchor_text(_contrast_anchor.get("evidence","")).strip(),
         "contrast_topic":_norm_anchor_text(_contrast_anchor.get("topic","")).strip(),
@@ -1965,12 +2075,12 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             "breakdown":core_anchor.get("core_exam_breakdown",{}),
         }],
         "quality_directive":(
-            "2점은 REASONING-MATRIX 구조다. 첫 1점은 개념명 회상이 아니라 ㉠/㉡ 두 익명 사례 중 "
-            "base_fact와 linked_fact가 함께 성립하는 사례를 판단하게 한다. 다른 사례에는 같은 base_fact와 "
-            "sibling의 distractor_fact가 섞여 있어야 한다. 둘째 1점은 첫 판단을 사용해 오답 사례의 섞인 사실을 "
-            "linked_fact에 맞게 수정하게 한다. 세 source fact는 원문을 그대로 복사하지 말고 의미를 보존해 재표현한다. "
-            "hidden core/contrast 개념명은 passage, conditions, tasks에 직접 쓰지 않는다. "
-            "첫 답과 둘째 답을 각각 다른 문장에서 찾아 옮길 수 있게 만들지 않는다."
+            "2점은 PAIRED-SLOT 구조다. 첫 1점은 개념명 회상이 아니라 ㉠/㉡ 두 익명 사례에서 ①과 ②가 "
+            "같은 source item에 속하는지를 판단하게 한다. 정답 사례는 core_base_fact+core_link_fact, "
+            "오답 사례는 contrast_base_fact+core_link_fact로 Python이 조립한다. 둘째 1점은 첫 판단을 사용해 "
+            "선택하지 않은 사례의 ②를 contrast_link_fact에 맞게 수정한다. contrast_link_fact는 화면 자료에 "
+            "미리 제시하지 않는다. 네 source fact는 원문을 그대로 복사하지 말고 의미를 보존해 재표현한다. "
+            "hidden core/contrast 개념명은 passage, conditions, tasks에 직접 쓰지 않는다."
         ),
         "selector_reason":f"Python T2 reasoning-matrix score={score:.2f}",
         "relation_score":round(score,2),
@@ -3093,11 +3203,12 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                     }:
                         _spec=relation_meta.get("reasoning_spec") or {}
                         _cc=str(relation_meta.get("contrast_context","") or "").strip()
-                        if _spec.get("mode")=="fact_pair_consistency":
+                        if _spec.get("mode")=="paired_fact_slot_consistency":
                             ctx=(ctx
-                                 +"\n[중심 사실]\n"+str(_spec.get("base_fact",""))
-                                 +"\n[연결 사실]\n"+str(_spec.get("linked_fact",""))
-                                 +"\n[비교용 sibling 사실]\n"+str(_spec.get("distractor_fact",""))).strip()
+                                 +"\n[중심 item 사실1]\n"+str(_spec.get("core_base_fact",""))
+                                 +"\n[중심 item 사실2]\n"+str(_spec.get("core_link_fact",""))
+                                 +"\n[비교 item 사실1]\n"+str(_spec.get("contrast_base_fact",""))
+                                 +"\n[비교 item 사실2]\n"+str(_spec.get("contrast_link_fact",""))).strip()
                         elif _cc:
                             ctx=(ctx+"\n[비교용 비정답 원문]\n"+_cc).strip()
                     cand=None
