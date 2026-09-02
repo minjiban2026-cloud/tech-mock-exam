@@ -23,7 +23,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R16.1-20260901")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R17-20260901")
 
 def secret(name, default=""):
     try:
@@ -139,6 +139,8 @@ def _show_score_pipeline_diagnostic(pd):
         "실제 지엽성 강함 탈락":pd.get("support_only_reject",0),
         "SUPPORT-only fallback":pd.get("support_only_fallback",0),
         "2점 명칭+명칭 탈락":pd.get("two_point_label_reject",0),
+        "2점 관계성 부족 탈락":pd.get("two_point_relation_reject",0),
+        "anchor 내부모순 탈락":pd.get("anchor_contradiction_reject",0),
         "불완전 anchor 탈락":pd.get("anchor_fragment_reject",0),
         "불완전 bundle 탈락":pd.get("bundle_fragment_reject",0),
         "최종 candidate":pd.get("candidate_accept",0),
@@ -151,6 +153,8 @@ def _show_score_pipeline_diagnostic(pd):
     labels=[
         ("support_only","SUPPORT/지엽성 판정 예시"),
         ("two_point_label","명칭+명칭 탈락 예시"),
+        ("two_point_relation","2점 관계성 부족 탈락 예시"),
+        ("anchor_contradiction","anchor 내부모순 탈락 예시"),
         ("anchor_fragment","불완전 anchor 탈락 예시"),
         ("bundle_fragment","불완전 bundle 탈락 예시"),
         ("same_source","다른 출처 탈락 예시"),
@@ -348,7 +352,7 @@ with tabs[2]:
                 # R14D1: 실제 후보 점수 진단. PDF에는 넣지 않고 화면에서만 확인한다.
                 _sd=q.get("_score_diagnostic",{})
                 if _sd:
-                    with st.expander("🔎 R14 핵심도 점수 진단",expanded=True):
+                    with st.expander("🔎 핵심도·관계성 점수 진단",expanded=True):
                         _sel=_sd.get("selected",{})
                         st.caption(
                             f"선택 순위: TOP {_sd.get('selected_rank','-')} · "
@@ -397,7 +401,7 @@ with tabs[2]:
                             st.caption(" → ".join(_row.get("topics",[])))
 
                         st.caption(
-                            "이 화면은 진단 전용입니다. R14의 후보 필터·가중치·랜덤 선택은 바꾸지 않았습니다."
+                            "이 화면은 진단 전용입니다. 현재 실행 중인 후보 점수·관계성 진단을 표시합니다."
                         )
 
         spdf=export_pdf(sample,False)

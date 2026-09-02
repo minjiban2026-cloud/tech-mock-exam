@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-ANCHOR-NORMALIZE-R16.1-20260901"
+BUILDER_API_VERSION = "SAMPLE6-RELATION-INTEGRITY-R17-20260901"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -102,6 +102,18 @@ def _strip_anchor_noise(text):
     t=re.sub(r"\s+"," ",t).strip()
     return t
 
+
+def _anchor_internal_contradiction_reason(a):
+    topic=_strip_anchor_noise(a.get("topic",""))
+    answer=_strip_anchor_noise(a.get("answer",""))
+    text=f"{topic} {answer}"
+
+    if re.search(r"면심입방격자\s*\(\s*BCC\s*\)", text, re.I):
+        return "fcc_bcc_name_mismatch"
+    if re.search(r"체심입방격자\s*\(\s*FCC\s*\)", text, re.I):
+        return "bcc_fcc_name_mismatch"
+    return ""
+
 def _anchor_fragment_reason(a):
     """
     R16.1 conservative fragment detector.
@@ -166,6 +178,8 @@ def _independent_scoring_targets(chosen):
 
 def _anchor_ok(a):
     if _anchor_fragment_reason(a):
+        return False
+    if _anchor_internal_contradiction_reason(a):
         return False
     return _anchor_quality_reason(a)==""
 def _near_duplicate_anchor(a,b):
@@ -741,6 +755,27 @@ def _relation_directive(pattern_id, chosen):
     )
 
 
+
+def _two_point_relation_integrity(chosen):
+    if len(chosen)!=2:
+        return True, {}
+    natural=float(_natural_unit_score(chosen))
+    a,b=chosen[0],chosen[1]
+    pair=float(_pair_relation_score(a,b))
+    cross,shared=_cross_reference_strength(a,b)
+    ok = not (
+        natural < 2.0
+        and pair < 5.0
+        and int(cross) < 1
+        and len(shared) < 2
+    )
+    return ok, {
+        "natural_unit":round(natural,3),
+        "pair_relation":round(pair,3),
+        "cross_reference":int(cross),
+        "shared_terms":list(shared)[:8],
+    }
+
 def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics, rng, pattern_id=""):
     con=sqlite3.connect(db_path)
     con.row_factory=sqlite3.Row
@@ -789,14 +824,18 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "support_only_reject":0,
         "support_only_fallback":0,
         "two_point_label_reject":0,
+        "two_point_relation_reject":0,
         "anchor_fragment_reject":0,
+        "anchor_contradiction_reject":0,
         "anchor_normalization_policy":"strip_bullets_then_validate",
         "bundle_fragment_reject":0,
         "candidate_accept":0,
         "reject_examples":{
             "support_only":[],
             "two_point_label":[],
+            "two_point_relation":[],
             "anchor_fragment":[],
+            "anchor_contradiction":[],
             "bundle_fragment":[],
             "same_source":[],
             "page_distance":[],
@@ -819,6 +858,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             continue
         _pd["primary_source_pass"]+=1
         if not _anchor_ok(a):
+            _cr=_anchor_internal_contradiction_reason(a)
+            if _cr:
+                _pd["anchor_contradiction_reject"]+=1
+                if len(_pd["reject_examples"]["anchor_contradiction"])<5:
+                    _pd["reject_examples"]["anchor_contradiction"].append({
+                        "topic":str(a.get("topic","")),
+                        "answer":str(a.get("answer","")),
+                        "reason":_cr,
+                    })
             _fr=_anchor_fragment_reason(a)
             if _fr:
                 _pd["anchor_fragment_reject"]+=1
@@ -940,13 +988,24 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 chosen=ordered
                 graph_score += min(5.0,chain_score*0.22) + min(4.0,natural_score)
             else:
-                # 2점은 너무 이질적인 두 anchor만 제외
+                # 2점은 4점과 같은 natural-unit 임계값을 쓰지 않는다.
+                # 여러 관계 신호가 모두 약한 조합만 제거하여 억지 연결만 차단한다.
                 if natural_score < 0.0:
                     _pd["natural_unit_reject"]+=1
                     if len(_pd["reject_examples"]["natural_unit"])<5:
                         _pd["reject_examples"]["natural_unit"].append({
                             "topics":[str(x.get("topic","")) for x in chosen],
                             "score":round(float(natural_score),2),
+                        })
+                    continue
+                _rel_ok,_rel_diag=_two_point_relation_integrity(chosen)
+                if not _rel_ok:
+                    _pd["two_point_relation_reject"]+=1
+                    if len(_pd["reject_examples"]["two_point_relation"])<5:
+                        _pd["reject_examples"]["two_point_relation"].append({
+                            "topics":[str(x.get("topic","")) for x in chosen],
+                            "answers":[str(x.get("answer","")) for x in chosen],
+                            **_rel_diag,
                         })
                     continue
                 graph_score += min(2.0,max(0.0,natural_score*0.4))
@@ -1026,8 +1085,8 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 - (4.0 if support_only else 0.0)
             )
             if str(pattern_id).upper().startswith("T4"):
-                # R12에서 안정된 4점 선택 로직은 변경하지 않는다.
-                score_total += natural*1.35
+                # R17: 임계값은 유지하고, 자연스러운 개념 묶음이 순위에서 조금 더 우선되게 한다.
+                score_total += natural*1.65
             else:
                 score_total += max(-1.5,min(2.0,natural*0.55))
                 label_adjust,label_reject=_two_point_bundle_penalty(chosen)
