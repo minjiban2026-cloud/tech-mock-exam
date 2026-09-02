@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "GLOBAL-T2-PAIRED-SLOT-CONTRACT-R32-20260902"
+BUILDER_API_VERSION = "GLOBAL-T2-UNIVERSE-GATE-R33-20260902"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -1617,6 +1617,29 @@ def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
     if "②" not in tasks[1]:
         errs.append("2점 둘째 요구의 수정 슬롯 ② 미지정")
 
+    # R33: 화면에 실제로 표시된 네 clause 자체도 완결되어야 하고, source를 장구절 복사하면 안 된다.
+    _co=str(spec.get("correct_option","") or "")
+    if all((_a1,_a2,_b1,_b2)):
+        _source_map = ({
+            "㉠①":spec.get("core_base_fact",""), "㉠②":spec.get("core_link_fact",""),
+            "㉡①":spec.get("contrast_base_fact",""), "㉡②":spec.get("core_link_fact",""),
+        } if _co=="㉠" else {
+            "㉠①":spec.get("contrast_base_fact",""), "㉠②":spec.get("core_link_fact",""),
+            "㉡①":spec.get("core_base_fact",""), "㉡②":spec.get("core_link_fact",""),
+        })
+        for _name,_clause in (("㉠①",_a1),("㉠②",_a2),("㉡①",_b1),("㉡②",_b2)):
+            _why=_t2_complete_fact_reason(_clause)
+            if _why:
+                errs.append(f"2점 {_name} 표시문구 불완전: {_why}")
+            _src=_source_map.get(_name,"")
+            if _src and _t2_clause_copy_score(_clause,_src)>=0.88:
+                errs.append(f"2점 {_name} 원문 장구절 직접 복사")
+
+    # T2는 실제 시각자료를 사용하지 않으므로 Writer가 임의로 그림/표/그래프를 만들거나 언급할 수 없다.
+    _t2_visible=" ".join([str(cand.get("intro","") or ""),passage,conditions])
+    if re.search(r"(그림|도식|그래프|사진|아래 표|다음 표|표를 보고|그림을 보고)",_t2_visible):
+        errs.append("2점 실제 자료 없이 시각자료 언급")
+
     # R32 semantic/scoring contract: 수정 대상 슬롯과 채점답이 1:1로 대응해야 한다.
     cc=spec.get("correction_contract") or {}
     expected=_norm_anchor_text(cc.get("expected_replacement_fact","")).strip()
@@ -1626,6 +1649,9 @@ def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
     if not expected or not wrong_fact or wrong_option not in {"㉠","㉡"} or wrong_slot!="②":
         errs.append("2점 오류수정 semantic contract 누락")
     else:
+        _expected_reason=_t2_complete_fact_reason(expected)
+        if _expected_reason:
+            errs.append("2점 수정정답 불완전: "+_expected_reason)
         answers=[_norm_anchor_text(x).strip() for x in (cand.get("answer",[]) or [])]
         if len(answers)<2 or _topic_core(answers[1])!=_topic_core(expected):
             errs.append("2점 수정대상-채점답 불일치")
@@ -1743,13 +1769,20 @@ def _t2_local_item_segment(anchor, page_text, anchors):
         # strong document section boundary
         if re.match(r"^\s*[■▶♥]",lines[j]) or re.match(r"^\s*\d+[\.\)]\s+[가-힣A-Za-z]",lines[j]):
             end=j; break
+        # PDF에서 새 개념 표제가 bullet 한 줄, 설명의 ':'가 다음 줄로 분리되는 경우.
+        # 예: '• 하이빔 공법(HI-BEAM공법)' 다음 줄 ': 하이빔은 ...'
+        _bullet_head=re.sub(r"^\s*[·•●○□-]\s*","",lines[j]).strip()
+        _next_line=lines[j+1].strip() if j+1 < len(lines) else ""
+        if re.match(r"^\s*[·•●○□-]",lines[j]) and len(_bullet_head)<=55 and _next_line.startswith((":","：")):
+            end=j; break
         # 짧은 독립 표제/예제 번호 뒤에 새 설명이 시작되면 현재 항목의 경계로 본다.
         _cur=lines[j].strip()
         _nxt=lines[j+1].strip() if j+1 < len(lines) else ""
-        # "다른용어 : 설명" 형식은 다음 독립 항목의 시작으로 본다.
-        if re.match(r"^[^:：]{2,24}\s*[:：]",_cur):
-            _left=_topic_core(re.split(r"[:：]",_cur,1)[0])
-            if _left and _left not in {ac,tc} and not (ac and ac in _left) and not (tc and tc in _left):
+        # "용어 : 설명"도 실제 sibling anchor가 그 줄의 왼쪽 표제로 시작할 때만 새 항목으로 본다.
+        # ※ 노치 효과 : ... 같은 현재 개념의 보조설명을 잘못 끊지 않는다.
+        if re.match(r"^[^:：]{2,40}\s*[:：]",_cur):
+            _left=_topic_core(re.split(r"[:：]",re.sub(r"^[\s·•○▶□■♥ü\-–—]+","",_cur),1)[0])
+            if _left and any(_left==c for c in siblings):
                 end=j; break
         if (len(_cur)<=24 and (
                 re.match(r"^\(?예제\s*\d+\)?$",_cur)
@@ -1758,47 +1791,77 @@ def _t2_local_item_segment(anchor, page_text, anchors):
                     and _cur not in {"정의","특징","절차","상황","규칙","장점","단점","종류","활용","원리","목적","개념","효과","유형"})
             )):
             end=j; break
-        # any known sibling anchor begins here
-        if any(c and c in lj for c in siblings):
+        # known sibling anchor가 문장 안에 단순 포함된 경우가 아니라 새 항목의 표제로 시작할 때만 경계로 본다.
+        _clean_boundary=re.sub(r"^[\s·•○▶□■♥ü\-–—]+","",lines[j]).strip()
+        _cb_core=_topic_core(_clean_boundary)
+        if any(c and (_cb_core==c or _cb_core.startswith(c+" ") or _cb_core.startswith(c+":") or _cb_core.startswith(c+"：")) for c in siblings):
             end=j; break
     return "\n".join(lines[start:end]).strip()
 
 def _t2_atomic_facts(anchor, local_segment):
     """
-    현재 anchor의 로컬 원문 블록을 2점 추론에 사용할 '원자 사실'로 분해한다.
-    서로 다른 두 source fact가 없으면 그 anchor는 T2 정답원으로 쓰지 않는다.
+    R33 source reflow parser.
+    PDF/서브노트의 시각적 줄바꿈을 사실 경계로 오인하지 않는다.
+    bullet/번호가 새 사실의 시작이고, 그 다음 줄은 새 bullet/heading이 나오기 전까지 이어 붙인다.
     """
-    # 줄 경계가 곧 항목 경계이므로 여기서는 _norm_anchor_text로 개행을 지우지 않는다.
     raw=str(local_segment or "").replace("\x01"," ").replace("\u200b"," ")
-    raw="\n".join(re.sub(r"\s+"," ",x).strip() for x in raw.splitlines() if x.strip())
     ans=_norm_anchor_text(anchor.get("answer","")).strip()
     topic=_norm_anchor_text(anchor.get("topic","")).strip()
 
-    # 줄/문장/세미콜론 기준으로만 분해하며 새 사실은 생성하지 않는다.
+    physical=[re.sub(r"\s+"," ",x).strip() for x in raw.splitlines() if x.strip()]
+    logical=[]
+    current=""
+
+    def is_bullet(line):
+        return bool(re.match(r"^(?:[·•●○■▶□♥]|[-–—]\s+|[①-⑳]|\(?\d{1,2}\)?[.)]\s+|[가-하][.)]\s+)",line))
+    def is_meta(line):
+        return bool(re.search(r"(?:Made By|기술임용시험|^-\s*\d+\s*-$|^\d+\s*$)",line,re.I))
+    def headingish(line):
+        z=re.sub(r"^[\s■▶●♥□·•○ü\-–—]+","",line).strip()
+        if z in {"정의","특징","절차","상황","규칙","장점","단점","종류","활용","원리","목적","개념","시험목적","실험순서","관련지식","개요"}:
+            return True
+        if len(z)<=24 and not re.search(r"[.!?:：;/]",z) and not re.search(r"(한다|된다|있다|없다|함|됨|사용|이용|발생|변화|증가|감소|생성|산출|작용|가능|필요)",z):
+            # answer/topic 자체 또는 'OO의 특성' 같은 짧은 소제목
+            return bool(z in {ans,topic} or re.search(r"(의\s*)?(특성|특징|종류|구성|원리|절차|장단점|장점|단점|정의)$",z))
+        return False
+
+    for line in physical:
+        if is_meta(line):
+            continue
+        if is_bullet(line) or headingish(line):
+            if current:
+                logical.append(current.strip())
+            current=line
+        else:
+            if current:
+                # PDF soft-wrap continuation: 공백 하나로 이어 붙인다.
+                _prev=current.rstrip(); _next=line.lstrip()
+                _last=(re.findall(r"([가-힣]+)$",_prev) or [""])[-1]
+                _sep="" if len(_last)==1 and _next[:1] and re.match(r"[가-힣]",_next[:1]) else " "
+                current=(_prev+_sep+_next).strip()
+            else:
+                current=line
+    if current:
+        logical.append(current.strip())
+
     chunks=[]
-    for line in raw.splitlines():
-        line=re.sub(r"^[\s■▶●♥□·•○ü\-]+","",line).strip()
-        if not line:
+    for line in logical:
+        line=re.sub(r"^[\s■▶●♥□·•○ü\-–—]+","",line).strip()
+        if not line or headingish(line):
             continue
-        if line in {"정의","특징","절차","상황","규칙","장점","단점","종류","활용","원리","목적","개념",
-                    "시험목적","실험순서","관련지식","개요"}:
-            continue
-        parts=re.split(r"(?<=[.!?])\s+|;\s*|\s+-\s+|(?=①|②|③|④|⑤|⑥|⑦)",line)
+        parts=re.split(r"(?<=[.!?])\s+|;\s*|(?=※)|(?=①|②|③|④|⑤|⑥|⑦)",line)
         for part in parts:
-            part=part.strip(" -")
+            part=part.strip(" -※")
             if not part:
                 continue
-            # leading concept label removal
             for label in (ans,topic):
                 if label and part.startswith(label):
                     part=part[len(label):].lstrip(" :：-_").strip()
             part=re.sub(r"^(?:정의|특징|목적|원리)\s*[-:：]?\s*","",part).strip()
-            if 12<=len(part)<=180:
+            if 12<=len(part)<=220:
                 chunks.append(part)
 
-    # Normalize/dedupe and remove obvious document metadata.
-    facts=[]
-    seen=[]
+    facts=[]; seen=[]
     for c in chunks:
         if re.search(r"(_최|★\d|기출|서브노트|^\d+[AB]\()",c):
             c=re.sub(r"_최.*?(?=정의|특징|-|$)","",c)
@@ -1810,12 +1873,8 @@ def _t2_atomic_facts(anchor, local_segment):
             continue
         if any(cc==x or (len(cc)>=18 and (cc in x or x in cc)) for x in seen):
             continue
-        seen.append(cc)
-        facts.append(c)
-
-    # R28: 거리순서를 보존한다. 뒤쪽의 다른 subsection 사실이 점수 때문에
-    # 앞으로 튀어 올라오는 것을 막아 현재 anchor에 가장 가까운 두 사실을 사용한다.
-    return facts[:8]
+        seen.append(cc); facts.append(c)
+    return facts[:10]
 
 
 def _t2_choose_fact_pair(anchor, facts):
@@ -1864,6 +1923,105 @@ def _t2_choose_fact_pair(anchor, facts):
             if best is None or row>best: best=row
     return (best[3],best[4]) if best else None
 
+
+
+def _t2_complete_fact_reason(text):
+    """R33: 모든 T2 source fact에 공통 적용하는 완결성 gate."""
+    x=_norm_anchor_text(text).strip()
+    c=re.sub(r"[^가-힣A-Za-z0-9]","",x)
+    if len(c)<14:
+        return "사실 문구가 너무 짧음"
+    if len(x)>180:
+        return "사실 문구가 지나치게 김"
+    if re.search(r"[\ue000-\uf8ff]",x):
+        return "수식/PDF 깨짐 문자가 포함됨"
+    # 앞 문맥이 없으면 뜻이 성립하지 않는 접속/대용 표현, 잘린 서술어를 차단한다.
+    if re.match(r"^(?:및|또는|그리고|그러나|따라서|그러므로|이때|이 경우|이를|이것을|그것을|내거나|하거나|하여|해서|하며|하면서|되며|있으며|없으며|때문에|따라|반면에|한편)",x):
+        return "앞 문맥에 의존하는 부분 문구"
+    if re.search(r"(?:,|;|:|·|/|그리고|또는|및)\s*$",x):
+        return "끝이 열린 부분 문구"
+    # 조사·관형형·연결형으로 끝나는 조각은 독립 채점답/자료문구로 쓰지 않는다.
+    if re.search(r"(?:의|을|를|이|가|은|는|와|과|및|또는|으로|로|에|에서|위한|통한|하는|되는|있는|없는|독특한|같은|따른|관한|때|경우)\s*[.!?]?$",x):
+        return "완결되지 않은 조사/관형형 종결"
+    # 충분한 길이와 동작/관계 표현이 있으면 완결 명사구도 허용한다(예: '... 아이디어를 생성').
+    relational=bool(re.search(r"(한다|된다|이다|있다|없다|함|됨|생성|산출|발휘|도움|분석|판단|선정|발견|비교|사용|이용|적용|촉진|억제|향상|증가|감소|변화|작용|해결|제시|기록|연결|분류|평가|표현|시각화|반복|예상|조사|생산|구성|유지|구별|설명|목적|원리|특징|장점|단점|방법|기법|과정|현상|방식|구조|상태|관계|조건|기준|단계|활동|기능)",x))
+    if not relational and len(c)<24:
+        return "독립 사실로서 정보량 부족"
+    return ""
+
+def _t2_char_features(text,n=4):
+    c=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(text)).lower()
+    if len(c)<n:
+        return {c} if c else set()
+    return {c[i:i+n] for i in range(len(c)-n+1)}
+
+def _t2_fact_discrimination(fact, own_anchor, anchors):
+    """R33: ①이 여러 개념에 두루 적용되는 일반론인지 전역 anchor universe에서 추정한다."""
+    ff=_t2_char_features(fact,4)
+    if len(ff)<5:
+        return {"ok":False,"reason":"식별 특징 부족","max_other":1.0,"unique_ratio":0.0}
+    own_key=(_topic_core(own_anchor.get("answer","")),str(own_anchor.get("source_name","")),int(own_anchor.get("page_no",0) or 0))
+    other_sets=[]
+    feature_df={g:0 for g in ff}
+    for b in anchors:
+        key=(_topic_core(b.get("answer","")),str(b.get("source_name","")),int(b.get("page_no",0) or 0))
+        if key==own_key:
+            continue
+        bt=_t2_char_features(" ".join(map(str,[b.get("topic",""),b.get("answer",""),b.get("evidence","")])),4)
+        if not bt:
+            continue
+        inter=len(ff & bt)
+        union=len(ff | bt) or 1
+        sim=inter/union
+        other_sets.append(sim)
+        for g in ff & bt:
+            feature_df[g]+=1
+    max_other=max(other_sets) if other_sets else 0.0
+    unique=sum(1 for g,v in feature_df.items() if v==0)/max(1,len(ff))
+    # 다른 anchor와 문구 특징이 지나치게 겹치거나, 고유 특징이 거의 없으면 ①로 쓰지 않는다.
+    ok=(max_other<0.48 and unique>=0.28)
+    reason="" if ok else ("다른 anchor에도 적용 가능한 일반적 사실" if max_other>=0.48 else "개념 식별 고유단서 부족")
+    return {"ok":ok,"reason":reason,"max_other":round(max_other,3),"unique_ratio":round(unique,3)}
+
+def _t2_fact_scope_compatible(anchor, fact):
+    """R33: 상위 기법명과 특정 하위 절차/부분만 억지로 연결되는 범위 혼합을 보수적으로 차단."""
+    ans=_norm_anchor_text(anchor.get("answer","")).strip()
+    f=_norm_anchor_text(fact).strip()
+    # source 자체가 'A·B', 'A/B', 'A 및 B' 같은 복합 상위 명칭인데 fact가 그중 한 하위명만 명시하면 범위가 흔들릴 수 있다.
+    parts=[z.strip() for z in re.split(r"[·/&]|\s+및\s+",ans) if z.strip()]
+    if len(parts)>=2:
+        hits=sum(1 for z in parts if len(re.sub(r"\W","",z))>=2 and re.sub(r"\W","",z).lower() in re.sub(r"\W","",f).lower())
+        if hits==1:
+            return False,"복합 상위개념과 단일 하위범위 혼합"
+    return True,""
+
+def _t2_pair_global_quality(anchor, pair, anchors):
+    """R33 DB-universe 공통 gate: 완결성·식별력·범위 일관성을 한 번에 평가."""
+    if not pair or len(pair)!=2:
+        return {"ok":False,"reason":"사실쌍 없음"}
+    a,b=map(lambda x:_norm_anchor_text(x).strip(),pair)
+    for idx,x in enumerate((a,b),1):
+        why=_t2_complete_fact_reason(x)
+        if why:
+            return {"ok":False,"reason":f"사실{idx} {why}"}
+        ok,why2=_t2_fact_scope_compatible(anchor,x)
+        if not ok:
+            return {"ok":False,"reason":f"사실{idx} {why2}"}
+    disc=_t2_fact_discrimination(a,anchor,anchors)
+    if not disc.get("ok"):
+        return {"ok":False,"reason":"사실1 "+disc.get("reason","식별력 부족"),"discrimination":disc}
+    return {"ok":True,"reason":"global_t2_universe_gate_pass","discrimination":disc}
+
+def _t2_clause_copy_score(clause, source_fact):
+    a=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(clause)).lower()
+    b=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(source_fact)).lower()
+    if not a or not b:
+        return 1.0
+    seq=SequenceMatcher(None,a,b).ratio()
+    fa=_t2_char_features(a,4); fb=_t2_char_features(b,4)
+    sh=len(fa&fb)/max(1,min(len(fa),len(fb)))
+    return max(seq,sh)
+
 def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id):
     """
     T2 전용 selector.
@@ -1886,9 +2044,11 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
 
         support=None
         _core_pair=_t2_choose_fact_pair(a,atomic_facts)
-        if _core_pair:
-            # R32: 첫 두 줄이 아니라 local item 전체에서 관계형으로 쓸 수 있는 두 사실을 고른다.
+        _core_quality=_t2_pair_global_quality(a,_core_pair,anchors) if _core_pair else {"ok":False,"reason":"사실쌍 없음"}
+        if _core_pair and _core_quality.get("ok"):
+            # R33: local pair가 전역 완결성·식별력·범위 gate를 통과한 경우만 사용한다.
             a["reasoning_base_fact"]=_core_pair[0]
+            a["t2_global_quality"]=copy.deepcopy(_core_quality)
             support=copy.deepcopy(a)
             support["topic"]=f"{_norm_anchor_text(a.get('topic','')).strip()} · 연결사실"
             support["answer"]=_core_pair[1]
@@ -1897,10 +2057,9 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             support_quality={"ok":True,"score":4.2,"reason":"atomic_best_pair_ready","action":"keep",
                              "atomic_fact_count":len(atomic_facts)}
         else:
-            # 기존 support 추출은 보조 경로로만 사용한다.
-            support=_make_two_point_support_anchor(a,page_text)
-            if not support or not _two_point_support_ok(support.get("answer","")):
-                continue
+            pd.setdefault("two_point_global_pair_reject",0)
+            pd["two_point_global_pair_reject"]+=1
+            continue
             if _topic_core(support.get("answer",""))==_topic_core(a.get("answer","")):
                 continue
             _refined=_two_point_refine_support(a,support.get("answer",""))
@@ -1923,13 +2082,8 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             _clocal=_t2_local_item_segment(_ca,_cpage,anchors)
             _cfacts=_t2_atomic_facts(_ca,_clocal)
             _cpair=_t2_choose_fact_pair(_ca,_cfacts)
-            if not _cpair:
-                # 같은 local block 안에서만 보조 사실을 추출한다. 다른 페이지/개념으로 확장하지 않는다.
-                _csup=_make_two_point_support_anchor(_ca,_clocal)
-                _base=_norm_anchor_text((_cfacts[0] if _cfacts else _ca.get("evidence",""))).strip()
-                _extra=_norm_anchor_text((_csup or {}).get("answer","")).strip()
-                _cpair=(_base,_extra) if _base and _extra and _topic_core(_base)!=_topic_core(_extra) else None
-            if not _cpair:
+            _cquality=_t2_pair_global_quality(_ca,_cpair,anchors) if _cpair else {"ok":False,"reason":"사실쌍 없음"}
+            if not _cpair or not _cquality.get("ok"):
                 continue
             _trial=_t2_reasoning_spec(a,support,_ca,list(_cpair),rng)
             if _trial:
@@ -2971,6 +3125,41 @@ def _source_neighborhood_conflict(bundle, used_source_pages):
     return False
 
 
+def _rebalance_t2_domains_by_capability(db_path, plan, domains, rng):
+    """R33: DB 전체 capability scan 후 paired-slot T2에 부적합한 영역을 4점 슬롯과 교환한다.
+    영역을 제외하지 않고 배점 구조만 맞바꾸므로 원래 blueprint의 영역 구성은 보존한다.
+    """
+    capability={}
+    diagnostics={}
+    for d in domains:
+        try:
+            b,m=_smart_relation_bundle(db_path,d,2,set(),set(),random.Random(91731),"T2_REL")
+            capability[d]=bool(b)
+            pd=(m or {}).get("score_pipeline_diagnostic",{})
+            diagnostics[d]={"capable":bool(b),"candidate_count":int(pd.get("candidate_accept",0) or 0),"reason":pd.get("final_reason","")}
+        except Exception as ex:
+            capability[d]=False
+            diagnostics[d]={"capable":False,"candidate_count":0,"reason":"capability_scan_error:"+str(ex)}
+    bad=[i for i,s in enumerate(plan) if int(s.get("points",0) or 0)==2 and not capability.get(s.get("domain"),False)]
+    used_swap=set()
+    for i in bad:
+        # paired-slot 가능 영역이 배정된 4점 슬롯과 domain을 교환해 전체 영역분포를 보존한다.
+        choices=[j for j,s in enumerate(plan)
+                 if j not in used_swap and int(s.get("points",0) or 0)==4
+                 and capability.get(s.get("domain"),False)]
+        if not choices:
+            continue
+        # 같은 영역의 2점 중복을 줄이는 방향으로 선택
+        two_domains=[x.get("domain") for k,x in enumerate(plan) if k!=i and int(x.get("points",0) or 0)==2]
+        choices.sort(key=lambda j:(two_domains.count(plan[j].get("domain")),j))
+        j=choices[0]
+        old2=plan[i].get("domain"); old4=plan[j].get("domain")
+        plan[i]["domain"],plan[j]["domain"]=old4,old2
+        plan[i]["capability_swap_from"]=old2
+        plan[j]["capability_swap_from"]=old4
+        used_swap.add(j)
+    return plan,capability,diagnostics
+
 def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-luna",
                  ai_enabled=True,ai_quality_enabled=True,judge_model=None,seed=None,
                  previous_questions=None,shared_answers=None,tuning_mode=False):
@@ -2978,6 +3167,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
     domains=list(domains or DOMAINS)
     scores=score_pattern(section,count,points)
     plan=blueprint(section,scores,domains,rng)
+    plan,_t2_capability,_t2_capability_diagnostics=_rebalance_t2_domains_by_capability(db_path,plan,domains,rng)
     style=official_style_profile(db_path)
     judge_model=judge_model or model
     writer_active=bool(ai_enabled and api_key)
