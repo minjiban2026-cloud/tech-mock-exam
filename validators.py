@@ -216,6 +216,45 @@ def _answer_distance_errors(q):
                 break
     return e
 
+
+def _subpoint_scope_errors(q):
+    """
+    부분점수와 task가 요구하는 채점행동 수가 맞는지 확인한다.
+    특히 1점 task에서 '정답 + 이유/근거/추가 결과'를 동시에 요구하는 것을 차단한다.
+    """
+    e=[]
+    sp=list(q.get("subpoints",[]) or [])
+    tasks=[str(x or "") for x in (q.get("tasks",[]) or [])]
+
+    reasoning_terms=(
+        "이유","근거","설명","과정","관계","비교","차이","수정",
+        "적용","영향","까닭","왜","도출","해석"
+    )
+    first_action_terms=(
+        "쓰고","적고","제시하고","구하고","계산하고","판단하고",
+        "분류하고","선택하고","수정하고","비교하고"
+    )
+
+    for i,(pt,task) in enumerate(zip(sp,tasks),1):
+        if int(pt)!=1:
+            continue
+        compact=re.sub(r"\s+"," ",task).strip()
+
+        # 가장 문제가 많았던 형태:
+        # "A를 쓰고, B를 설명하시오" / "값을 구하고 원리의 명칭을 쓰시오"
+        chained=any(k in compact for k in first_action_terms)
+        has_reason=any(k in compact for k in reasoning_terms)
+        # 연결 뒤 또 하나의 명시적 답 요구가 있는 경우도 2개 채점행동으로 본다.
+        repeated_answer_action=(
+            compact.count("쓰시오") + compact.count("적으시오")
+            + compact.count("구하시오") + compact.count("설명하시오")
+            + compact.count("제시하시오")
+        ) >= 2
+
+        if (chained and (has_reason or re.search(r"(명칭|용어|값|개념).{0,30}(쓰시오|적으시오|구하시오)",compact))) or repeated_answer_action:
+            e.append(f"1점 소문항 과다요구({i}번 task)")
+    return e
+
 def static_quality_errors(q,require_ai_quality=True):
     e=[]
     if q.get("premise_mode")!="ai_grounded":
@@ -232,6 +271,7 @@ def static_quality_errors(q,require_ai_quality=True):
     e.extend(_four_point_direct_support_errors(q))
     e.extend(_material_length_errors(q))
     e.extend(_independent_fact_listing_errors(q))
+    e.extend(_subpoint_scope_errors(q))
     if pts==4:
         aq=q.get("ai_quality",{}) or {}
         # 최종 A/B: judge 결과가 있으면 judge의 thinking_types 사용.

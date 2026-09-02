@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-ONE-ANCHOR-STABLE-R20-20260902"
+BUILDER_API_VERSION = "SAMPLE6-TASK-SCOPE-R21-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
