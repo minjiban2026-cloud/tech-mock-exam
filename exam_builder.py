@@ -1,7 +1,8 @@
 import copy
-BUILDER_API_VERSION = "FINAL-T2-DECISION-R27-20260902"
+BUILDER_API_VERSION = "GLOBAL-UNIVERSE-R29-20260902"
 
 import random, math, re, sqlite3, itertools
+from difflib import SequenceMatcher
 from formula_templates import generate_formula_question
 from retrieval import related_bundle,bundle_context,official_style_profile,candidate_cluster
 from ai_wrapper import rewrite_bundle,safe_bundle_question
@@ -594,7 +595,7 @@ def _natural_unit_score(chosen):
     score += 0.35 * sum(1 for t in relation_terms if t in blob)
 
     # 같은 기술명/계통명을 공유하는 병렬 개념은 하나의 자연스러운 출제 단위다.
-    # 예: 테브난 등가전압 / 테브난 등가저항, 전기자 철심 / 전기자 권선.
+    # 동일 상위개념 아래의 병렬 하위항목은 자연적 문제단위 점수만으로 과대평가하지 않는다.
     sibling_bonus=0.0
     clean_topics=[_strip_anchor_noise(t) for t in topics]
     first_tokens=[]
@@ -792,9 +793,9 @@ def _four_point_shortcut_penalty(chosen):
     여러 점수를 채우는 후보를 감점한다.
 
     - 2-anchor: 상위범주/하위개념 또는 A의 정의에 B가 그대로 들어가는 경우
-      예) 허용대 ↔ 충만대
+      예) 같은 상위범주의 병렬 하위항목
     - 3-anchor: 하나의 정의가 나머지 둘을 '+' 등으로 그대로 합성하는 경우
-      예) 허용대 : 충만대 + 전도대
+      예) 한 항목이 다른 두 항목의 단순 합성 정의인 경우
 
     단순히 서로의 용어가 근거에 등장한다는 이유만으로는 감점하지 않는다.
     정의·포함·구성 신호가 함께 있어야 한다.
@@ -815,12 +816,12 @@ def _four_point_shortcut_penalty(chosen):
             bool(re.search(r"\s\+\s",raw))
             or bool(re.search(
                 r"(포함|구성|범주|종류|일종|나뉘|구분|묶|전체|하위|상위|"
-                r"채워진\s*허용대|비어\s*있는\s*허용대)",
+                r"정의상\s*포함|단순\s*합성)",
                 raw
             ))
         )
         # 단순한 'A : B' 정의 표기만으로는 감점하지 않는다.
-        # 예: '동소 변태 : 동소체의 변화'는 실제 과정 관계라 4점 문항으로 유효할 수 있다.
+        # 단순한 콜론 표기 자체는 실제 과정/관계 설명일 수도 있으므로 감점 근거로 쓰지 않는다.
         return relation_signal
 
     penalty=0.0
@@ -1179,6 +1180,25 @@ def _two_point_core_target_ok(anchor):
     # 지나치게 긴 목차형 topic은 중심 정답으로 쓰지 않는다.
     if _heading_like(ans) or _heading_like(topic):
         return False
+
+    ev=_norm_anchor_text(anchor.get("evidence","")).strip()
+    if re.search(r"\(예제\s*\d+\)",ev) and (_topic_core(ans) in _topic_core(ev[:max(12,len(ans)+12)])):
+        return False
+    if ev:
+        # Remove leading bullets and the answer/topic label once.
+        body=re.sub(r"^[■▶●♥□·•○\-\s]+","",ev).strip()
+        for label in (ans,topic):
+            if label and body.startswith(label):
+                body=body[len(label):].strip()
+                break
+        body=re.sub(r"^[\s:_\-·]+","",body).strip()
+
+        # Genuine concept evidence normally proceeds with a definition/description.
+        # A container heading often immediately opens ① child-item / another heading instead.
+        if re.match(r"^(?:①|1\)|1\.|[가-힣A-Za-z0-9 ]{2,25}\s*(?:엔진|기술|용어|종류|구성)\s*(?:[-:]|$))",body):
+            if not re.search(r"(정의|의미|란|:|：)",body[:45]):
+                return False
+
     return True
 
 
@@ -1290,7 +1310,7 @@ def _two_point_contrast_text(anchor, page_text, support_text=""):
         if support_comp and (support_comp[:24] in comp or comp[:24] in support_comp):
             continue
         # sibling 정의/절차/상황처럼 비교에 실제 쓸 수 있는 행을 우선
-        structured=bool(re.search(r"[:：]|^\d+\)|^\d+\.|접붙|꺾꽂|브레인|SCAMPER|특징|상황|절차|원리",clean,re.I))
+        structured=bool(re.search(r"[:：]|^\d+\)|^\d+\.|특징|상황|절차|원리|조건|효과|원인|결과|비교",clean,re.I))
         if not structured:
             continue
         # 문서 표지/목차 제외
@@ -1398,16 +1418,318 @@ def _two_point_contrast_anchor(core_anchor, anchors):
             continue
         cb=_anchor_tokens(b.get("topic"),b.get("answer"),b.get("evidence"))
         shared={x for x in ca&cb if len(x)>=2}
-        if gap==1 and not shared:
+
+        core_ans_text=_norm_anchor_text(core_anchor.get("answer","")).strip()
+        series_family=(
+            (bool(re.match(r"^[A-Z]\s*\(",core_ans_text,re.I)) and bool(re.match(r"^[A-Z]\s*\(",ans,re.I)))
+            or (bool(re.match(r"^[①-⑳]",core_ans_text)) and bool(re.match(r"^[①-⑳]",ans)))
+        )
+
+        def _lex(x):
+            return {z for z in re.findall(r"[가-힣A-Za-z]{2,}",_norm_anchor_text(x))
+                    if z not in {"정의","특징","방법","경우","대한","하는","된다","있다","사용","이용"}}
+        cev=_lex(core_anchor.get("evidence",""))
+        bev=_lex(ev)
+        lex_shared=cev & bev
+
+        def _ngrams(x,n=3):
+            c=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(x)).lower()
+            return {c[i:i+n] for i in range(max(0,len(c)-n+1))}
+        core_ng=_ngrams(core_anchor.get("answer","")) | _ngrams(core_anchor.get("topic",""))
+        cand_ng=_ngrams(ans) | _ngrams(b.get("topic",""))
+        ng_shared=core_ng & cand_ng
+        lexical_family=len(ng_shared)>=2
+
+        # R28: same-page alone is insufficient. Require an actual comparison axis.
+        if not (shared or lex_shared or series_family or lexical_family):
             continue
-        score=(5.0 if gap==0 else 1.5)+min(3.0,len(shared)*0.8)
+        if gap==1 and not (len(shared)>=1 or len(lex_shared)>=2 or series_family or len(ng_shared)>=3):
+            continue
+
+        score=(4.0 if gap==0 else 1.5)+min(3.0,len(shared)*0.8)+min(4.0,len(lex_shared)*1.0)
+        score+=min(3.0,len(ng_shared)*0.5)
+        if series_family:
+            score+=5.0
         if re.search(r"(방법|기법|단자|처리|번식|오차|주형|평가|사고|방정식|법칙)",ans+" "+ev):
             score+=1.0
         rows.append((score,b))
     if not rows:
-        return None
+        fallback=[]
+        for b0 in anchors:
+            b=_two_point_core_anchor_clean(b0)
+            if not _two_point_core_target_ok(b):
+                continue
+            if _topic_core(b.get("answer",""))==core_ans or str(b.get("source_name",""))!=src:
+                continue
+            try:
+                gap=abs(int(b.get("page_no",0) or 0)-page)
+            except Exception:
+                continue
+            if gap!=0:
+                continue
+            ev=_norm_anchor_text(b.get("evidence",""))
+            if len(ev)<24 or _heading_like(b.get("answer","")):
+                continue
+            fallback.append((float(b.get("exam_value_score") or 0)+float(b.get("importance_score") or 0),b))
+        if not fallback:
+            return None
+        fallback.sort(key=lambda x:x[0],reverse=True)
+        return copy.deepcopy(fallback[0][1])
     rows.sort(key=lambda x:x[0],reverse=True)
-    return rows[0][1]
+    return copy.deepcopy(rows[0][1])
+
+def _t2_reasoning_spec(core_anchor, support_anchor, contrast_anchor, rng):
+    """
+    2점 문항의 사고 논리를 Python이 먼저 고정한다.
+    AI는 아래 세 사실을 새 지식 없이 재표현만 한다.
+
+    - base_fact: 중심개념의 원자료 사실
+    - linked_fact: 같은 중심개념의 별도 조건/효과/절차
+    - distractor_fact: 같은 출처의 sibling 개념 사실
+
+    정답 사례 = base + linked
+    오답 사례 = base + distractor
+    따라서 첫 1점은 '어느 두 사실이 한 개념 안에서 함께 성립하는가'를 판단하고,
+    둘째 1점은 오답 사례의 섞인 사실을 linked_fact로 수정한다.
+    """
+    base=_norm_anchor_text(core_anchor.get("reasoning_base_fact") or core_anchor.get("evidence","")).strip()
+    linked=_norm_anchor_text(support_anchor.get("answer","")).strip()
+    distractor=_norm_anchor_text(contrast_anchor.get("evidence","")).strip()
+    if not (base and linked and distractor):
+        return None
+
+    def meaningful_tokens(x):
+        stop={"정의","특징","방법","기법","경우","대한","위한","하는","한다","된다","있다",
+              "사용","이용","것","수","및","또는","때","원리","개념"}
+        return {z for z in re.findall(r"[가-힣A-Za-z0-9]{2,}",x) if z not in stop}
+
+    bt=meaningful_tokens(base)
+    lt=meaningful_tokens(linked)
+    dt=meaningful_tokens(distractor)
+    if len(bt)<2 or len(lt)<2 or len(dt)<2:
+        return None
+
+    # linked가 base의 단순 반복이면 추론형 2점이 되지 않는다.
+    link_overlap=len(bt & lt)/max(1,min(len(bt),len(lt)))
+    _bc=re.sub(r"[^가-힣A-Za-z0-9]","",base).lower()
+    _lc=re.sub(r"[^가-힣A-Za-z0-9]","",linked).lower()
+    link_text_similarity=SequenceMatcher(None,_bc,_lc).ratio() if _bc and _lc else 1.0
+    if link_overlap>=0.88 or link_text_similarity>=0.80:
+        return None
+
+    # distractor가 linked와 사실상 같으면 오답 역할을 못 한다.
+    distract_overlap=len(lt & dt)/max(1,min(len(lt),len(dt)))
+    _dc=re.sub(r"[^가-힣A-Za-z0-9]","",distractor).lower()
+    distract_text_similarity=SequenceMatcher(None,_lc,_dc).ratio() if _lc and _dc else 1.0
+    if distract_overlap>=0.78 or distract_text_similarity>=0.82:
+        return None
+
+    correct="㉠" if rng.random()<0.5 else "㉡"
+    wrong="㉡" if correct=="㉠" else "㉠"
+    return {
+        "mode":"fact_pair_consistency",
+        "base_fact":base,
+        "linked_fact":linked,
+        "distractor_fact":distractor,
+        "hidden_core_answer":_norm_anchor_text(core_anchor.get("answer","")).strip(),
+        "hidden_contrast_answer":_norm_anchor_text(contrast_anchor.get("answer","")).strip(),
+        "correct_option":correct,
+        "wrong_option":wrong,
+        "first_scoring_action":"두 익명 사례 중 base_fact와 linked_fact가 함께 성립하는 사례 선택",
+        "second_scoring_action":"오답 사례에 섞인 distractor_fact를 linked_fact의 내용으로 수정",
+        "link_overlap":round(link_overlap,3),
+        "link_text_similarity":round(link_text_similarity,3),
+        "distractor_overlap":round(distract_overlap,3),
+        "distractor_text_similarity":round(distract_text_similarity,3),
+        "minimum_inference_steps":2,
+    }
+
+
+def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
+    """AI Judge 전에 2점 reasoning-matrix 구조가 실제로 지켜졌는지 확인한다."""
+    if int(cand.get("points",0) or 0)!=2:
+        return []
+    spec=(relation_meta or {}).get("reasoning_spec") or {}
+    if spec.get("mode")!="fact_pair_consistency":
+        return ["2점 reasoning_spec 누락"]
+
+    passage=str(cand.get("passage","") or "")
+    conditions=" ".join(map(str,cand.get("conditions",[]) or []))
+    tasks=[str(x) for x in (cand.get("tasks",[]) or [])]
+    material=" ".join([passage,conditions]+tasks)
+    compact=re.sub(r"\s+"," ",material).strip()
+    errs=[]
+
+    # 두 익명 사례가 실제로 있어야 한다.
+    if "㉠" not in material or "㉡" not in material:
+        errs.append("2점 비교 사례 ㉠/㉡ 누락")
+    if len(tasks)!=2:
+        errs.append("2점 작성요구 2개 아님")
+        return errs
+
+    # 첫 요구는 선택/판단, 둘째는 첫 판단을 참조한 수정/적용이어야 한다.
+    if not re.search(r"(고르|선택|판단|적절|타당)",tasks[0]):
+        errs.append("2점 첫 요구가 자료판단이 아님")
+    if not re.search(r"(선택|판단|오류|잘못|수정|바르게|고쳐|근거|적용)",tasks[1]):
+        errs.append("2점 둘째 요구가 첫 판단의 후속 사고가 아님")
+
+    # 숨은 중심개념/비교개념 명칭을 자료에 직접 쓰지 않는다.
+    for key in ("hidden_core_answer","hidden_contrast_answer"):
+        ans=re.sub(r"[^가-힣A-Za-z0-9]","",str(spec.get(key,""))).lower()
+        mc=re.sub(r"[^가-힣A-Za-z0-9]","",compact).lower()
+        if len(ans)>=3 and ans in mc:
+            errs.append("2점 숨은 개념명 직접 노출")
+            break
+
+    # 세 원문 사실의 긴 구절 복사를 모두 차단한다.
+    mc=re.sub(r"[^가-힣A-Za-z0-9]","",compact).lower()
+    for key in ("base_fact","linked_fact","distractor_fact"):
+        raw=re.sub(r"[^가-힣A-Za-z0-9]","",str(spec.get(key,""))).lower()
+        if len(raw)<14:
+            continue
+        n=min(22,max(14,len(raw)//3))
+        for j in range(0,max(1,len(raw)-n+1),max(1,n//3)):
+            frag=raw[j:j+n]
+            if len(frag)>=14 and frag in mc:
+                errs.append("2점 원문 장구절 직접 복사")
+                return list(dict.fromkeys(errs))
+
+    return list(dict.fromkeys(errs))
+
+def _t2_local_item_segment(anchor, page_text, anchors):
+    """
+    같은 페이지 전체가 아니라 현재 anchor 항목의 로컬 블록만 support 추출에 사용한다.
+    다음 sibling anchor가 시작되면 즉시 끊어 8PR→스탠딩웨이브 같은 페이지 횡단 오염을 막는다.
+    """
+    raw=str(page_text or "")
+    if not raw:
+        return raw
+    lines=[x.rstrip() for x in raw.splitlines() if x.strip()]
+    ac=_topic_core(anchor.get("answer",""))
+    tc=_topic_core(anchor.get("topic",""))
+    matches=[]
+    for i,line in enumerate(lines):
+        lc=_topic_core(line)
+        if not ((ac and ac in lc) or (tc and tc in lc)):
+            continue
+        clean=re.sub(r"^[\s·•○▶□■♥ü-]+","",line).strip()
+        cc=_topic_core(clean)
+        score=0.0
+        # explicit "용어 :" or bullet label is the strongest item start
+        if ":" in clean or "：" in clean:
+            left=re.split(r"[:：]",clean,1)[0]
+            if (ac and ac in _topic_core(left)) or (tc and tc in _topic_core(left)):
+                score+=6.0
+        if clean.startswith(str(anchor.get("answer","")).strip()) or clean.startswith(str(anchor.get("topic","")).strip()):
+            score+=4.0
+        if re.match(r"^[■▶♥]",line.strip()):
+            score+=2.0
+        # incidental mention in a long process sentence is weaker
+        if len(clean)>80:
+            score-=1.0
+        matches.append((score,i))
+    if not matches:
+        return raw
+    matches.sort(key=lambda x:(x[0],x[1]),reverse=True)
+    start=matches[0][1]
+
+    # same-page sibling answer/topic tokens
+    siblings=[]
+    for b in anchors:
+        if b is anchor:
+            continue
+        if str(b.get("source_name",""))!=str(anchor.get("source_name","")):
+            continue
+        try:
+            if int(b.get("page_no",0) or 0)!=int(anchor.get("page_no",0) or 0):
+                continue
+        except Exception:
+            continue
+        for v in (b.get("answer",""),b.get("topic","")):
+            c=_topic_core(v)
+            if len(c.replace(" ",""))>=3 and c not in {ac,tc}:
+                siblings.append(c)
+    siblings=list(dict.fromkeys(siblings))
+
+    end=min(len(lines),start+28)
+    for j in range(start+1,min(len(lines),start+28)):
+        lj=_topic_core(lines[j])
+        # strong document section boundary
+        if re.match(r"^\s*[■▶♥]",lines[j]) or re.match(r"^\s*\d+[\.\)]\s+[가-힣A-Za-z]",lines[j]):
+            end=j; break
+        # 짧은 독립 표제/예제 번호 뒤에 새 설명이 시작되면 현재 항목의 경계로 본다.
+        _cur=lines[j].strip()
+        _nxt=lines[j+1].strip() if j+1 < len(lines) else ""
+        # "다른용어 : 설명" 형식은 다음 독립 항목의 시작으로 본다.
+        if re.match(r"^[^:：]{2,24}\s*[:：]",_cur):
+            _left=_topic_core(re.split(r"[:：]",_cur,1)[0])
+            if _left and _left not in {ac,tc} and not (ac and ac in _left) and not (tc and tc in _left):
+                end=j; break
+        if (len(_cur)<=24 and (
+                re.match(r"^\(?예제\s*\d+\)?$",_cur)
+                or re.match(r"^[①-⑳]\s*[^:：]{0,18}$",_cur)
+                or (re.match(r"^[가-힣A-Za-z0-9 ()·/+-]{2,20}$",_cur) and _nxt.startswith("-")
+                    and _cur not in {"정의","특징","절차","상황","규칙","장점","단점","종류","활용","원리","목적","개념","효과","유형"})
+            )):
+            end=j; break
+        # any known sibling anchor begins here
+        if any(c and c in lj for c in siblings):
+            end=j; break
+    return "\n".join(lines[start:end]).strip()
+
+def _t2_atomic_facts(anchor, local_segment):
+    """
+    현재 anchor의 로컬 원문 블록을 2점 추론에 사용할 '원자 사실'로 분해한다.
+    서로 다른 두 source fact가 없으면 그 anchor는 T2 정답원으로 쓰지 않는다.
+    """
+    # 줄 경계가 곧 항목 경계이므로 여기서는 _norm_anchor_text로 개행을 지우지 않는다.
+    raw=str(local_segment or "").replace("\x01"," ").replace("\u200b"," ")
+    raw="\n".join(re.sub(r"\s+"," ",x).strip() for x in raw.splitlines() if x.strip())
+    ans=_norm_anchor_text(anchor.get("answer","")).strip()
+    topic=_norm_anchor_text(anchor.get("topic","")).strip()
+
+    # 줄/문장/세미콜론 기준으로만 분해하며 새 사실은 생성하지 않는다.
+    chunks=[]
+    for line in raw.splitlines():
+        line=re.sub(r"^[\s■▶●♥□·•○ü\-]+","",line).strip()
+        if not line:
+            continue
+        if line in {"정의","특징","절차","상황","규칙","장점","단점","종류","활용","원리","목적","개념",
+                    "시험목적","실험순서","관련지식","개요"}:
+            continue
+        parts=re.split(r"(?<=[.!?])\s+|;\s*|\s+-\s+|(?=①|②|③|④|⑤|⑥|⑦)",line)
+        for part in parts:
+            part=part.strip(" -")
+            if not part:
+                continue
+            # leading concept label removal
+            for label in (ans,topic):
+                if label and part.startswith(label):
+                    part=part[len(label):].lstrip(" :：-_").strip()
+            part=re.sub(r"^(?:정의|특징|목적|원리)\s*[-:：]?\s*","",part).strip()
+            if 12<=len(part)<=180:
+                chunks.append(part)
+
+    # Normalize/dedupe and remove obvious document metadata.
+    facts=[]
+    seen=[]
+    for c in chunks:
+        if re.search(r"(_최|★\d|기출|서브노트|^\d+[AB]\()",c):
+            c=re.sub(r"_최.*?(?=정의|특징|-|$)","",c)
+            c=re.sub(r"★\S+","",c).strip()
+        if len(c)<12:
+            continue
+        cc=re.sub(r"[^가-힣A-Za-z0-9]","",c).lower()
+        if not cc:
+            continue
+        if any(cc==x or (len(cc)>=18 and (cc in x or x in cc)) for x in seen):
+            continue
+        seen.append(cc)
+        facts.append(c)
+
+    # R28: 거리순서를 보존한다. 뒤쪽의 다른 subsection 사실이 점수 때문에
+    # 앞으로 튀어 올라오는 것을 막아 현재 anchor에 가장 가까운 두 사실을 사용한다.
+    return facts[:8]
 
 def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id):
     """
@@ -1425,33 +1747,38 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             continue
 
         _page_key=(str(a.get("source_name","")),int(a.get("page_no",0) or 0))
-        page_text=raw_page_map.get(_page_key) or page_map.get(_page_key,"")
-        support=_make_two_point_support_anchor(a,page_text)
-        if not support or not _two_point_support_ok(support.get("answer","")):
-            continue
+        _whole_page=raw_page_map.get(_page_key) or page_map.get(_page_key,"")
+        page_text=_t2_local_item_segment(a,_whole_page,anchors)
+        atomic_facts=_t2_atomic_facts(a,page_text)
 
-        # support answer가 core answer와 같으면 1+1 구조가 성립하지 않는다.
-        if _topic_core(support.get("answer",""))==_topic_core(a.get("answer","")):
-            continue
+        support=None
+        if len(atomic_facts)>=2:
+            # Python이 동일 local item 안의 서로 다른 두 사실을 직접 고른다.
+            a["reasoning_base_fact"]=atomic_facts[0]
+            support=copy.deepcopy(a)
+            support["topic"]=f"{_norm_anchor_text(a.get('topic','')).strip()} · 연결사실"
+            support["answer"]=atomic_facts[1]
+            support["evidence"]=atomic_facts[1]
+            support["derived_support"]=True
+            support_quality={"ok":True,"score":3.5,"reason":"atomic_two_fact_ready","action":"keep",
+                             "atomic_fact_count":len(atomic_facts)}
+        else:
+            # 기존 support 추출은 보조 경로로만 사용한다.
+            support=_make_two_point_support_anchor(a,page_text)
+            if not support or not _two_point_support_ok(support.get("answer","")):
+                continue
+            if _topic_core(support.get("answer",""))==_topic_core(a.get("answer","")):
+                continue
+            _refined=_two_point_refine_support(a,support.get("answer",""))
+            if _refined:
+                support["answer"]=_refined
+                support["evidence"]=_refined
+            support_quality=_two_point_support_quality(a,support.get("answer",""),page_text)
+            if not support_quality.get("ok"):
+                pd.setdefault("two_point_support_distinct_reject",0)
+                pd["two_point_support_distinct_reject"]+=1
+                continue
 
-        _refined=_two_point_refine_support(a,support.get("answer",""))
-        if _refined:
-            support["answer"]=_refined
-            support["evidence"]=_refined
-
-        support_quality=_two_point_support_quality(a,support.get("answer",""),page_text)
-        if not support_quality.get("ok"):
-            pd.setdefault("two_point_support_distinct_reject",0)
-            pd["two_point_support_distinct_reject"]+=1
-            pd.setdefault("reject_examples",{}).setdefault("two_point_support_distinct",[])
-            if len(pd["reject_examples"]["two_point_support_distinct"])<8:
-                pd["reject_examples"]["two_point_support_distinct"].append({
-                    "topic":str(a.get("topic","")),
-                    "answer":str(a.get("answer","")),
-                    "support":str(support.get("answer",""))[:180],
-                    "reason":support_quality.get("reason",""),
-                })
-            continue
         support["support_quality"]=copy.deepcopy(support_quality)
 
         contrast_anchor=_two_point_contrast_anchor(a,anchors)
@@ -1460,6 +1787,13 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             pd["two_point_no_contrast_reject"]+=1
             continue
         support["contrast_anchor"]=copy.deepcopy(contrast_anchor)
+
+        reasoning_spec=_t2_reasoning_spec(a,support,contrast_anchor,rng)
+        if not reasoning_spec:
+            pd.setdefault("two_point_reasoning_spec_reject",0)
+            pd["two_point_reasoning_spec_reject"]+=1
+            continue
+        support["reasoning_spec"]=copy.deepcopy(reasoning_spec)
 
         try:
             conf=float(a.get("confidence") or 0)
@@ -1487,6 +1821,8 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
         score += float((support.get("support_quality") or {}).get("score",0.0))*1.8
         if support.get("contrast_anchor"):
             score += 2.0
+        if support.get("reasoning_spec"):
+            score += 3.0
 
         ranked.append((score,[a,support]))
 
@@ -1558,19 +1894,23 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
     selected_rank=1
     core_anchor=bundle[0]
     _contrast_anchor=copy.deepcopy(bundle[1].get("contrast_anchor") or {})
-    _contrast=_norm_anchor_text(_contrast_anchor.get("evidence","")).strip()
-    _correct_option="㉠" if rng.random()<0.5 else "㉡"
+    _reasoning_spec=copy.deepcopy(bundle[1].get("reasoning_spec") or {})
+    _correct_option=str(_reasoning_spec.get("correct_option","㉠"))
 
     relation_meta={
         "master_concept":_norm_anchor_text(core_anchor.get("topic","")),
-        "relation":"하나의 중심개념을 판단하고 같은 원문 근거로 이유·오류수정·비교·적용을 수행",
-        "thinking_types":_pattern_thinking_types(pattern_id),
-        "exam_skeleton":_skeleton_for_pattern(pattern_id),
-        "scoring_plan":_scoring_plan({"id":pattern_id,"subpoints":[1,1]},bundle),
+        "relation":"동일 개념에 속하는 두 사실의 일관성을 판단한 뒤, 섞인 오답 사실을 원자료 근거로 수정",
+        "thinking_types":["자료비교","관계판단","오류수정"],
+        "exam_skeleton":"익명 사례 ㉠/㉡ 비교 → 일관된 사례 선택 → 다른 사례의 혼합 오류 수정",
+        "scoring_plan":[
+            {"points":1,"action":"㉠/㉡ 중 내부적으로 일관된 사례 판단","answer":_correct_option},
+            {"points":1,"action":"오답 사례의 섞인 사실 수정","answer":bundle[1].get("answer","")},
+        ],
         "material_limits":_compact_material_limits(2),
         "natural_unit_score":None,
-        "two_point_label_policy":"DECISION-FIRST: 첫 1점은 ㉠/㉡ 중 원자료에 부합하는 설명·절차·적용을 선택하는 판단이다. 중심개념 명칭 자체를 첫 정답으로 묻지 않는다. 둘째 1점은 선택한 항목을 근거로 별도 조건·효과·절차·수정을 한 가지 수행한다.",
-        "contrast_context":_contrast,
+        "two_point_label_policy":"REASONING-MATRIX: 개념명 회상이 아니라 두 source fact의 조합 일관성을 판단하고 혼합 오류를 수정한다.",
+        "reasoning_spec":_reasoning_spec,
+        "contrast_context":_norm_anchor_text(_contrast_anchor.get("evidence","")).strip(),
         "contrast_topic":_norm_anchor_text(_contrast_anchor.get("topic","")).strip(),
         "contrast_answer":_norm_anchor_text(_contrast_anchor.get("answer","")).strip(),
         "contrast_source_name":str(_contrast_anchor.get("source_name","")),
@@ -1584,15 +1924,16 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             "breakdown":core_anchor.get("core_exam_breakdown",{}),
         }],
         "quality_directive":(
-            "2점은 DECISION-FIRST 구조다. 서로 다른 두 개념을 정답으로 묻지 말 것. "
-            "첫 1점은 Python이 지정한 correct_option(㉠ 또는 ㉡)을 선택하는 자료판단으로 만들고 중심개념 명칭은 묻지 않는다. "
-            "correct option에는 hidden core의 원문을 그대로 복사하지 말고 상황/절차로 재구성한다. incorrect option은 contrast context를 이용한다. "
-            "두 옵션 모두 개념명을 직접 쓰지 않는다. 둘째 1점은 첫 선택을 전제로 고정 support의 조건·효과·절차·수정 중 한 가지만 요구한다. "
-            "두 번째 support 문장을 자료에 그대로 제시하고 옮겨 쓰게 하지 않는다."
+            "2점은 REASONING-MATRIX 구조다. 첫 1점은 개념명 회상이 아니라 ㉠/㉡ 두 익명 사례 중 "
+            "base_fact와 linked_fact가 함께 성립하는 사례를 판단하게 한다. 다른 사례에는 같은 base_fact와 "
+            "sibling의 distractor_fact가 섞여 있어야 한다. 둘째 1점은 첫 판단을 사용해 오답 사례의 섞인 사실을 "
+            "linked_fact에 맞게 수정하게 한다. 세 source fact는 원문을 그대로 복사하지 말고 의미를 보존해 재표현한다. "
+            "hidden core/contrast 개념명은 passage, conditions, tasks에 직접 쓰지 않는다. "
+            "첫 답과 둘째 답을 각각 다른 문장에서 찾아 옮길 수 있게 만들지 않는다."
         ),
-        "selector_reason":f"Python one-anchor exam-value score={score:.2f}",
+        "selector_reason":f"Python T2 reasoning-matrix score={score:.2f}",
         "relation_score":round(score,2),
-        "selection_mode":"python_exam_value_decision_first_t2",
+        "selection_mode":"python_exam_value_t2_reasoning_matrix",
         "source_policy":"subnote_only_for_answer_content",
         "score_pipeline_diagnostic":copy.deepcopy(pd),
         "score_diagnostic":{
@@ -1609,10 +1950,122 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
                 "SUPPORT":"otherwise",
                 "qualification":"past_exam >= 3 OR representative >= 4 OR repeatability >= 4",
             },
-            "note":"T2는 중심개념 명칭을 직접 답으로 묻지 않고 sibling contrast와 비교해 ㉠/㉡ 판단 + source-grounded 후속 1점으로 구성.",
+            "note":"T2는 Python이 base+linked / base+distractor의 2단계 판단논리를 먼저 고정하고 AI는 표현만 담당.",
         },
     }
     return bundle,relation_meta
+
+def _four_point_core_target_ok(anchor):
+    """4점 single-concept fallback용 일반 중심개념 gate.
+    T2의 '짧은 명칭 금지'는 적용하지 않는다. 짧은 약어도 실제 핵심개념일 수 있다.
+    """
+    ans=_norm_anchor_text(anchor.get("answer","")).strip()
+    topic=_norm_anchor_text(anchor.get("topic","")).strip()
+    if not ans or _heading_like(ans) or _heading_like(topic):
+        return False
+    generic={"원료","용도","장점","단점","종류","특징","절차","정의","분류","기준","역할","사람","과정","방법","효과","목적","원인","이유","결과","조건","현상","재료","정보"}
+    if ans.replace(" ","") in {x.replace(" ","") for x in generic}:
+        return False
+    if re.search(r"(기출|서브노트|^\(?예제|^[가나다라마바사아자차카타파하]\)$)",ans,re.I):
+        return False
+    if ans.count("(")!=ans.count(")"):
+        return False
+    return True
+
+def _select_four_point_single_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id, need):
+    """Multi-anchor chain이 없는 영역에서도 통용되는 4점 fallback.
+    하나의 검증된 핵심 anchor의 local source block 안에서 서로 다른 2~3개 사실을
+    Python이 고정한다. 특정 개념명/영역 하드코딩은 사용하지 않는다.
+    """
+    ranked=[]
+    for a0 in anchors:
+        a=_two_point_core_anchor_clean(a0)
+        if not _four_point_core_target_ok(a):
+            continue
+        # 4점 중심개념은 문장조각/복합 나열이 아니라 독립적으로 지칭 가능한 개념이어야 한다.
+        _core_ans=_norm_anchor_text(a.get("answer","")).strip()
+        if (len(_core_ans)>34 or _core_ans.count(" - ")>=2
+                or (re.search(r"\d\s*$",_core_ans) and len(_core_ans)>20)
+                or re.search(r"(위함|하기\s*위|때문|경우|한다$|된다$|있다$|없다$)",_core_ans)):
+            continue
+        if str(a.get("core_exam_tier") or "SUPPORT")=="SUPPORT" and int((a.get("core_exam_breakdown") or {}).get("peripherality",0) or 0)>=4:
+            continue
+        key=(str(a.get("source_name","")),int(a.get("page_no",0) or 0))
+        whole=raw_page_map.get(key) or page_map.get(key,"")
+        seg=_t2_local_item_segment(a,whole,anchors)
+        facts=_t2_atomic_facts(a,seg)
+        min_facts=2
+        if len(facts)<min_facts:
+            continue
+        chosen_facts=facts[:2] if need>=2 else facts[:need]
+        # 같은 사실의 표현 반복은 4점 채점요소로 인정하지 않는다.
+        bad=False
+        for i in range(len(chosen_facts)):
+            for j in range(i+1,len(chosen_facts)):
+                x=re.sub(r"[^가-힣A-Za-z0-9]","",chosen_facts[i]).lower()
+                y=re.sub(r"[^가-힣A-Za-z0-9]","",chosen_facts[j]).lower()
+                if not x or not y or SequenceMatcher(None,x,y).ratio()>=0.78:
+                    bad=True; break
+            if bad: break
+        if bad:
+            continue
+        derived=[]
+        if need==3:
+            # 1+1+2: 중심개념 1개 + 같은 local block의 서로 다른 source fact 2개.
+            # 세 개념을 억지로 연결하지 않고 하나의 개념 안에서 사고를 확장한다.
+            derived.append(copy.deepcopy(a))
+        for idx0,fact in enumerate(chosen_facts):
+            z=copy.deepcopy(a)
+            z["topic"]=f"{_norm_anchor_text(a.get('topic','')).strip()} · 근거{idx0+1}"
+            z["answer"]=fact
+            z["evidence"]=fact
+            z["derived_support"]=True
+            derived.append(z)
+        derived=derived[:need]
+        _fact_text=" ".join(chosen_facts)
+        _reasoning_signals=len(re.findall(r"(때문|따라|경우|하면|위해|결과|발생|증가|감소|분리|결합|촉진|금지|이용|작용|과정|처리|조건|변화|대체|해결)",_fact_text))
+        score=(float(a.get("importance_score") or 0)*1.05
+               +float(a.get("exam_value_score") or 0)*1.50
+               +float(a.get("core_exam_score") or 0)*0.35
+               +min(4.0,len(seg)/180.0)
+               + (4.0 if a.get("core_exam_qualified") else -4.0)
+               + (2.0 if str(a.get("core_exam_tier") or "")=="CORE" else 0.0)
+               - (4.0 if str(a.get("core_exam_tier") or "")=="SUPPORT" else 0.0)
+               - min(3.0,len(_core_ans)*0.08)
+               + min(8.0,_reasoning_signals*2.5)
+               - (4.0 if _reasoning_signals==0 else 0.0))
+        ranked.append((score,a,derived,seg))
+    if not ranked:
+        return [],{"score_pipeline_diagnostic":pd}
+    ranked.sort(key=lambda x:x[0],reverse=True)
+    score,core,derived,seg=ranked[0]
+    pd["candidate_accept"]=max(int(pd.get("candidate_accept",0)),len(ranked))
+    pd["four_point_single_anchor_candidates"]=len(ranked)
+    pd["final_reason"]="single_anchor_reasoning_candidates_ready"
+    sub=[2,2] if need==2 else [1,1,2]
+    relation_meta={
+        "master_concept":_norm_anchor_text(core.get("topic","")),
+        "relation":"하나의 핵심 개념/과정 안에 원래 함께 존재하는 source fact들을 순차 판단하는 근거 사슬",
+        "thinking_types":["자료해석","관계판단","적용/수정"],
+        "exam_skeleton":"동일 source block의 사실 해석 → 관계 판단 → 앞 판단을 이용한 적용/수정",
+        "scoring_plan":[{"points":p,"action":"source fact를 이용한 순차 판단","answer":d.get("answer","")} for p,d in zip(sub,derived)],
+        "material_limits":_compact_material_limits(4),
+        "natural_unit_score":4.0,
+        "core_exam_profile":[{"topic":core.get("topic",""),"score":core.get("core_exam_score",0),"tier":core.get("core_exam_tier","SUPPORT"),"breakdown":core.get("core_exam_breakdown",{})}],
+        "quality_directive":(
+            "4점 SINGLE-CONCEPT-CHAIN 구조다. 모든 채점요소는 하나의 핵심개념과 그 local source block에서 Python이 고정한 서로 다른 사실들이다. "
+            "각 사실을 독립적으로 복사하게 하지 말고, 첫 자료해석이 다음 관계판단의 전제가 되고 마지막 2점 요구가 앞 판단을 실제로 사용하게 구성한다. "
+            "원문 문장을 그대로 나열하거나 정의 3개를 빈칸처럼 묻지 않는다. 새로운 기술 사실·수치·효과는 추가하지 않는다."
+        ),
+        "selector_reason":f"Python global single-concept 4pt score={score:.2f}",
+        "relation_score":round(score,2),
+        "selection_mode":"python_global_t4_single_concept_chain",
+        "source_policy":"subnote_only_for_answer_content",
+        "source_context_override":seg,
+        "score_pipeline_diagnostic":copy.deepcopy(pd),
+        "score_diagnostic":{"selected_rank":1,"topics":[core.get("topic","")],"candidate_count":len(ranked),"note":"R29 global fallback: no concept-specific hardcoding"},
+    }
+    return derived,relation_meta
 
 def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics, rng, pattern_id=""):
     con=sqlite3.connect(db_path)
@@ -1847,6 +2300,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                 # 실제 풀이 연결성으로 다시 보상하지 않는다.
                 if float(_shortcut_penalty) < 0:
                     _reason_score=min(0.0,_reason_score)
+                # R29 global gate: 특정 개념 예외 없이 정의합성 shortcut/약한 사슬은 API 전에 제거한다.
+                if float(_shortcut_penalty) <= -5.0:
+                    _pd.setdefault("four_point_shortcut_hard_reject",0)
+                    _pd["four_point_shortcut_hard_reject"]+=1
+                    continue
+                if _reason_score < -2.0 and natural_score < 4.5:
+                    _pd.setdefault("four_point_weak_chain_reject",0)
+                    _pd["four_point_weak_chain_reject"]+=1
+                    continue
                 graph_score += (
                     min(5.0,chain_score*0.22)
                     + min(4.0,natural_score)
@@ -1985,6 +2447,10 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             _pd["candidate_accept"]+=1
 
     if not candidates:
+        # R29: 특정 영역/개념 예외처리 대신 모든 영역에 동일한 single-concept source-chain fallback을 적용한다.
+        _fb,_fm=_select_four_point_single_anchor(anchors,page_map,raw_page_map,_pd,rng,pattern_id,need)
+        if _fb:
+            return _fb,_fm
         _pd["final_reason"]="no_candidates_after_all_filters"
         return [],{"score_pipeline_diagnostic":_pd}
 
@@ -2525,13 +2991,15 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                                 for a in bundle:
                                     local_rejected_topics.add(a["topic"])
                                 continue
-                            relation_meta["quality_directive"]=(
-                                "2점 문항도 두 정답을 각 문장에서 독립적으로 찾아 쓰게 만들지 말 것. "
-                                "첫 요소의 판단 또는 자료 해석이 두 번째 요소 판단에 반드시 사용되게 구성하고, "
-                                "정답 정의·고유특징을 지문에 거의 그대로 제시하지 말 것. "
-                                "현재 패턴의 사고구조를 반드시 지킬 것: "
+                            # R28: selector가 결정한 사고논리를 절대 덮어쓰지 않는다.
+                            # 이전 R27까지는 여기서 quality_directive를 통째로 교체해
+                            # DECISION-FIRST/ONE-ANCHOR 지시가 Writer에 전달되지 않는 회귀가 있었다.
+                            _base_qd=str(relation_meta.get("quality_directive","")).strip()
+                            _pattern_qd=(
+                                " 현재 패턴의 표현 골격도 지킬 것: "
                                 + str(pat.get("quality_rule",pat.get("name","")))
                             )
+                            relation_meta["quality_directive"]=(_base_qd+_pattern_qd).strip()
                     else:
                         bundle=related_bundle(
                             db_path,dom,need,used_answers,
@@ -2578,9 +3046,18 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                     ctx=bundle_context(db_path,bundle)
                     # R27: DECISION-FIRST의 비교용 sibling도 Writer/Judge가 검증할 수 있는
                     # source context에 포함한다. 같은 출처/인접 페이지에서 Python이 고른 원문만 사용한다.
-                    if pts==2 and relation_meta.get("selection_mode")=="python_exam_value_decision_first_t2":
+                    if pts==2 and relation_meta.get("selection_mode") in {
+                        "python_exam_value_decision_first_t2",
+                        "python_exam_value_t2_reasoning_matrix",
+                    }:
+                        _spec=relation_meta.get("reasoning_spec") or {}
                         _cc=str(relation_meta.get("contrast_context","") or "").strip()
-                        if _cc:
+                        if _spec.get("mode")=="fact_pair_consistency":
+                            ctx=(ctx
+                                 +"\n[중심 사실]\n"+str(_spec.get("base_fact",""))
+                                 +"\n[연결 사실]\n"+str(_spec.get("linked_fact",""))
+                                 +"\n[비교용 sibling 사실]\n"+str(_spec.get("distractor_fact",""))).strip()
+                        elif _cc:
                             ctx=(ctx+"\n[비교용 비정답 원문]\n"+_cc).strip()
                     cand=None
 
@@ -2611,9 +3088,11 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
                         if cand is not None and pts==2:
                             _copy_errs=_t2_near_copy_errors(cand,bundle)
-                            if _copy_errs:
-                                diag(slot,"two_point_prejudge_leakage",
-                                     " / ".join(_copy_errs),
+                            _reason_errs=_t2_reasoning_shape_errors(cand,relation_meta,bundle)
+                            _t2_prejudge_errs=list(dict.fromkeys(list(_copy_errs)+list(_reason_errs)))
+                            if _t2_prejudge_errs:
+                                diag(slot,"two_point_prejudge_reasoning",
+                                     " / ".join(_t2_prejudge_errs),
                                      pattern=pat.get("id"),
                                      candidate_topics=[str(x.get("topic","")) for x in bundle])
                                 if bundle:

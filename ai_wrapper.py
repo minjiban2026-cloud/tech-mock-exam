@@ -40,12 +40,23 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
     evidence=[a["evidence"] for a in bundle]
     selection_mode=str(relation_meta.get("selection_mode",""))
     derived_answer_flags=[False]*len(answers)
-    if int(points)==2 and selection_mode=="python_exam_value_decision_first_t2":
+    if int(points)==2 and selection_mode in {
+        "python_exam_value_decision_first_t2",
+        "python_exam_value_t2_reasoning_matrix",
+    }:
         answers=[str(relation_meta.get("correct_option","㉠")), answers[1]]
         derived_answer_flags=[True,False]
     source_context=source_context or "\n".join(evidence)
-    if int(points)==2 and selection_mode=="python_exam_value_decision_first_t2":
-        # R27: core/support + Python이 고른 sibling contrast만 제공한다.
+    if int(points)==2 and selection_mode=="python_exam_value_t2_reasoning_matrix":
+        # R28: Python이 이미 고정한 세 사실만 Writer에게 제공한다.
+        _spec=relation_meta.get("reasoning_spec") or {}
+        _parts=[
+            "[중심 사실] "+str(_spec.get("base_fact","")),
+            "[연결 사실] "+str(_spec.get("linked_fact","")),
+            "[혼합 오답용 sibling 사실] "+str(_spec.get("distractor_fact","")),
+        ]
+        source_context="\n".join(x for x in _parts if x.strip())
+    elif int(points)==2 and selection_mode=="python_exam_value_decision_first_t2":
         _parts=[str(x) for x in evidence if str(x).strip()]
         _cc=str(relation_meta.get("contrast_context","") or "").strip()
         if _cc:
@@ -72,6 +83,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 자료 길이 제한={json.dumps(relation_meta.get('material_limits',{}),ensure_ascii=False)}
 자연적 문제단위 점수={relation_meta.get('natural_unit_score','')}
 2점 후보 정책={relation_meta.get('two_point_label_policy','')}
+2점 Python 사고논리={json.dumps(relation_meta.get('reasoning_spec',{}),ensure_ascii=False)}
 2점 비교용 비정답 원문={relation_meta.get('contrast_context','')}
 비교용 비정답 개념={relation_meta.get('contrast_answer','')}
 숨은 중심개념(정답으로 직접 묻지 않음)={relation_meta.get('hidden_core_answer','')}
@@ -113,22 +125,23 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 - 부분점수 1점짜리 task는 채점행동을 정확히 1개만 요구한다. "명칭을 쓰고 이유를 설명", "값을 구하고 원리를 쓰기", "분류하고 근거 설명"처럼 두 답을 동시에 요구하면 안 된다.
 - 특히 1점 task에서 '쓰고/제시하고/구하고/판단하고/분류하고 ... 설명하시오/쓰시오' 구조를 만들지 않는다.
 - 부분점수 2점짜리 task만 하나의 고정정답을 중심으로 필요한 근거 설명·비교·적용을 함께 요구할 수 있다.
-- 자료에서 직접 뒷받침되지 않는 후속 물리현상으로 확장하지 않는다. 예: 고정정답이 '유체의 운동량'이면 원문에 없는 관벽의 힘·압력·충격까지 새로 묻지 않는다.
-- 2점은 짧고 명확하게 쓰되 두 채점요소가 가능하면 하나의 판단관계 안에 있어야 한다.
-- 2점 DECISION-FIRST에서는 첫 번째 고정답은 개념명이 아니라 Python이 지정한 ㉠/㉡ 선택지다. passage에 두 개의 설명·절차·적용을 ㉠/㉡으로 제시하고, 정답 옵션에만 hidden core의 관계를 사실에 맞게 재구성한다.
-- DECISION-FIRST의 오답 옵션은 contrast context에서 만들고, 두 옵션 모두 개념명을 직접 쓰지 않는다. 첫 task는 반드시 "㉠/㉡ 중 적절한 것을 고르시오" 같은 판단 1개만 요구한다.
-- 두 번째 고정답은 별도 조건·효과·절차·수정 한 가지다. 그 문장을 passage나 conditions에 그대로 주지 말고, 첫 선택을 해야만 무엇을 고쳐야/적용해야 하는지 알 수 있게 만든다.
-- 2점은 '서로 다른 개념 2개를 억지로 연결'하지 않는다.
-- 2점 DECISION-FIRST에서는 첫 요구를 명칭/용어 회상으로 만들지 않는다. 첫 판단 결과(㉠/㉡)를 두 번째 요구가 실제로 참조하도록 쓴다.
-- 2점의 두 요구가 모두 명칭/용어 회상이면 안 된다.
-- ONE-ANCHOR 2점에서는 passage에 독립 사실을 나열하지 말고, 중심개념을 판단하는 상황 1개와 두 번째 채점근거에 필요한 정보 1개만 쓴다.
-- ONE-ANCHOR 2점의 passage는 첫 고정정답의 정의를 거의 완성해서 주지 않는다. 가능하면 비교용 비정답 원문을 이용해 두 절차/상황의 차이를 판단하게 하고, 수험생이 최소 한 번 '어느 설명이 맞는가/어떤 조건이 필요한가'를 구별한 뒤 중심개념을 쓰게 한다.
-- 비교용 비정답 원문은 오답·대조 자료일 뿐이며 그 개념명 자체를 정답으로 요구하지 않는다.
-- 고정 근거의 긴 문구를 passage/conditions에 그대로 복사하지 않는다. 핵심 관계를 분산·재구성하되 새로운 기술 사실은 추가하지 않는다.
-- 두 번째 task는 첫 판단을 전제로 같은 anchor의 근거/특징/오류수정/적용을 묻게 한다. 별도 개념을 새로 묻지 않는다.
-- ONE-ANCHOR 2점에서는 A/B/C 사례 나열, ①②③ 열거, 여러 종류·장점·활용처의 병렬 나열을 금지한다.
-- 2점 자료는 필요한 정보만 짧게 제시한다. 난도를 올리기 위해 독립 사실·사례·활용처를 여러 개 나열하지 않는다.
+- 자료에서 직접 뒷받침되지 않는 후속 현상·효과·힘·조건으로 확장하지 않는다. 고정정답의 원문 근거 밖의 내용을 새로 묻지 않는다.
+- 2점은 짧고 명확하게 쓰되 두 채점요소가 하나의 사고사슬이어야 한다.
+- selection_mode가 python_exam_value_t2_reasoning_matrix이면 Python 사고논리를 그대로 따른다.
+- 이 모드에서는 passage에 반드시 ㉠과 ㉡ 두 익명 사례를 제시한다. 두 사례 모두 기술 개념명을 직접 쓰지 않는다.
+- 정답 사례는 base_fact와 linked_fact가 같은 대상/원리에서 함께 성립하도록 의미를 보존해 재표현한다.
+- 오답 사례는 base_fact와 distractor_fact를 의도적으로 섞어 내부적으로 한 군데만 어긋나게 만든다.
+- 원문 문장, 정의, 숫자열을 그대로 복사하지 말고 문장 구조와 표현 순서를 바꾸어 재구성한다. 단, 기술적 의미·인과·수치는 바꾸지 않는다.
+- 첫 task는 ㉠/㉡ 중 내부적으로 일관된 사례를 하나 고르는 판단만 요구한다.
+- 둘째 task는 첫 판단을 이용하여 다른 사례에서 잘못 섞인 한 부분을 linked_fact에 맞게 수정하게 한다.
+- 둘째 정답 문구를 passage나 conditions에 그대로 제시하지 않는다.
+- 첫 task와 둘째 task를 서로 독립적으로 풀 수 있게 만들지 않는다. 둘째 task에는 "첫 판단을 근거로", "선택하지 않은 사례에서" 같은 연결 표현을 사용한다.
+- hidden_core_answer와 hidden_contrast_answer는 passage/conditions/tasks에 직접 쓰지 않는다.
+- 별도의 제3개념, 새로운 기술 사실, 새로운 수치, 새로운 효과를 추가하지 않는다.
+- 2점의 난도는 장문·장식자료가 아니라 '두 사실의 조합 일관성 판단 → 혼합 오류 수정'이라는 최소 2단계 사고에서 만든다.
 - 4점은 원자료에 원래 존재하는 하나의 과정/장치/현상/계산관계를 중심으로 만든다. 독립 개념 3개를 억지로 한 지문에 합치지 않는다.
+- selection_mode가 python_global_t4_single_concept_chain이면 Python이 고정한 동일 local source block의 사실들만 사용한다. 각 사실을 따로 찾아 옮기는 문항이 아니라 앞의 해석/판단이 다음 요구의 전제가 되는 하나의 사고사슬로 재구성한다.
+- 이 4점 fallback에서도 원문 정의·목록을 그대로 나열하거나 정답 문구를 passage에 직접 노출하지 않는다. 새로운 사례·수치·효과를 추가하지 않는다.
 - 4점 자료에는 고정정답의 정의·조건·수치관계를 완성된 문장으로 그대로 나열하지 않는다. 수험생이 최소 한 번 계산·비교·판단해야 답이 나오게 한다.
 - 난도는 지문 길이와 정보량이 아니라 사고과정으로 만든다.
 - 정답은 CORE/NORMAL을 우선한다. SUPPORT는 자료·상황·오답·설명용으로 활용할 수 있지만, 세부 고유명·특수사례 자체를 주된 정답으로 요구하지 않는다.
@@ -145,7 +158,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
     r=client.responses.create(model=model,input=prompt,reasoning={"effort":"medium"})
     x=json.loads(_strip_json(r.output_text))
     _sources=[{"source_name":a["source_name"],"page_no":a["page_no"]} for a in bundle]
-    if int(points)==2 and selection_mode=="python_exam_value_decision_first_t2":
+    if int(points)==2 and selection_mode in {"python_exam_value_decision_first_t2","python_exam_value_t2_reasoning_matrix"}:
         _cs=str(relation_meta.get("contrast_source_name","") or "")
         _cp=relation_meta.get("contrast_page_no")
         if _cs and not any(str(z.get("source_name",""))==_cs and z.get("page_no")==_cp for z in _sources):
