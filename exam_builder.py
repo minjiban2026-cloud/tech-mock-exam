@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-TWOPOINT-SINGLECORE-R18-20260902"
+BUILDER_API_VERSION = "SAMPLE6-TWOPOINT-SINGLECORE-R18.1-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -787,8 +787,8 @@ def _two_point_single_core_profile(chosen):
     _, shared = _cross_reference_strength(a, b)
     shared_n = len(shared)
 
-    simple_a = _answer_is_simple_label(a.get("answer", ""))
-    simple_b = _answer_is_simple_label(b.get("answer", ""))
+    simple_a = _answer_is_simple_label(a)
+    simple_b = _answer_is_simple_label(b)
     mixed_role = (simple_a != simple_b)
 
     score = min(
