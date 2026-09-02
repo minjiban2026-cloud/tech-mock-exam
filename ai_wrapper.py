@@ -132,8 +132,9 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 - 정답 사례는 base_fact와 linked_fact가 같은 대상/원리에서 함께 성립하도록 의미를 보존해 재표현한다.
 - 오답 사례는 base_fact와 distractor_fact를 의도적으로 섞어 내부적으로 한 군데만 어긋나게 만든다.
 - 원문 문장, 정의, 숫자열을 그대로 복사하지 말고 문장 구조와 표현 순서를 바꾸어 재구성한다. 단, 기술적 의미·인과·수치는 바꾸지 않는다.
-- 첫 task는 ㉠/㉡ 중 내부적으로 일관된 사례를 하나 고르는 판단만 요구한다.
-- 둘째 task는 첫 판단을 이용하여 다른 사례에서 잘못 섞인 한 부분을 linked_fact에 맞게 수정하게 한다.
+- 첫 task와 둘째 task의 최종 문구는 Python이 고정하므로 AI가 만든 tasks는 사용되지 않는다. passage/conditions가 이 고정 과업과 정확히 맞도록 작성한다.
+- 고정 첫 task는 ㉠/㉡ 중 내부적으로 일관된 사례를 하나 고르는 판단이다.
+- 고정 둘째 task는 첫 판단을 이용하여 다른 사례에서 잘못 섞인 한 부분을 linked_fact에 맞게 수정하는 과업이다.
 - 둘째 정답 문구를 passage나 conditions에 그대로 제시하지 않는다.
 - 첫 task와 둘째 task를 서로 독립적으로 풀 수 있게 만들지 않는다. 둘째 task에는 "첫 판단을 근거로", "선택하지 않은 사례에서" 같은 연결 표현을 사용한다.
 - hidden_core_answer와 hidden_contrast_answer는 passage/conditions/tasks에 직접 쓰지 않는다.
@@ -157,6 +158,19 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 """
     r=client.responses.create(model=model,input=prompt,reasoning={"effort":"medium"})
     x=json.loads(_strip_json(r.output_text))
+
+    # R30: 2점 reasoning-matrix의 채점행동(tasks)은 AI 표현에 맡기지 않는다.
+    # Python이 이미 reasoning_spec과 정답 구조를 확정했으므로,
+    # 첫 1점=자료판단, 둘째 1점=첫 판단을 사용한 오류수정이라는 계약도 고정한다.
+    # AI는 passage/conditions의 자연스러운 임용형 표현만 담당한다.
+    if int(points)==2 and selection_mode=="python_exam_value_t2_reasoning_matrix":
+        _writer_tasks=[
+            "㉠과 ㉡ 중 두 사실의 관계가 서로 일관된 것을 고르시오.",
+            "첫 판단을 근거로, 선택하지 않은 사례에서 잘못 연결된 내용을 바르게 수정하시오.",
+        ]
+    else:
+        _writer_tasks=[str(v).strip() for v in x.get("tasks",[]) if str(v).strip()]
+
     _sources=[{"source_name":a["source_name"],"page_no":a["page_no"]} for a in bundle]
     if int(points)==2 and selection_mode in {"python_exam_value_decision_first_t2","python_exam_value_t2_reasoning_matrix"}:
         _cs=str(relation_meta.get("contrast_source_name","") or "")
@@ -172,7 +186,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
       "intro":x.get("intro","다음 자료를 읽고 <작성 방법>에 따라 쓰시오."),
       "passage":str(x.get("passage","")).strip(),
       "conditions":[str(v).strip() for v in x.get("conditions",[]) if str(v).strip()],
-      "tasks":[str(v).strip() for v in x.get("tasks",[]) if str(v).strip()],
+      "tasks":_writer_tasks,
       "answer":answers,
       "solution":[f"{LABELS[i]}: {answers[i]}" for i in range(len(answers))],
       "evidence":evidence,

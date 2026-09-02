@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "GLOBAL-UNIVERSE-R29-20260902"
+BUILDER_API_VERSION = "GLOBAL-T2-CONTRACT-R30-20260902"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
