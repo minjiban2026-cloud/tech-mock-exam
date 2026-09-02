@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SAMPLE6-TWOPOINT-SINGLECORE-R18.1-20260902"
+BUILDER_API_VERSION = "SAMPLE6-ONE-ANCHOR-T2-R19-20260902"
 
 import random, math, re, sqlite3, itertools
 from formula_templates import generate_formula_question
@@ -324,6 +324,24 @@ def _page_text_map(con, source_names):
             names
         ).fetchall()
         return {(str(r[0]),int(r[1])):_norm_anchor_text(r[2]) for r in rows}
+    except Exception:
+        return {}
+
+
+def _page_raw_text_map(con, source_names):
+    names=[str(x) for x in source_names if str(x)]
+    if not names:
+        return {}
+    try:
+        cols={r[1] for r in con.execute("PRAGMA table_info(pages)").fetchall()}
+        if not {"source_name","page_no","text"} <= cols:
+            return {}
+        qmarks=",".join("?" for _ in names)
+        rows=con.execute(
+            f"SELECT source_name,page_no,text FROM pages WHERE source_name IN ({qmarks})",
+            names
+        ).fetchall()
+        return {(str(r[0]),int(r[1])):str(r[2] or "") for r in rows}
     except Exception:
         return {}
 
@@ -858,6 +876,385 @@ def _two_point_relation_integrity(chosen):
         "shared_terms":list(shared)[:8],
     }
 
+
+def _two_point_support_text(anchor, page_text):
+    """
+    하나의 DB anchor에서 2번째 1점 채점근거를 만든다.
+    새 지식을 생성하지 않고 같은 서브노트 페이지의 실제 설명 구절만 사용한다.
+    page_text는 T2에서 raw page text를 우선 전달한다.
+    """
+    ans=_norm_anchor_text(anchor.get("answer","")).strip()
+    topic=_norm_anchor_text(anchor.get("topic","")).strip()
+    ev=str(anchor.get("evidence","") or "").replace("\x01"," ").replace("\u200b"," ")
+
+    def clean(x):
+        x=str(x or "").replace("\x01"," ").replace("\u200b"," ")
+        x=re.sub(r"[ \t]+"," ",x).strip()
+        x=re.sub(r"^\s*[-•·○]+\s*","",x)
+        return x.strip()
+
+    def compact(x):
+        return re.sub(r"\s+","",clean(x))
+
+    ac=compact(ans)
+    tc=compact(topic)
+
+    raw=str(page_text or "")
+    raw_lines=[x.rstrip() for x in raw.splitlines() if x.strip()]
+
+    # anchor가 있는 줄을 찾는다. 공백/OCR 흔들림은 compact 비교로 흡수.
+    anchor_idx=None
+    for i,line in enumerate(raw_lines):
+        cl=compact(line)
+        if (ac and ac in cl) or (tc and tc in cl):
+            anchor_idx=i
+            break
+
+    def collect_continuation(start_i, first_text):
+        first=clean(first_text)
+        parts=[first] if first else []
+        terminal_end=re.compile(
+            r"(?:함|됨|한다|된다|있음|없음|방법|과정|원리|관계|증가|감소|발생|가능|"
+            r"유용함|단자|대사과정|분류|활용|사용|평가|해석|산출|제시|구별|보호|"
+            r"확보|방지|적용|전송률|기체|재료|공법|기법|법칙|현상|효과|측정)$"
+        )
+        if first and terminal_end.search(first):
+            return first
+
+        for j in range(start_i+1,min(len(raw_lines),start_i+7)):
+            rawj=raw_lines[j].strip()
+            cj=clean(rawj)
+            if not cj:
+                continue
+            if rawj.lstrip().startswith(("■","□","▶","-","※","○")):
+                break
+            if cj in {"정의","특징","절차","상황","규칙","장점","단점","종류","활용","원리","목적","개념"}:
+                break
+            if re.match(r"^\(?\d+\)?[.)]\s*",cj):
+                break
+            if ":" in cj and len(cj.split(":",1)[0].strip())<=30:
+                break
+            parts.append(cj)
+            joined=" ".join(parts).strip()
+            if len(joined)>=170 or terminal_end.search(cj):
+                break
+        return " ".join(parts).strip()
+
+
+    if anchor_idx is not None:
+        # 1) "개념 : 설명" 줄은 설명부 + 줄바꿈 continuation을 사용.
+        line=clean(raw_lines[anchor_idx])
+        if ":" in line:
+            left,right=line.split(":",1)
+            if (ac in compact(left) or tc in compact(left)) and right.strip():
+                support=collect_continuation(anchor_idx,right)
+                if 8<=len(support)<=180:
+                    return support
+
+        # 2) 같은 항목의 특징/상황/원리/절차를 정의보다 우선.
+        section_end=len(raw_lines)
+        for j in range(anchor_idx+1,len(raw_lines)):
+            if raw_lines[j].lstrip().startswith("■"):
+                section_end=j
+                break
+
+        for header in ("특징","상황","원리","절차","규칙","정의","개념"):
+            hidx=None
+            for j in range(anchor_idx+1,section_end):
+                if clean(raw_lines[j])==header:
+                    hidx=j
+                    break
+            if hidx is None:
+                continue
+            for j in range(hidx+1,min(section_end,hidx+8)):
+                rawj=raw_lines[j].strip()
+                if rawj.lstrip().startswith("-"):
+                    first=clean(rawj)
+                    support=collect_continuation(j,first)
+                    if 10<=len(support)<=180:
+                        return support
+                cj=clean(rawj)
+                if cj in {"정의","특징","절차","상황","규칙","장점","단점","종류","활용","원리","목적","개념"}:
+                    break
+
+        # 3) heading 바로 아래의 첫 설명 bullet.
+        for j in range(anchor_idx+1,min(section_end,anchor_idx+8)):
+            rawj=raw_lines[j].strip()
+            if rawj.lstrip().startswith("-"):
+                support=collect_continuation(j,clean(rawj))
+                if 10<=len(support)<=180:
+                    return support
+
+    # 4) evidence 자체의 "개념 : 설명".
+    cev=clean(ev)
+    if ":" in cev:
+        left,right=cev.split(":",1)
+        if (ac in compact(left) or tc in compact(left)) and right.strip():
+            right=clean(right)
+            if 8<=len(right)<=180:
+                return right
+
+    # 5) evidence 정의/설명 fallback.
+    m=re.search(r"\b정의\b\s*[-:]\s*(.*)$",cev)
+    if m:
+        v=clean(m.group(1))
+        if 10<=len(v)<=180:
+            return v
+
+    fallback=cev
+    fallback=re.sub(r"^■\s*","",fallback)
+    fallback=re.sub(r"\s+_(?:최|서브).*?(?=\b정의\b|\b특징\b|-|$)"," ",fallback)
+    fallback=re.sub(r"★\S+"," ",fallback)
+    fallback=re.sub(r"\b정의\b\s*[-:]?\s*","",fallback)
+    return clean(fallback)[:180]
+
+def _make_two_point_support_anchor(anchor, page_text):
+    """
+    downstream 형식(정답 2개/근거 2개)을 유지하기 위한 source-grounded support rubric.
+    두 번째 요소는 별도 개념 anchor가 아니라 첫 anchor의 같은-page 근거이다.
+    """
+    support=_two_point_support_text(anchor,page_text)
+    if not support:
+        return None
+    b=copy.deepcopy(anchor)
+    b["topic"]=f"{_norm_anchor_text(anchor.get('topic','')).strip()} · 근거/적용"
+    b["answer"]=support
+    b["evidence"]=support
+    b["derived_support"]=True
+    b["core_exam_tier"]=anchor.get("core_exam_tier","SUPPORT")
+    b["core_exam_score"]=anchor.get("core_exam_score",0)
+    b["core_exam_breakdown"]=copy.deepcopy(anchor.get("core_exam_breakdown",{}))
+    return b
+
+
+
+def _two_point_core_anchor_clean(anchor):
+    a=copy.deepcopy(anchor)
+    for key in ("topic","answer"):
+        v=_norm_anchor_text(a.get(key,"")).strip()
+        v=re.sub(r"^\s*\d+\)\s*","",v)
+        v=re.sub(r"^\s*[□▶■]+\s*","",v)
+        a[key]=v.strip()
+    return a
+
+
+def _two_point_core_target_ok(anchor):
+    ans=_norm_anchor_text(anchor.get("answer","")).strip()
+    topic=_norm_anchor_text(anchor.get("topic","")).strip()
+    if not ans:
+        return False
+    # parser/문서 표지 및 문장 중간 조각
+    if re.search(r"(기출|여기서\s*[A-Za-z]|^\(|^[가나다라마바사아자차카타파하]\)$)",ans,re.I):
+        return False
+    if re.fullmatch(r"표준\s*\d+",ans):
+        return False
+    if ans in {"영국","미국","한국","과거","현재","방지"}:
+        return False
+    # topic의 수식어를 떼면 너무 일반적인 1~4자 답만 남는 anchor는 독립 정답으로 쓰지 않는다.
+    if len(ans.replace(" ",""))<=4 and _topic_core(topic)!=_topic_core(ans):
+        return False
+    if ans.count("(")!=ans.count(")"):
+        return False
+    # '무엇을 묻는가'가 아니라 표/목차의 열 이름에 가까운 메타 레이블
+    generic={
+        "원료","용도","사용목적","주요 구성","과거","현재","가로축","세로축",
+        "장점","단점","종류","특징","절차","정의","분류","기준"
+    }
+    if ans.replace(" ","") in {x.replace(" ","") for x in generic}:
+        return False
+    # 지나치게 긴 목차형 topic은 중심 정답으로 쓰지 않는다.
+    if _heading_like(ans) or _heading_like(topic):
+        return False
+    return True
+
+
+def _two_point_support_ok(text):
+    t=_norm_anchor_text(text).strip()
+    if len(t)<10 or len(t)>180:
+        return False
+    if re.search(r"[□▶■◎♥]|_최|_서브|★|\b기출\b",t):
+        return False
+    if re.fullmatch(r"[\W_]*[A-Za-z]+[\W_]*",t):
+        return False
+    if t.lower() in {"procedures","procedure","definition","features"}:
+        return False
+    if re.fullmatch(r"\(?\s*(?:procedures?|definition|features?)\s*\)?",t,re.I):
+        return False
+    # 끝이 명백한 조사/접속어로 잘린 문장은 채점근거로 쓰지 않는다.
+    if re.search(r"(?:\s|^)(?:의|을|를|이|가|은|는|와|과|및|또는|으로|로|에|에서)$",t):
+        return False
+    # 설명형 근거: 동작/관계/조건 표현이 있거나 충분히 구체적인 수치·기호 설명이어야 한다.
+    explanatory=bool(re.search(
+        r"(함|됨|한다|된다|있|없|경우|따라|때문|이용|적용|발생|변화|증가|감소|"
+        r"측정|전송|분해|전환|생성|산출|선정|발견|비교|평형|비례|작용|사용|흐르|"
+        r"먹고|뱉|저항|전류|전압|속도|하중|응력|변형|아이디어|제시|구별|기초|목표|중심|활용|구성|유지|분류|평가|해석)",
+        t
+    ))
+    if not explanatory:
+        return False
+    return True
+
+def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id):
+    """
+    T2 전용 selector.
+    DB 정답 anchor는 1개만 선택하고, 두 번째 1점은 같은 anchor/page의 근거·오류수정·비교·적용으로 만든다.
+    """
+    ranked=[]
+    for a0 in anchors:
+        a=_two_point_core_anchor_clean(a0)
+        if not _two_point_core_target_ok(a):
+            continue
+        peripheral=int((a.get("core_exam_breakdown") or {}).get("peripherality",0) or 0)
+        if peripheral>=4:
+            pd["support_only_reject"]+=1
+            continue
+
+        _page_key=(str(a.get("source_name","")),int(a.get("page_no",0) or 0))
+        page_text=raw_page_map.get(_page_key) or page_map.get(_page_key,"")
+        support=_make_two_point_support_anchor(a,page_text)
+        if not support or not _two_point_support_ok(support.get("answer","")):
+            continue
+
+        # support answer가 core answer와 같으면 1+1 구조가 성립하지 않는다.
+        if _topic_core(support.get("answer",""))==_topic_core(a.get("answer","")):
+            continue
+
+        try:
+            conf=float(a.get("confidence") or 0)
+        except Exception:
+            conf=0.0
+        importance=float(a.get("importance_score") or 0)
+        exam_value=float(a.get("exam_value_score") or 0)
+        core=float(a.get("core_exam_score") or 0)
+        tier=str(a.get("core_exam_tier") or "SUPPORT")
+
+        score=(
+            min(1.0,max(0.0,conf))
+            + importance*1.05
+            + exam_value*1.50
+            + core*0.18
+            - (3.5 if tier=="SUPPORT" else 0.0)
+        )
+        # 설명형 evidence가 충분할수록 2번째 채점요소를 안정적으로 만들 수 있다.
+        ev=_norm_anchor_text(support.get("answer",""))
+        if len(ev)>=35:
+            score+=1.0
+        if re.search(r"(때문|따라|과정|원인|결과|특징|달리|변화|작용|이용|판단|분해|전환|선정|발견)",ev):
+            score+=1.0
+
+        ranked.append((score,[a,support]))
+
+    if not ranked:
+        pd["final_reason"]="no_single_anchor_candidates"
+        return [],{"score_pipeline_diagnostic":pd}
+
+    ranked.sort(key=lambda x:x[0],reverse=True)
+
+    uniq=[]
+    seen=set()
+    for score,bundle in ranked:
+        k=_topic_core(bundle[0].get("answer",""))
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append((score,bundle))
+        if len(uniq)>=8:
+            break
+
+    pd["candidate_accept"]=len(uniq)
+    pd["two_point_one_anchor_candidates"]=len(uniq)
+    pd["final_reason"]="single_anchor_candidates_ready"
+
+    def cand_diag(score0,bundle0,rank0):
+        a=bundle0[0]
+        return {
+            "rank":rank0,
+            "final_selector_score":round(float(score0),3),
+            "avg_importance_score":round(float(a.get("importance_score") or 0),3),
+            "importance_contribution":round(float(a.get("importance_score") or 0)*1.05,3),
+            "avg_exam_value_score":round(float(a.get("exam_value_score") or 0),3),
+            "exam_value_contribution":round(float(a.get("exam_value_score") or 0)*1.50,3),
+            "avg_core_exam_score":round(float(a.get("core_exam_score") or 0),3),
+            "core_exam_contribution":round(float(a.get("core_exam_score") or 0)*0.18,3),
+            "support_count":1 if str(a.get("core_exam_tier") or "")=="SUPPORT" else 0,
+            "support_penalty":-3.5 if str(a.get("core_exam_tier") or "")=="SUPPORT" else 0.0,
+            "natural_unit_score":None,
+            "tiers":[str(a.get("core_exam_tier") or "SUPPORT"),"SAME_ANCHOR_SUPPORT"],
+            "topics":[str(a.get("topic","")),str(bundle0[1].get("topic",""))],
+            "anchors":[
+                {
+                    "topic":str(a.get("topic","")),
+                    "answer":str(a.get("answer","")),
+                    "source_name":str(a.get("source_name","")),
+                    "page_no":a.get("page_no"),
+                    "core_exam_score":a.get("core_exam_score",0),
+                    "core_exam_tier":a.get("core_exam_tier","SUPPORT"),
+                    "core_exam_qualified":a.get("core_exam_qualified",False),
+                    "breakdown":copy.deepcopy(a.get("core_exam_breakdown",{})),
+                    "importance_score":a.get("importance_score",0),
+                    "exam_value_score":a.get("exam_value_score",0),
+                },
+                {
+                    "topic":str(bundle0[1].get("topic","")),
+                    "answer":str(bundle0[1].get("answer","")),
+                    "source_name":str(bundle0[1].get("source_name","")),
+                    "page_no":bundle0[1].get("page_no"),
+                    "derived_support":True,
+                },
+            ],
+        }
+
+    leaderboard=[cand_diag(sc,b,idx+1) for idx,(sc,b) in enumerate(uniq)]
+    top=uniq[:min(2,len(uniq))]
+    chosen_idx=rng.randrange(len(top))
+    score,bundle=top[chosen_idx]
+    selected_rank=chosen_idx+1
+    core_anchor=bundle[0]
+
+    relation_meta={
+        "master_concept":_norm_anchor_text(core_anchor.get("topic","")),
+        "relation":"하나의 중심개념을 판단하고 같은 원문 근거로 이유·오류수정·비교·적용을 수행",
+        "thinking_types":_pattern_thinking_types(pattern_id),
+        "exam_skeleton":_skeleton_for_pattern(pattern_id),
+        "scoring_plan":_scoring_plan({"id":pattern_id,"subpoints":[1,1]},bundle),
+        "material_limits":_compact_material_limits(2),
+        "natural_unit_score":None,
+        "two_point_label_policy":"ONE_ANCHOR: 첫 1점은 중심개념 판단, 둘째 1점은 같은 개념의 source-grounded 근거/오류수정/비교/적용. 둘째를 별도 개념명으로 묻지 말 것.",
+        "core_exam_profile":[{
+            "topic":core_anchor.get("topic",""),
+            "score":core_anchor.get("core_exam_score",0),
+            "tier":core_anchor.get("core_exam_tier","SUPPORT"),
+            "breakdown":core_anchor.get("core_exam_breakdown",{}),
+        }],
+        "quality_directive":(
+            "2점은 ONE-ANCHOR 구조다. 서로 다른 두 개념을 결합하지 말 것. "
+            "첫 요구는 중심개념을 자료에서 판단하게 하고, 두 번째 요구는 반드시 같은 중심개념에 대한 "
+            "근거·오류수정·비교·적용 중 하나를 요구한다. 두 번째 고정답은 별도 개념명이 아니라 원문 채점근거다."
+        ),
+        "selector_reason":f"Python one-anchor exam-value score={score:.2f}",
+        "relation_score":round(score,2),
+        "selection_mode":"python_exam_value_one_anchor_t2",
+        "source_policy":"subnote_only_for_answer_content",
+        "score_pipeline_diagnostic":copy.deepcopy(pd),
+        "score_diagnostic":{
+            "selected_rank":selected_rank,
+            "selected":cand_diag(score,bundle,selected_rank),
+            "leaderboard":leaderboard,
+            "core_exam_weights":{
+                "past_exam":4,"subnote_importance":3,"representative":3,
+                "repeatability":4,"centrality":3,"peripherality":-2,
+            },
+            "tier_thresholds":{
+                "CORE":"qualified and raw >= 58",
+                "NORMAL":"qualified and raw >= 40",
+                "SUPPORT":"otherwise",
+                "qualification":"past_exam >= 3 OR representative >= 4 OR repeatability >= 4",
+            },
+            "note":"T2는 DB answer anchor 1개 + 동일 페이지의 source-grounded 채점근거 1개로 구성.",
+        },
+    }
+    return bundle,relation_meta
+
 def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics, rng, pattern_id=""):
     con=sqlite3.connect(db_path)
     con.row_factory=sqlite3.Row
@@ -880,7 +1277,9 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         (domain,)
     ).fetchall()
     source_kinds=_source_kind_map(con)
-    page_map=_page_text_map(con,{str(r["source_name"]) for r in rows})
+    _source_names={str(r["source_name"]) for r in rows}
+    page_map=_page_text_map(con,_source_names)
+    raw_page_map=_page_raw_text_map(con,_source_names)
     con.close()
 
     _pd={
@@ -908,6 +1307,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         "two_point_label_reject":0,
         "two_point_relation_reject":0,
         "two_point_dual_target_reject":0,
+        "two_point_one_anchor_candidates":0,
         "anchor_fragment_reject":0,
         "anchor_contradiction_reject":0,
         "anchor_normalization_policy":"strip_bullets_then_validate",
@@ -986,6 +1386,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         anchors.append(a)
 
     _pd["usable_anchors"]=len(anchors)
+
+    # R19: 모든 2점 패턴(T2_DATA/T2_REL/T2_ERR/T2_CMP)은 DB answer anchor 1개만 고른다.
+    # downstream 형식은 [1,1]을 유지하기 위해 같은 페이지의 source-grounded support rubric을 두 번째 요소로 만든다.
+    if not str(pattern_id).upper().startswith("T4"):
+        if len(anchors)<1:
+            _pd["final_reason"]="usable_anchors_below_one"
+            return [],{"score_pipeline_diagnostic":_pd}
+        return _select_two_point_one_anchor(anchors,page_map,raw_page_map,_pd,rng,pattern_id)
+
     if len(anchors)<need:
         _pd["final_reason"]="usable_anchors_below_need"
         return [],{"score_pipeline_diagnostic":_pd}
