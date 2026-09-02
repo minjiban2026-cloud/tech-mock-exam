@@ -143,13 +143,27 @@ def _material_length_errors(q):
 
 def _independent_fact_listing_errors(q):
     """
-    쉼표/세미콜론/번호 나열이 과도하고 서로 다른 사례·종류가 병렬 제시되는 지문을 보수적으로 감점한다.
+    독립 사례·종류의 과도한 병렬 나열을 차단한다.
+    R20: ONE-ANCHOR 2점은 한 개념의 근거 설명이므로 쉼표 개수만으로 오탐하지 않는다.
     """
     e=[]
     passage=str(q.get("passage",""))
     pts=int(q.get("points",0))
+    mode=str(q.get("selection_mode",""))
     list_marks = passage.count(",") + passage.count("·") + passage.count(";")
     enumerators = sum(passage.count(x) for x in ("A","B","C","D","①","②","③","④"))
+
+    if pts==2 and mode=="python_exam_value_one_anchor_t2":
+        # 실제 열거 구조가 있을 때만 차단. 단일 개념 설명의 쉼표는 허용.
+        explicit_list = (
+            enumerators>=4
+            or len(re.findall(r"(?:^|\s)\d+[.)]\s*",passage))>=4
+            or sum(passage.count(k) for k in ("첫째","둘째","셋째","넷째"))>=4
+        )
+        if explicit_list or list_marks>=14:
+            e.append("2점 독립사실 나열 과다")
+        return e
+
     if pts==2 and (list_marks>=8 or enumerators>=5):
         e.append("2점 독립사실 나열 과다")
     if pts==4 and (list_marks>=16 or enumerators>=8):
@@ -274,11 +288,24 @@ def validate_formula_question(q):
 
 def too_similar(q,previous,threshold=.72):
     fams=families_for(q)
+    a_topic=norm(q.get("topic",""))
     a=norm(q.get("topic","")+" "+q.get("passage",""))
+    qdom=norm(q.get("domain",""))
     for p in previous:
-        if fams & families_for(p): return True
+        p_topic=norm(p.get("topic",""))
+        pdom=norm(p.get("domain",""))
+        shared_family=bool(fams & families_for(p))
+
+        # 같은 broad family(예: invention_thinking)라는 이유만으로는 탈락시키지 않는다.
+        # 같은 영역에서 topic 자체가 매우 유사할 때만 family 중복을 강한 중복으로 본다.
+        if shared_family and qdom and qdom==pdom and a_topic and p_topic:
+            topic_ratio=difflib.SequenceMatcher(None,a_topic,p_topic).ratio()
+            if a_topic==p_topic or topic_ratio>=0.78:
+                return True
+
         b=norm(p.get("topic","")+" "+p.get("passage",""))
-        if a and b and difflib.SequenceMatcher(None,a,b).ratio()>=threshold:return True
+        if a and b and difflib.SequenceMatcher(None,a,b).ratio()>=threshold:
+            return True
     return False
 
 def validate_exam(qs,target_count,target_points):

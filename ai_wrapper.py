@@ -39,6 +39,11 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
     relation_meta=relation_meta or {}
     evidence=[a["evidence"] for a in bundle]
     source_context=source_context or "\n".join(evidence)
+    selection_mode=str(relation_meta.get("selection_mode",""))
+    if int(points)==2 and selection_mode=="python_exam_value_one_anchor_t2":
+        # ONE-ANCHOR T2는 페이지 전체의 다른 항목을 섞지 않는다.
+        # 중심 anchor + 같은 anchor의 채점근거만 Writer에게 제공한다.
+        source_context="\n".join(str(x) for x in evidence if str(x).strip())
     prompt=f"""
 너는 대한민국 중등 기술 임용시험 문항 초안 작성자다.
 정답과 채점근거는 DB 원문을 바탕으로 Python에서 고정되어 있으며 절대로 바꾸거나 새 정답을 만들면 안 된다.
@@ -53,7 +58,7 @@ master concept={relation_meta.get('master_concept','')}
 Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),ensure_ascii=False)}
 자료 길이 제한={json.dumps(relation_meta.get('material_limits',{}),ensure_ascii=False)}
 자연적 문제단위 점수={relation_meta.get('natural_unit_score','')}
-2점 후보 정책={relation_meta.get('two_point_label_policy','')}
+2점 후보 정책={relation_meta.get('two_point_label_policy','')}\n선택 모드={selection_mode}
 임용 핵심도 프로필={json.dumps(relation_meta.get('core_exam_profile',[]),ensure_ascii=False)}
 
 고정정답:
@@ -93,6 +98,8 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 - 2점은 '서로 다른 개념 2개를 억지로 연결'하지 않는다.
 - 첫 요구가 명칭/용어 판단이라면 두 번째 요구는 반드시 같은 핵심개념을 전제로 한 판단·근거·오류수정·비교·적용 중 하나가 되게 한다.
 - 2점의 두 요구가 모두 명칭/용어 회상이면 안 된다.
+- ONE-ANCHOR 2점에서는 passage에 독립 사실을 나열하지 말고, 중심개념을 판단하는 상황 1개와 두 번째 채점근거에 필요한 정보 1개만 쓴다.
+- ONE-ANCHOR 2점에서는 A/B/C 사례 나열, ①②③ 열거, 여러 종류·장점·활용처의 병렬 나열을 금지한다.
 - 2점 자료는 필요한 정보만 짧게 제시한다. 난도를 올리기 위해 독립 사실·사례·활용처를 여러 개 나열하지 않는다.
 - 4점은 원자료에 원래 존재하는 하나의 과정/장치/현상/계산관계를 중심으로 만든다. 독립 개념 3개를 억지로 한 지문에 합치지 않는다.
 - 4점 자료에는 고정정답의 정의·조건·수치관계를 완성된 문장으로 그대로 나열하지 않는다. 수험생이 최소 한 번 계산·비교·판단해야 답이 나오게 한다.
@@ -128,6 +135,7 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
       "premise_mode":"ai_grounded",
       "master_concept":relation_meta.get("master_concept",""),
       "relation":relation_meta.get("relation",""),
+      "selection_mode":selection_mode,
       "intended_thinking_types":[str(v) for v in x.get("thinking_types",[])],
     }
     q["fingerprint"]=fingerprint(q)
