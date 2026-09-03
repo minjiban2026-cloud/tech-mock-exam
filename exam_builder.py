@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "SOURCE-CAPABILITY-FIRST-R35-20260903"
+BUILDER_API_VERSION = "SOURCE-CAPABILITY-FIRST-R36-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -2006,7 +2006,14 @@ def _t2_complete_fact_reason(text):
     """R33: 모든 T2 source fact에 공통 적용하는 완결성 gate."""
     x=_norm_anchor_text(text).strip()
     c=re.sub(r"[^가-힣A-Za-z0-9]","",x)
-    if len(c)<14 and not (len(c)>=7 and re.search(r"\d",x) and re.search(r"(시작|검사|반복|속도|비율|범위|이상|이하|증가|감소)",x)):
+    # R36: 짧더라도 '대상/속성 + 기술 술어(변화·기능·수치·상태)'가 있으면 독립 사실이다.
+    # 예: '데이터 전송 속도 증가', '전송 속도 1Gbps 이상', '압력이 감소'.
+    # 반대로 '다양한 부가 서비스' 같은 명사구만 있는 조각은 계속 차단한다.
+    _short_pred=bool(re.search(r"(증가|감소|향상|저하|가능|불가능|사용|이용|전송|통합|결합|저장|발생|유지|제어|검사|시작|반복|변화|작용|생성|산출|차지|생산|구성|연결|분류|평가|처리|된다|한다|이다|있다|없다|이상|이하|초과|미만)",x))
+    _short_value=bool(re.search(r"\d+(?:[.,]\d+)?\s*(?:%|[A-Za-z가-힣/²³]+)?",x))
+    _short_terms=[t for t in re.findall(r"[가-힣A-Za-z0-9.%/]+",x) if len(re.sub(r"[^가-힣A-Za-z0-9]","",t))>=2]
+    _short_complete=(len(c)>=7 and len(_short_terms)>=2 and (_short_pred or _short_value))
+    if len(c)<14 and not _short_complete:
         return "사실 문구가 너무 짧음"
     if len(x)>180:
         return "사실 문구가 지나치게 김"
@@ -2024,8 +2031,9 @@ def _t2_complete_fact_reason(text):
         return "완결되지 않은 관형형 종결"
     # 충분한 길이와 동작/관계 표현이 있으면 완결 명사구도 허용한다(예: '... 아이디어를 생성').
     relational=bool(re.search(r"(한다|된다|이다|있다|없다|함|됨|생성|산출|발휘|도움|분석|판단|선정|발견|비교|사용|이용|적용|촉진|억제|향상|증가|감소|변화|작용|해결|제시|기록|연결|분류|평가|표현|시각화|반복|예상|조사|생산|구성|유지|구별|설명|목적|원리|특징|장점|단점|방법|기법|과정|현상|방식|구조|상태|관계|조건|기준|단계|활동|기능)",x))
-    technical_value=bool(re.search(r"\d|증가|감소|가능|불가능|이상|이하|초과|미만|시작|반복|전송|통합|결합|저장|발생|유지|제어|검사",x))
-    if not relational and not technical_value and len(c)<24:
+    technical_value=bool(re.search(r"\d|증가|감소|가능|불가능|이상|이하|초과|미만|시작|반복|전송|통합|결합|저장|발생|유지|제어|검사|차지|생산",x))
+    # R36: 짧은 기술 사실은 위의 subject/value/predicate gate를 통과했으면 정보량 부족으로 이중 탈락시키지 않는다.
+    if not relational and not technical_value and not _short_complete and len(c)<24:
         return "독립 사실로서 정보량 부족"
     return ""
 
