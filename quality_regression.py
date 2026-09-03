@@ -141,8 +141,26 @@ def audit_t4_universe(db_path,domains):
                 'leaderboard':copy.deepcopy(sd.get('leaderboard',[]) or [])
             }
             total += accepted
-    all_pass=all(cell.get('pass') for dm in result.values() for cell in dm.values())
-    return {'pass':all_pass,'total_accepted_candidates':total,'domains':result}
+    # R42: not every domain currently has a proven 4pt capability once the unsafe
+    # single-concept fallback is removed.  Release-gate PASS therefore means the
+    # SAMPLE6 validation pool is real and sufficiently diverse, not that unsupported
+    # domains are silently treated as safe.  Final A/B must still address the reported
+    # unsupported domains before release.
+    capable_domains=[d for d,cells in result.items() if any(cell.get('pass') for cell in cells.values())]
+    pattern_coverage={pid:any(result[d][pid].get('pass') for d in result) for pid in T4_PATTERNS}
+    unsafe_modes=[]
+    for d,cells in result.items():
+        for pid,cell in cells.items():
+            if str((cell.get('top_candidate') or {}).get('selection_mode',''))=='python_global_t4_single_concept_chain':
+                unsafe_modes.append({'domain':d,'pattern_id':pid})
+    sample_ready=(len(capable_domains)>=4 and all(pattern_coverage.values()) and not unsafe_modes)
+    unsupported=[d for d in result if d not in capable_domains]
+    return {
+      'pass':sample_ready,'sample_ready':sample_ready,'final_ab_ready':not unsupported,
+      'total_accepted_candidates':total,'domains':result,
+      'capable_domains':capable_domains,'unsupported_domains':unsupported,
+      'pattern_coverage':pattern_coverage,'unsafe_single_concept_modes':unsafe_modes
+    }
 
 
 def audit_sample_plans(db_path,domains,seeds=50):
@@ -171,5 +189,5 @@ def run_release_regression(db_path,domains,seeds=50):
     return {
       "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass")),
       "historical":hist,"grounding":grounding,"t4_universe":t4,"sample_plan_coverage":plans,
-      "note":"API-free release gate: historical failures + grounding/media regressions + T4 grounded universe + SAMPLE6 capability plans"
+      "note":"API-free SAMPLE6 gate: historical failures + grounding/media regressions + proven direct-chain T4 pool + SAMPLE6 capability plans; final_ab_ready is reported separately"
     }

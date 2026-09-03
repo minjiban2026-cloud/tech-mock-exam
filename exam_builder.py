@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "T4-CONTRACT-SYNC-R41-20260903"
+BUILDER_API_VERSION = "T4-CAPABILITY-ONLY-R42-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -3049,11 +3049,12 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
             _pd["candidate_accept"]+=1
 
     if not candidates:
-        # R29: 특정 영역/개념 예외처리 대신 모든 영역에 동일한 single-concept source-chain fallback을 적용한다.
-        _fb,_fm=_select_four_point_single_anchor(anchors,page_map,raw_page_map,_pd,rng,pattern_id,need)
-        if _fb:
-            return _fb,_fm
-        _pd["final_reason"]="no_candidates_after_all_filters"
+        # R42: 4점에서 single-concept raw-fact fallback을 금지한다.
+        # 이 fallback은 하나의 source block에 있는 정의/특징 두 개를 1+1+2 또는 2+2로
+        # 승격하면서 Writer가 사고사슬처럼 꾸며도 실제 채점은 원문 복사형이 되는 문제가 반복되었다.
+        # 4점은 Python이 직접 관계/자연적 문제단위를 증명한 capability 후보만 사용한다.
+        _pd["single_concept_t4_fallback_disabled"]=True
+        _pd["final_reason"]="no_proven_t4_capability_after_all_filters"
         return [],{"score_pipeline_diagnostic":_pd}
 
     uniq=[]; seen_sets=set()
@@ -3553,6 +3554,29 @@ def _rebalance_t2_domains_by_capability(db_path, plan, domains, rng, previous_qu
     return plan,{d:(diagnostics[d]["candidate_count"]>0) for d in domains},diagnostics
 
 
+
+_SAMPLE_T4_CAP_CACHE={}
+
+def _sample_t4_capable_domains(db_path, domains):
+    """R42 SAMPLE6 only: find domains with at least one proven non-fallback 4pt capability.
+    We probe ERR22 because it is the least source-hungry active 4pt structure; production
+    selection still validates the actual slot pattern and may switch patterns.  Results are
+    cached by DB mtime so the scan is paid once per deployment/database revision.
+    """
+    import os
+    try: mt=os.path.getmtime(db_path)
+    except Exception: mt=0
+    key=(os.path.abspath(db_path),mt,tuple(domains))
+    if key in _SAMPLE_T4_CAP_CACHE:
+        return list(_SAMPLE_T4_CAP_CACHE[key])
+    out=[]
+    for d in domains:
+        b,m=_smart_relation_bundle(db_path,d,2,set(),set(),random.Random(4242),pattern_id="T4_ERR22",used_source_pages=set())
+        if b and str((m or {}).get("selection_mode",""))=="python_exam_value_direct_chain":
+            out.append(d)
+    _SAMPLE_T4_CAP_CACHE[key]=tuple(out)
+    return out
+
 def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-luna",
                  ai_enabled=True,ai_quality_enabled=True,judge_model=None,seed=None,
                  previous_questions=None,shared_answers=None,tuning_mode=False):
@@ -3561,6 +3585,20 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
     scores=score_pattern(section,count,points)
     plan=blueprint(section,scores,domains,rng)
     plan,_t2_capability,_t2_capability_diagnostics=_rebalance_t2_domains_by_capability(db_path,plan,domains,rng,previous_questions=previous_questions)
+    # R42: SAMPLE6 must test proven 4pt capability, not force weak domains through the
+    # retired single-concept raw-fact fallback.  Final A/B is intentionally not changed
+    # here; it remains blocked until unsupported domains gain real 4pt capabilities.
+    if tuning_mode and section=="SAMPLE":
+        _t4_domains=_sample_t4_capable_domains(db_path,domains)
+        if len(_t4_domains)<1:
+            raise RuntimeError("SAMPLE6: 검증된 4점 capability 영역이 없습니다. single-concept fallback은 R42에서 금지되었습니다.")
+        _k=0
+        for _slot in plan:
+            if int(_slot.get("points",0) or 0)==4:
+                _slot["domain_override_from"]=_slot.get("domain")
+                _slot["domain"]=_t4_domains[_k % len(_t4_domains)]
+                _slot["t4_capability_mode"]="proven_direct_chain_only"
+                _k+=1
     style=official_style_profile(db_path)
     judge_model=judge_model or model
     writer_active=bool(ai_enabled and api_key)
