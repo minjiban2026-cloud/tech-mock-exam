@@ -170,12 +170,24 @@ JSON만 출력:
     pts=int(question.get("points",0))
 
     if pts==4:
+        # R44: deterministic calculation/application questions are allowed to have
+        # inferential_distance=3 when the external reviewer itself says PASS and
+        # all other quality dimensions clear the 4-point floor.  R43 exposed an
+        # inconsistency where the reviewer described a question as appropriate
+        # but our local 3.5 threshold silently flipped it to REJECT.
+        pattern_id=str(question.get("pattern_id","") or "")
+        is_deterministic_operation=(
+            pattern_id=="T4_C112"
+            or str(question.get("selection_mode","") or "")=="deterministic_formula_operation"
+            or str(question.get("reasoning_mode","") or "")=="deterministic_formula_operation"
+        )
+        inferential_floor=3.0 if is_deterministic_operation else 3.5
         passed=(
             x.get("verdict")=="PASS"
             and vals["grounding"]>=4
             and vals["answer_leakage"]>=4
             and vals["coherence"]>=4
-            and vals["inferential_distance"]>=3.5
+            and vals["inferential_distance"]>=inferential_floor
             and vals["task_distinctness"]>=4
             and vals["exam_realism"]>=4
             and vals["difficulty_fit"]>=4

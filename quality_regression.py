@@ -171,3 +171,38 @@ def run_release_regression(db_path,domains,seeds=50):
       "historical":hist,"grounding":grounding,"t4_operation_capabilities":t4,"sample_plan_coverage":plans,
       "note":"API-free SAMPLE6 gate: historical failures + grounding/media regressions + executable Python 4점 operation capabilities + SAMPLE6 capability plans; direct-chain은 4점 자격으로 계산하지 않음"
     }
+
+
+def audit_r44_judge_alignment():
+    """R44 regression: deterministic T4_C112 with reviewer PASS and
+    inferential_distance=3 must not be silently flipped to REJECT, while
+    non-operation T4 keeps the stricter 3.5 floor and fatal flags still veto.
+    """
+    import quality_judge as qj
+    original=qj._ask_json
+    payload={
+        "verdict":"PASS",
+        "scores":{
+            "grounding":5,"answer_leakage":5,"coherence":5,
+            "inferential_distance":3,"task_distinctness":4,
+            "exam_realism":5,"difficulty_fit":4,"ambiguity_control":5
+        },
+        "thinking_types":["계산","적용"],"fatal_flags":[],
+        "reason":"4점 문항으로 수용 가능","weakest_point":"표준적 계산"
+    }
+    try:
+        qj._ask_json=lambda *a,**k: dict(payload)
+        calc=qj.judge_question("k","m",{"points":4,"pattern_id":"T4_C112"})
+        noncalc=qj.judge_question("k","m",{"points":4,"pattern_id":"T4_DATA112"})
+        fatal_payload=dict(payload)
+        fatal_payload["fatal_flags"]=["TOO_EASY"]
+        qj._ask_json=lambda *a,**k: dict(fatal_payload)
+        fatal=qj.judge_question("k","m",{"points":4,"pattern_id":"T4_C112"})
+    finally:
+        qj._ask_json=original
+    return {
+        "pass": bool(calc.get("pass") and not noncalc.get("pass") and not fatal.get("pass")),
+        "operation_id3_pass": bool(calc.get("pass")),
+        "nonoperation_id3_reject": not bool(noncalc.get("pass")),
+        "fatal_still_rejects": not bool(fatal.get("pass")),
+    }

@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "T4-OPERATION-CAPABILITY-R43-20260903"
+BUILDER_API_VERSION = "T4-JUDGE-ALIGNMENT-R44-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
