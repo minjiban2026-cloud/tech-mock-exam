@@ -9,6 +9,64 @@ def fingerprint(q):
     core={k:q.get(k) for k in ["domain","topic","pattern_id","passage","tasks","answer"]}
     return hashlib.sha256(json.dumps(core,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:20]
 
+
+
+# R37: T2 display-clause contract is centralized here so Writer and builder
+# use the same completeness/copy policy.  This avoids the former situation where
+# ai_wrapper produced a clause that exam_builder rejected under a different rule.
+def t2_clause_quality(text, source_text="", forbidden_labels=None):
+    t=re.sub(r"\s+"," ",str(text or "")).strip(" \t\r\n-•·")
+    if not t:
+        return {"ok":False,"reason":"빈 문구","copy":1.0,"score":-99.0,"text":t}
+    compact=norm(t)
+    if len(compact)<6:
+        return {"ok":False,"reason":"독립 사실로서 정보량 부족","copy":1.0,"score":-99.0,"text":t}
+    # Bare noun phrases remain invalid, but short technical propositions such as
+    # '전송 속도 증가', '1Gbps 이상', '유무선 통합 가능' are accepted.
+    relation_signal=bool(re.search(
+        r"(증가|감소|향상|저하|가능|불가능|이상|이하|초과|미만|같|다르|사용|이용|검사|"
+        r"시작|반복|발생|변화|전송|생산|형성|수정|검출|결정|포함|차지|연결|통합|"
+        r"된다|한다|이다|있다|없다|높다|낮다|크다|작다|빠르다|느리다|\d\s*(?:%|Gbps|Mbps|kbps|V|A|Hz|mm|cm|m|N|Pa))",
+        t,re.I))
+    if not relation_signal and len(compact)<12:
+        return {"ok":False,"reason":"술어·수치·관계가 없는 짧은 명사구","copy":1.0,"score":-99.0,"text":t}
+    # obvious continuation fragments
+    if re.search(r"(?:그리고|또는|및|때문에|따라서|그러나|반면에)\s*$",t):
+        return {"ok":False,"reason":"문장 연결형 단편","copy":1.0,"score":-99.0,"text":t}
+    labels=[str(x or "").strip() for x in (forbidden_labels or []) if str(x or "").strip()]
+    tc=norm(t)
+    for label in labels:
+        lc=norm(label)
+        if len(lc)>=2 and lc in tc:
+            return {"ok":False,"reason":"숨은 개념명 직접 노출","copy":1.0,"score":-99.0,"text":t}
+    src=str(source_text or "").strip()
+    cp=0.0
+    if src and norm(src):
+        a=norm(t); b=norm(src)
+        if a and b:
+            if a==b or (len(a)>=14 and a in b) or (len(b)>=14 and b in a):
+                cp=1.0
+            else:
+                cp=difflib.SequenceMatcher(None,a,b).ratio()
+    # Exact/near-exact source restatement is not a display clause.  The threshold is
+    # centralized and intentionally stricter for long clauses than short technical values.
+    limit=0.86 if len(compact)<18 else 0.82
+    if src and cp>=limit:
+        return {"ok":False,"reason":"원문 장구절 직접 복사","copy":cp,"score":-99.0,"text":t}
+    score=(2.0 if relation_signal else 0.0)+min(2.0,len(compact)/24.0)-cp*2.5
+    return {"ok":True,"reason":"","copy":cp,"score":score,"text":t}
+
+def choose_t2_display_clause(candidates, source_text="", forbidden_labels=None):
+    rows=[]
+    for raw in candidates or []:
+        q=t2_clause_quality(raw,source_text,forbidden_labels)
+        if q.get("ok"):
+            rows.append(q)
+    if not rows:
+        return "", {"ok":False,"reason":"표시문구 후보 모두 불합격"}
+    rows.sort(key=lambda x:(float(x.get("score",0)), -float(x.get("copy",0))), reverse=True)
+    return rows[0]["text"], rows[0]
+
 def complexity_score(q):
     tasks=q.get("tasks",[])
     score=len(tasks)

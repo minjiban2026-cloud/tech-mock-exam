@@ -1,5 +1,5 @@
 import json,re
-from validators import fingerprint
+from validators import fingerprint, choose_t2_display_clause
 
 LABELS=["㉠","㉡","㉢","㉣"]
 def _masked_evidence(bundle):
@@ -44,24 +44,20 @@ def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,mat
         "python_exam_value_decision_first_t2",
         "python_exam_value_t2_reasoning_matrix",
     }:
-        if selection_mode=="python_exam_value_t2_reasoning_matrix":
-            _cc=(relation_meta.get("reasoning_spec") or {}).get("correction_contract") or {}
-            _replacement=str(_cc.get("expected_replacement_fact","") or "").strip()
-            answers=[str(relation_meta.get("correct_option","㉠")), _replacement or answers[1]]
-            # 둘째 채점근거도 실제 correction answer와 동일한 source fact로 고정한다.
-            evidence=[evidence[0], _replacement or evidence[1]]
-        else:
-            answers=[str(relation_meta.get("correct_option","㉠")), answers[1]]
+        _spec=relation_meta.get("reasoning_spec") or {}
+        _replacement=str(((_spec.get("correction_contract") or {}).get("expected_replacement_fact")) or (answers[1] if len(answers)>1 else "")).strip()
+        answers=[str(relation_meta.get("correct_option","㉠")), _replacement]
         derived_answer_flags=[True,False]
     source_context=source_context or "\n".join(evidence)
     if int(points)==2 and selection_mode=="python_exam_value_t2_reasoning_matrix":
-        # R28: Python이 이미 고정한 세 사실만 Writer에게 제공한다.
+        # R37: current paired-slot contract only.  Old R28 base/linked/distractor keys
+        # are intentionally not used; they caused the Writer to see an obsolete contract.
         _spec=relation_meta.get("reasoning_spec") or {}
         _parts=[
-            "[중심 item 사실1] "+str(_spec.get("core_base_fact","")),
-            "[중심 item 사실2] "+str(_spec.get("core_link_fact","")),
-            "[비교 item 사실1] "+str(_spec.get("contrast_base_fact","")),
-            "[비교 item 사실2] "+str(_spec.get("contrast_link_fact","")),
+            "[CORE_BASE_SOURCE] "+str(_spec.get("core_base_fact","")),
+            "[CORE_LINK_SOURCE] "+str(_spec.get("core_link_fact","")),
+            "[CONTRAST_BASE_SOURCE] "+str(_spec.get("contrast_base_fact","")),
+            "[CONTRAST_LINK_SOURCE] "+str(_spec.get("contrast_link_fact","")),
         ]
         source_context="\n".join(x for x in _parts if x.strip())
     elif int(points)==2 and selection_mode=="python_exam_value_decision_first_t2":
@@ -112,7 +108,6 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 {style_profile}
 반드시 지킬 규칙:
 - passage/conditions/tasks만 작성한다. 정답은 수정하지 않는다.
-- 2점 paired-slot 모드에서는 core_base_clause, core_link_clause, contrast_base_clause, contrast_link_clause를 각각 작성한다. 각 필드는 대응하는 source fact 하나만 의미 보존 재표현하며 서로의 사실을 섞거나 역할을 바꾸지 않는다.
 - 기술적 사실, 수치, 인과관계는 위 출처 문맥이 직접 뒷받침하는 것만 사용한다.
 - 출처에 없는 실제 사례, 장치 조건, 수치, 효과를 꾸며내지 않는다.
 - 중립적 수업 상황 프레임("교사가 자료를 제시했다", "학생이 검토했다")은 허용하되 기술 사실을 추가하지 않는다.
@@ -136,15 +131,17 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 - 부분점수 2점짜리 task만 하나의 고정정답을 중심으로 필요한 근거 설명·비교·적용을 함께 요구할 수 있다.
 - 자료에서 직접 뒷받침되지 않는 후속 현상·효과·힘·조건으로 확장하지 않는다. 고정정답의 원문 근거 밖의 내용을 새로 묻지 않는다.
 - 2점은 짧고 명확하게 쓰되 두 채점요소가 하나의 사고사슬이어야 한다.
-- selection_mode가 python_exam_value_t2_reasoning_matrix이면 Python 사고논리를 그대로 따른다.
-- 이 모드에서는 passage에 반드시 ㉠과 ㉡ 두 익명 사례를 제시한다. 두 사례 모두 기술 개념명을 직접 쓰지 않는다.
-- Python이 사례를 직접 조립하므로 AI는 사례 전체를 만들지 않는다. core_base_clause/core_link_clause는 중심 item 사실1/2를, contrast_base_clause/contrast_link_clause는 비교 item 사실1/2를 각각 한 문장 이하로 재표현한다.
-- 각 clause에 다른 clause의 사실, 개념명, 새로운 사례·수치·효과를 추가하지 않는다.
-- 원문 문장, 정의, 숫자열을 그대로 복사하지 말고 문장 구조와 표현 순서를 바꾸어 재구성한다. 단, 기술적 의미·인과·수치는 바꾸지 않는다.
+- selection_mode가 python_exam_value_t2_reasoning_matrix이면 Python의 현재 paired-slot 사고논리를 그대로 따른다.
+- 이 모드에서는 passage를 직접 작성하지 말고 t2_clause_candidates를 반드시 작성한다.
+- t2_clause_candidates에는 화면에 표시되는 core_base, core_link, contrast_base 세 key만 두고, 각 key마다 의미가 같은 표현 후보를 정확히 3개 제시한다. contrast_link는 Python이 고정한 숨은 수정정답이므로 재표현하지 않는다.
+- 각 표현 후보는 해당 SOURCE 사실 하나만 재표현한다. 다른 SOURCE의 정보·개념명·수치·효과를 섞지 않는다.
+- 원문 어순을 조금 바꾼 수준이 아니라 문장 구조를 바꾸되, 수치·방향·인과·기술적 의미는 절대로 바꾸지 않는다.
+- 숨은 중심/비교 개념명은 네 표현 후보 어디에도 직접 쓰지 않는다.
+- Python이 네 후보 묶음에서 원문복사·불완전문구를 검사해 하나씩 선택하고 ㉠/㉡을 조립하므로, AI가 ㉠/㉡ 사례를 직접 조립하지 않는다.
 - 첫 task와 둘째 task의 최종 문구는 Python이 고정하므로 AI가 만든 tasks는 사용되지 않는다. passage/conditions가 이 고정 과업과 정확히 맞도록 작성한다.
 - 고정 첫 task는 ㉠/㉡ 중 내부적으로 일관된 사례를 하나 고르는 판단이다.
-- 고정 둘째 task는 첫 판단을 이용하여 선택하지 않은 사례의 ②를 그 사례의 ①과 같은 source item에 속하는 contrast_link_fact에 맞게 수정하는 과업이다.
-- 둘째 정답인 contrast_link_fact의 내용은 passage나 conditions에 직접 또는 거의 같은 표현으로 제시하지 않는다. contrast_link_clause는 Python이 화면에 사용하지 않고 의미 검증용으로만 보관할 수 있으므로, passage/conditions에는 넣지 않는다.
+- 고정 둘째 task는 첫 판단을 이용하여 다른 사례에서 잘못 섞인 한 부분을 linked_fact에 맞게 수정하는 과업이다.
+- 둘째 정답 문구를 passage나 conditions에 그대로 제시하지 않는다.
 - 첫 task와 둘째 task를 서로 독립적으로 풀 수 있게 만들지 않는다. 둘째 task에는 "첫 판단을 근거로", "선택하지 않은 사례에서" 같은 연결 표현을 사용한다.
 - hidden_core_answer와 hidden_contrast_answer는 passage/conditions/tasks에 직접 쓰지 않는다.
 - 별도의 제3개념, 새로운 기술 사실, 새로운 수치, 새로운 효과를 추가하지 않는다.
@@ -160,17 +157,47 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
 {{
  "intro":"...",
  "passage":"...",
- "core_base_clause":"...",
- "core_link_clause":"...",
- "contrast_base_clause":"...",
- "contrast_link_clause":"...",
  "conditions":["..."],
  "tasks":["..."],
- "thinking_types":["..."]
+ "thinking_types":["..."],
+ "t2_clause_candidates":{{
+   "core_base":["...","...","..."],
+   "core_link":["...","...","..."],
+   "contrast_base":["...","...","..."]
+ }}
 }}
 """
     r=client.responses.create(model=model,input=prompt,reasoning={"effort":"medium"})
     x=json.loads(_strip_json(r.output_text))
+
+    # R37: paired-slot display text is no longer free-form Writer output.
+    # Writer supplies three paraphrase candidates per source fact; Python applies the
+    # same centralized clause-quality policy used by validation and assembles cases.
+    _paired_passage=None
+    _paired_conditions=[]
+    if int(points)==2 and selection_mode=="python_exam_value_t2_reasoning_matrix":
+        _spec=relation_meta.get("reasoning_spec") or {}
+        _groups=x.get("t2_clause_candidates") or {}
+        _labels=[_spec.get("hidden_core_answer",""),_spec.get("hidden_contrast_answer","")]
+        _chosen={}
+        _quality={}
+        for _key,_src_key in (("core_base","core_base_fact"),("core_link","core_link_fact"),
+                              ("contrast_base","contrast_base_fact")):
+            _vals=_groups.get(_key,[])
+            if isinstance(_vals,str): _vals=[_vals]
+            _text,_diag=choose_t2_display_clause(_vals,_spec.get(_src_key,""),_labels)
+            if not _text:
+                raise ValueError("T2 표시문구 생성 실패: "+_key+" / "+str(_diag.get("reason","")))
+            _chosen[_key]=_text; _quality[_key]=_diag
+        _correct=str(_spec.get("correct_option") or relation_meta.get("correct_option") or "㉠")
+        _wrong="㉡" if _correct=="㉠" else "㉠"
+        _case={
+            _correct:f"① {_chosen['core_base']}  ② {_chosen['core_link']}",
+            _wrong:f"① {_chosen['contrast_base']}  ② {_chosen['core_link']}",
+        }
+        _paired_passage=f"㉠ {_case['㉠']}\n㉡ {_case['㉡']}"
+        # contrast_link is intentionally not displayed; it is the correction answer.
+        relation_meta["display_clause_quality"]=_quality
 
     # R30: 2점 reasoning-matrix의 채점행동(tasks)은 AI 표현에 맡기지 않는다.
     # Python이 이미 reasoning_spec과 정답 구조를 확정했으므로,
@@ -181,25 +208,8 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
             "㉠과 ㉡ 중 두 사실의 관계가 서로 일관된 것을 고르시오.",
             "첫 판단을 근거로, 선택하지 않은 사례의 ②를 그 사례의 ①과 일관되도록 바르게 수정하시오.",
         ]
-        # R32: AI는 네 source fact를 각각 재표현만 하고, 사례/슬롯 배치는 Python이 직접 소유한다.
-        _cb=str(x.get("core_base_clause","") or "").strip()
-        _cl=str(x.get("core_link_clause","") or "").strip()
-        _xb=str(x.get("contrast_base_clause","") or "").strip()
-        _xl=str(x.get("contrast_link_clause","") or "").strip()
-        _co=str(relation_meta.get("correct_option","㉠") or "㉠")
-        # 화면에는 contrast_link_clause를 의도적으로 제시하지 않는다. 둘째 정답 복사 방지.
-        if _cb and _cl and _xb and _xl:
-            _case_correct=f"① {_cb}  ② {_cl}"
-            _case_wrong=f"① {_xb}  ② {_cl}"
-            if _co=="㉡":
-                _writer_passage=f"㉠ {_case_wrong}\n㉡ {_case_correct}"
-            else:
-                _writer_passage=f"㉠ {_case_correct}\n㉡ {_case_wrong}"
-        else:
-            _writer_passage=str(x.get("passage","")).strip()
     else:
         _writer_tasks=[str(v).strip() for v in x.get("tasks",[]) if str(v).strip()]
-        _writer_passage=str(x.get("passage","")).strip()
 
     _sources=[{"source_name":a["source_name"],"page_no":a["page_no"]} for a in bundle]
     if int(points)==2 and selection_mode in {"python_exam_value_decision_first_t2","python_exam_value_t2_reasoning_matrix"}:
@@ -207,19 +217,24 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
         _cp=relation_meta.get("contrast_page_no")
         if _cs and not any(str(z.get("source_name",""))==_cs and z.get("page_no")==_cp for z in _sources):
             _sources.append({"source_name":_cs,"page_no":_cp})
+    _q_evidence=evidence
+    if int(points)==2 and selection_mode=="python_exam_value_t2_reasoning_matrix":
+        _spec=relation_meta.get("reasoning_spec") or {}
+        _q_evidence=[str(_spec.get("core_base_fact","")).strip(), str(_spec.get("contrast_link_fact","")).strip()]
+
     q={
       "domain":bundle[0]["domain"],
       "topic":" · ".join(a["topic"] for a in bundle),
       "points":points,"subpoints":pattern["subpoints"],"pattern_id":pattern["id"],
       "question_type":question_type,"material_form":material_form,
       "verifier":"source",
-      "intro":("다음 두 사례를 읽고 <작성 방법>에 따라 쓰시오." if int(points)==2 and selection_mode=="python_exam_value_t2_reasoning_matrix" else x.get("intro","다음 자료를 읽고 <작성 방법>에 따라 쓰시오.")),
-      "passage":_writer_passage,
-      "conditions":([] if int(points)==2 and selection_mode=="python_exam_value_t2_reasoning_matrix" else [str(v).strip() for v in x.get("conditions",[]) if str(v).strip()]),
+      "intro":x.get("intro","다음 자료를 읽고 <작성 방법>에 따라 쓰시오."),
+      "passage":(_paired_passage if _paired_passage is not None else str(x.get("passage","")).strip()),
+      "conditions":(_paired_conditions if _paired_passage is not None else [str(v).strip() for v in x.get("conditions",[]) if str(v).strip()]),
       "tasks":_writer_tasks,
       "answer":answers,
       "solution":[f"{LABELS[i]}: {answers[i]}" for i in range(len(answers))],
-      "evidence":evidence,
+      "evidence":_q_evidence,
       "derived_answer_flags":derived_answer_flags,
       "sources":_sources,
       "source_basis":"; ".join(f"{z['source_name']} p.{z['page_no']}" for z in _sources),

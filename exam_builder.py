@@ -1,12 +1,12 @@
 import copy
-BUILDER_API_VERSION = "SOURCE-CAPABILITY-FIRST-R36-20260903"
+BUILDER_API_VERSION = "T2-PIPELINE-AUDIT-R37-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
 from formula_templates import generate_formula_question
 from retrieval import related_bundle,bundle_context,official_style_profile,candidate_cluster
 from ai_wrapper import rewrite_bundle,safe_bundle_question
-from validators import validate_formula_question,validate_grounded_question,too_similar,validate_exam,fingerprint
+from validators import validate_formula_question,validate_grounded_question,too_similar,validate_exam,fingerprint,t2_clause_quality
 from patterns import blueprint,weighted_pick
 from concept_families import families_for
 from quality_judge import select_coherent_bundle,judge_question,judge_exam,judge_ab_pair
@@ -1635,13 +1635,12 @@ def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
             "㉠①":spec.get("contrast_base_fact",""), "㉠②":spec.get("core_link_fact",""),
             "㉡①":spec.get("core_base_fact",""), "㉡②":spec.get("core_link_fact",""),
         })
+        _forbidden=[spec.get("hidden_core_answer",""),spec.get("hidden_contrast_answer","")]
         for _name,_clause in (("㉠①",_a1),("㉠②",_a2),("㉡①",_b1),("㉡②",_b2)):
-            _why=_t2_complete_fact_reason(_clause)
-            if _why:
-                errs.append(f"2점 {_name} 표시문구 불완전: {_why}")
             _src=_source_map.get(_name,"")
-            if _src and _t2_clause_copy_score(_clause,_src)>=0.88:
-                errs.append(f"2점 {_name} 원문 장구절 직접 복사")
+            _qd=t2_clause_quality(_clause,_src,_forbidden)
+            if not _qd.get("ok"):
+                errs.append(f"2점 {_name} 표시문구 불합격: {_qd.get('reason','')}")
 
     # T2는 실제 시각자료를 사용하지 않으므로 Writer가 임의로 그림/표/그래프를 만들거나 언급할 수 없다.
     _t2_visible=" ".join([str(cand.get("intro","") or ""),passage,conditions])
