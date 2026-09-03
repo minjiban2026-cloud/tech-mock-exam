@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "CAPABILITY-COVERAGE-R45-20260903"
+BUILDER_API_VERSION = "FULL-CAPABILITY-SUITE-R46-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -4191,6 +4191,138 @@ def make_quality_sample(db_path,domains=None,api_key="",model="gpt-5.6-luna",
     exam["sample_mode"]="PYTHON_PREFLIGHT_THEN_SINGLE_JUDGE"
     return exam
 
+
+
+def _coverage_failure_signals(review, question):
+    """Normalize Judge output into regression-level failure classes.
+
+    This intentionally preserves the complete failure distribution.  It is not
+    used to retry or replace a question during the 18-capability suite.
+    """
+    signals=[]
+    for flag in (review.get("fatal_flags",[]) or []):
+        flag=str(flag or '').strip()
+        if flag:
+            signals.append("FATAL:"+flag)
+    scores=review.get("scores",{}) or {}
+    cap=str(question.get("capability_id") or question.get("t4_capability_mode") or '')
+    infer_floor=3.0 if cap=='deterministic_formula_operation' or question.get('pattern_id')=='T4_C112' else 3.5
+    floors={
+        'grounding':4.0,'answer_leakage':4.0,'coherence':4.0,
+        'inferential_distance':infer_floor,'task_distinctness':4.0,
+        'exam_realism':4.0,'difficulty_fit':4.0,'ambiguity_control':4.0,
+    }
+    for key,floor in floors.items():
+        try: val=float(scores.get(key,0) or 0)
+        except Exception: val=0.0
+        if val < floor:
+            signals.append(f"SCORE:{key}<{floor:g}")
+    if not bool(review.get('pass')) and not signals:
+        signals.append('JUDGE:REJECT_OTHER')
+    return sorted(set(signals))
+
+
+def make_capability_validation_suite(db_path,domains=None,api_key="",model="gpt-5.6-luna",
+                                     judge_model=None,seed=None,ai_quality_enabled=True):
+    """R46: exhaustively test all 9×2 selected 4-point capabilities in one run.
+
+    Exactly one Python-grounded question is constructed per coverage key.  Judge
+    rejection NEVER triggers replacement/retry.  The point is to observe the
+    whole failure surface first and fix generators by failure class afterwards.
+    """
+    if domains is None:
+        domains=list(DEFAULT_DOMAINS)
+    inv=coverage_inventory(db_path,domains,FORMULA_DOMAINS)
+    targets=list(inv.get('targets',[]) or [])
+    expected=len(domains)*2
+    if not inv.get('all_domains_two_targets') or len(targets)!=expected:
+        raise RuntimeError(f"R46 전수검증 시작 불가: capability target {len(targets)}/{expected}")
+
+    rng=random.Random(460000 + (0 if seed is None else int(seed)))
+    questions=[]
+    construction=[]
+    for idx,target in enumerate(targets,1):
+        dom=str(target.get('domain',''))
+        cap=str(target.get('capability_id',''))
+        ck=str(target.get('coverage_key') or f'{dom}::{cap}')
+        q=None
+        if cap=='deterministic_formula_operation':
+            # Python-only candidate search is allowed before Judge.  No Judge
+            # feedback is used here and there is no post-Judge replacement.
+            for _ in range(160):
+                cand=generate_formula_question(dom,rng)
+                if not cand:
+                    continue
+                cand=_enrich_formula(cand,4)
+                if not cand or validate_formula_question(cand):
+                    continue
+                q=cand
+                break
+        else:
+            q=generate_reasoning_question(db_path,dom,cap,rng)
+        if not q:
+            construction.append({'coverage_key':ck,'domain':dom,'capability_id':cap,'constructed':False})
+            raise RuntimeError(f"R46 전수검증 문항 구성 실패: {ck}")
+        q['number']=idx
+        q['section']='CAPABILITY18'
+        q['coverage_key']=ck
+        q['capability_id']=cap
+        q['points']=4
+        construction.append({'coverage_key':ck,'domain':dom,'capability_id':cap,'constructed':True,'topic':q.get('topic','')})
+        questions.append(q)
+
+    style=official_style_profile(db_path)
+    jm=judge_model or model
+    reviews=[]
+    for q in questions:
+        if ai_quality_enabled and api_key:
+            try:
+                rv=judge_question(api_key,jm,q,"",style)
+            except Exception as ex:
+                rv={'pass':False,'reason':'CAPABILITY18 AI 품질심사 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+        else:
+            rv={'pass':None,'reason':'AI Judge 미실행','fatal_flags':[],'scores':{}}
+        signals=_coverage_failure_signals(rv,q) if rv.get('pass') is not None else []
+        q['capability_suite_ai_quality']=copy.deepcopy(rv)
+        reviews.append({
+            'number':q.get('number'),'coverage_key':q.get('coverage_key'),'domain':q.get('domain'),
+            'capability_id':q.get('capability_id'),'pattern_id':q.get('pattern_id'),'topic':q.get('topic',''),
+            'pass':rv.get('pass'),'reason':str(rv.get('reason','')),
+            'fatal_flags':list(rv.get('fatal_flags',[]) or []),'scores':copy.deepcopy(rv.get('scores',{})),
+            'failure_signals':signals,
+        })
+
+    by_signal={}; by_capability={}; by_domain={}
+    for r in reviews:
+        d=r['domain']; c=r['capability_id']
+        by_domain.setdefault(d,{'tested':0,'pass':0,'reject':0})
+        by_domain[d]['tested']+=1
+        if r.get('pass') is True: by_domain[d]['pass']+=1
+        elif r.get('pass') is False: by_domain[d]['reject']+=1
+        by_capability.setdefault(c,{'tested':0,'pass':0,'reject':0,'signals':{}})
+        by_capability[c]['tested']+=1
+        if r.get('pass') is True: by_capability[c]['pass']+=1
+        elif r.get('pass') is False: by_capability[c]['reject']+=1
+        for sig in r.get('failure_signals',[]):
+            by_signal[sig]=by_signal.get(sig,0)+1
+            m=by_capability[c]['signals']; m[sig]=m.get(sig,0)+1
+
+    tested=sum(1 for r in reviews if r.get('pass') is not None)
+    passed=sum(1 for r in reviews if r.get('pass') is True)
+    rejected=sum(1 for r in reviews if r.get('pass') is False)
+    return {
+        'mode':'FULL_18_CAPABILITY_REGRESSION_NO_JUDGE_RETRY',
+        'builder_api_version':BUILDER_API_VERSION,
+        'candidate_inventory':inv,
+        'construction':construction,
+        'questions':questions,
+        'reviews':reviews,
+        'summary':{'target_total':expected,'constructed':len(questions),'judge_tested':tested,'pass':passed,'reject':rejected,'all_pass':bool(tested==expected and passed==expected)},
+        'failure_class_counts':dict(sorted(by_signal.items(),key=lambda kv:(-kv[1],kv[0]))),
+        'capability_summary':by_capability,
+        'domain_summary':by_domain,
+        'final_ab_coverage_ready':bool(tested==expected and passed==expected),
+    }
 
 def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
             api_key="",model="gpt-5.6-luna",ai_enabled=True,ai_quality_enabled=True,

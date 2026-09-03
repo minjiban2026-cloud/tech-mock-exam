@@ -173,11 +173,20 @@ def run_release_regression(db_path,domains,seeds=50):
     except Exception as ex:
         coverage={"all_domains_two_targets":False,"error":str(ex)}
     structural_ok=bool(coverage.get("all_domains_two_targets"))
+    try:
+        suite=eb.make_capability_validation_suite(db_path,domains=domains,seed=4601,ai_quality_enabled=False)
+        suite_construct={
+            "pass": bool(suite.get("summary",{}).get("constructed")==len(domains)*2),
+            "summary": suite.get("summary",{}),
+            "coverage_keys": [q.get("coverage_key") for q in suite.get("questions",[])],
+        }
+    except Exception as ex:
+        suite_construct={"pass":False,"error":str(ex)}
     return {
-      "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass") and structural_ok),
+      "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass") and structural_ok and suite_construct.get("pass")),
       "historical":hist,"grounding":grounding,"t4_operation_capabilities":t4,"sample_plan_coverage":plans,
-      "reasoning_coverage_candidates":coverage,
-      "note":"R45 API-free gate: 과거/grounding 회귀 + 기존 Python 연산형 + 9영역×2 reasoning coverage 후보 구성 가능 여부. 후보는 AI_VERIFIED가 아니며 실제 SAMPLE Judge PASS 후에만 검증완료로 승격."
+      "reasoning_coverage_candidates":coverage,"capability18_construction":suite_construct,
+      "note":"R46 API-free gate: 18개 capability 후보 존재뿐 아니라 같은 실행에서 18/18 문항을 실제 구성할 수 있어야 통과. 실제 AI 품질판정은 18개 전수 Judge에서 한 번씩 수행하며 REJECT 교체/재시도는 하지 않음."
     }
 
 

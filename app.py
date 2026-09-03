@@ -7,6 +7,7 @@ import streamlit as st
 import exam_builder as exam_builder_module
 make_ab = exam_builder_module.make_ab
 make_quality_sample = getattr(exam_builder_module, "make_quality_sample", None)
+make_capability_validation_suite = getattr(exam_builder_module, "make_capability_validation_suite", None)
 try:
     from quality_regression import run_release_regression
     from reasoning_capabilities import coverage_inventory
@@ -29,7 +30,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R45-20260903")
+st.caption("배포 버전: FINAL-STABLE-20260831 · CAPABILITY18-R46-20260903")
 
 def secret(name, default=""):
     try:
@@ -292,44 +293,26 @@ with tabs[2]:
             "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
-        "R45는 횟수 랜덤검사가 아니라 9영역×2 reasoning capability=18개 coverage를 순환합니다. "
-        "API 0원 검사는 후보를 구성할 수 있는지만 확인하고, 실제 검증완료(AI_VERIFIED)는 SAMPLE Judge PASS 때만 기록합니다."
+        "R46 주 검증은 SAMPLE6 반복이 아닙니다. 9영역×2=18개 capability를 한 번에 전수 생성하고, "
+        "각 문항을 Judge 1회만 심사한 뒤 전체 failure class를 집계합니다. REJECT 문항은 같은 실행에서 교체·재시도하지 않습니다."
     )
 
     try:
         _cov_inv=coverage_inventory(DB,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())) if coverage_inventory else {"targets":[],"target_total":18,"all_domains_two_targets":False,"error":"coverage_inventory unavailable"}
     except Exception as _cov_ex:
         _cov_inv={"targets":[],"target_total":18,"all_domains_two_targets":False,"error":str(_cov_ex)}
-    if "CAPABILITY_VERIFIED" not in st.session_state:
-        st.session_state["CAPABILITY_VERIFIED"]={}
-    if "CAPABILITY_ATTEMPTED" not in st.session_state:
-        st.session_state["CAPABILITY_ATTEMPTED"]=[]
-    _verified=st.session_state["CAPABILITY_VERIFIED"]
-    _targets=list(_cov_inv.get("targets",[]) or [])
-    _verified_count=sum(1 for t in _targets if _verified.get(t.get("coverage_key")))
-    st.progress(min(1.0,_verified_count/max(1,int(_cov_inv.get("target_total",18) or 18))))
-    st.caption(f"4점 capability 실제 Judge 검증: {_verified_count}/{_cov_inv.get('target_total',18)} · 후보구성 9영역×2: {'완료' if _cov_inv.get('all_domains_two_targets') else '부족'}")
-    with st.expander("🧭 9영역×2 capability coverage 현황", expanded=False):
-        st.json({
-            "candidate_inventory":_cov_inv,
-            "ai_verified_keys":sorted([k for k,v in _verified.items() if v]),
-            "attempted_keys":list(st.session_state.get("CAPABILITY_ATTEMPTED",[])),
-            "final_ab_coverage_ready":bool(_verified_count>=int(_cov_inv.get("target_total",18) or 18))
-        })
-        if st.button("coverage 검증기록 초기화", key="reset_capability_coverage"):
-            st.session_state["CAPABILITY_VERIFIED"]={}
-            st.session_state["CAPABILITY_ATTEMPTED"]=[]
-            st.rerun()
+    with st.expander("🧭 18 capability 전수검증 대상", expanded=False):
+        st.json(_cov_inv)
 
     if st.button("API 0원 · DB 전체 회귀검사", use_container_width=True, disabled=(run_release_regression is None)):
         try:
-            with st.spinner("과거 실패 회귀 + T4 전체 후보 + 6문항 capability 청사진 검사 중..."):
+            with st.spinner("과거 실패 회귀 + grounding + 18 capability 구성 가능 여부 검사 중..."):
                 rr=run_release_regression(DB,domains,seeds=50)
             st.session_state["QUALITY_REGRESSION"]=rr
             if rr.get("pass"):
-                st.success("DB/Python 풀이연산 회귀검사 통과")
+                st.success("DB/Python 전수 회귀검사 통과")
             else:
-                st.error("DB/Python 풀이연산 회귀검사 실패: 6문항 AI 검사를 실행하기 전에 아래 항목을 먼저 수정하세요.")
+                st.error("DB/Python 전수 회귀검사 실패: API Judge 전에 구조를 먼저 수정해야 합니다.")
         except Exception as e:
             st.error("회귀검사 실행 실패: "+str(e))
 
@@ -339,62 +322,92 @@ with tabs[2]:
             st.json(rr)
 
     if st.button(
-        "6문항 빠른 품질 샘플 생성",
-        type="primary",
-        use_container_width=True,
-        disabled=(not builder_ok)
+        "18 capability 전체 일괄 생성 + Judge 전수검증",
+        type="primary", use_container_width=True,
+        disabled=(make_capability_validation_suite is None)
     ):
-        if make_quality_sample is None:
-            st.error(f"exam_builder.py에 make_quality_sample이 없습니다. 현재 로드 경로: {loaded_builder_path}")
+        if make_capability_validation_suite is None:
+            st.error(f"exam_builder.py에 make_capability_validation_suite가 없습니다. 현재 로드 경로: {loaded_builder_path}")
+        elif not (use_ai and key):
+            st.error("18 capability 전수검증은 실제 AI Judge 결과가 필요합니다. AI 사용과 API 키를 확인하세요.")
         else:
-            with st.spinner("2점 2개 + 4점 4개 생성 중..."):
+            with st.spinner("18개 capability를 모두 구성한 뒤 각 문항을 Judge 1회씩 전수검증 중..."):
                 try:
-                    _attempted=set(st.session_state.get("CAPABILITY_ATTEMPTED",[]))
-                    _verified_now=st.session_state.get("CAPABILITY_VERIFIED",{})
-                    _unseen=[t for t in _targets if t.get("coverage_key") not in _attempted and not _verified_now.get(t.get("coverage_key"))]
-                    _retry=[t for t in _targets if not _verified_now.get(t.get("coverage_key")) and t.get("coverage_key") in _attempted]
-                    _already=[t for t in _targets if _verified_now.get(t.get("coverage_key"))]
-                    _coverage_batch=(_unseen+_retry+_already)[:4]
-                    if len(_coverage_batch)<4:
-                        raise RuntimeError("R45 capability coverage 후보가 4개 미만입니다. DB 전체 회귀검사 결과를 확인하세요.")
-                    sample=make_quality_sample(
-                        DB,domains=domains,api_key=key,model=model,
-                        ai_enabled=bool(use_ai and key),
-                        judge_model=judge_model,
-                        seed=int(seed),
-                        ai_quality_enabled=bool(use_ai and key),
-                        coverage_targets=_coverage_batch
+                    suite=make_capability_validation_suite(
+                        DB,domains=domains,api_key=key,model=model,judge_model=judge_model,
+                        seed=int(seed),ai_quality_enabled=True
                     )
-                    st.session_state["QUALITY_SAMPLE"]=sample
-                    _attempted_list=list(st.session_state.get("CAPABILITY_ATTEMPTED",[]))
-                    _verified_map=dict(st.session_state.get("CAPABILITY_VERIFIED",{}))
-                    for _rv in (sample.get("sample_ai_reviews",[]) or []):
-                        _ck=_rv.get("coverage_key")
-                        if _ck and _ck not in _attempted_list:
-                            _attempted_list.append(_ck)
-                        if _ck and bool(_rv.get("pass")):
-                            _verified_map[_ck]=True
-                    st.session_state["CAPABILITY_ATTEMPTED"]=_attempted_list
-                    st.session_state["CAPABILITY_VERIFIED"]=_verified_map
-                    st.success("6문항 capability coverage 샘플 생성 완료.")
-                    st.caption(
-                        f"실행 모드: {sample.get('sample_mode','-')} · "
-                        f"builder: {sample.get('builder_api_version','-')}"
-                    )
-                    ss=sample.get("generation_stats",{})
-                    st.caption(
-                        f"문항작성 AI {ss.get('ai_calls',0)}회 · "
-                        f"AI 관계성 선별 {ss.get('ai_selector_calls',0)}회(정상=0) · "
-                        f"계산형 {ss.get('formula_questions',0)}문항"
-                    )
-                    if sample.get("sample_ai_reviews"):
-                        st.caption(
-                            f"단발 AI Judge: PASS {sample.get('sample_ai_pass_count',0)} · "
-                            f"REJECT {sample.get('sample_ai_reject_count',0)} · 자동 재시도 0회"
-                        )
+                    st.session_state["CAPABILITY18_SUITE"]=suite
+                    sm=suite.get("summary",{})
+                    if sm.get("all_pass"):
+                        st.success(f"18 capability 전수검증 PASS {sm.get('pass',0)}/18")
+                    else:
+                        st.error(f"18 capability 전수검증: PASS {sm.get('pass',0)} · REJECT {sm.get('reject',0)} / 18")
+                    st.caption("중간 REJECT에 따른 교체·재생성·Judge 재시도: 0회")
                 except Exception as e:
                     st.error(str(e))
                     show_generation_diagnostics(e)
+
+    if "CAPABILITY18_SUITE" in st.session_state:
+        suite=st.session_state["CAPABILITY18_SUITE"]
+        sm=suite.get("summary",{})
+        st.markdown("### 🧪 18 capability 전체 전수검증 결과")
+        st.caption(
+            f"구성 {sm.get('constructed',0)}/18 · Judge {sm.get('judge_tested',0)}/18 · "
+            f"PASS {sm.get('pass',0)} · REJECT {sm.get('reject',0)} · "
+            f"최종 A/B coverage 준비: {'완료' if suite.get('final_ab_coverage_ready') else '미완료'}"
+        )
+        c1,c2=st.columns(2)
+        with c1:
+            st.markdown("**공통 failure class 집계**")
+            st.json(suite.get("failure_class_counts",{}))
+        with c2:
+            st.markdown("**capability 유형별 집계**")
+            st.json(suite.get("capability_summary",{}))
+        with st.expander("영역별 집계", expanded=False):
+            st.json(suite.get("domain_summary",{}))
+        with st.expander("18개 Judge 결과 원본", expanded=False):
+            st.json(suite.get("reviews",[]))
+
+        for q in suite.get("questions",[]):
+            _rv=q.get("capability_suite_ai_quality") or {}
+            _pass=_rv.get("pass")
+            with st.expander(
+                f"{q.get('number')} · {q.get('coverage_key')} · " + ("✅ PASS" if _pass else "❌ REJECT"),
+                expanded=(_pass is False)
+            ):
+                st.caption(f"패턴 {q.get('pattern_id','-')} · 주제 {q.get('topic','')}")
+                st.write(q.get("passage",""))
+                if q.get("conditions"):
+                    st.markdown("**<조건>**")
+                    for x in q.get("conditions",[]): st.write("○",x)
+                st.markdown("**<작성 방법>**")
+                for x in q.get("tasks",[]): st.write("○",x)
+                with st.popover("정답/근거"):
+                    st.write("정답:",q.get("answer",[]))
+                    st.write("해설:",q.get("solution",[]))
+                    st.write("원자료 근거:",q.get("source_basis",q.get("sources",[])))
+                if _pass is True:
+                    st.success("AI Judge: PASS")
+                elif _pass is False:
+                    st.error("AI Judge: REJECT · "+str(_rv.get("reason","")))
+                else:
+                    st.warning("AI Judge 미실행")
+                if _rv.get("fatal_flags"): st.write("Fatal flags:",_rv.get("fatal_flags"))
+                if _rv.get("scores"): st.write("심사 점수:",_rv.get("scores"))
+
+    st.divider()
+    st.caption("아래 SAMPLE6은 개별 확인용 보조 기능입니다. 18 capability 최종 coverage 판정에는 사용하지 않습니다.")
+    if st.button("보조용 6문항 샘플 생성", use_container_width=True, disabled=(make_quality_sample is None)):
+        try:
+            sample=make_quality_sample(
+                DB,domains=domains,api_key=key,model=model,ai_enabled=bool(use_ai and key),
+                judge_model=judge_model,seed=int(seed),ai_quality_enabled=bool(use_ai and key)
+            )
+            st.session_state["QUALITY_SAMPLE"]=sample
+            st.success("보조 SAMPLE6 생성 완료")
+        except Exception as e:
+            st.error(str(e)); show_generation_diagnostics(e)
 
     if "QUALITY_SAMPLE" in st.session_state:
         sample=st.session_state["QUALITY_SAMPLE"]
