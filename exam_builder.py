@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "FAILURE-CLASS-CORRECTION-R47-20260903"
+BUILDER_API_VERSION = "SEMANTIC-OP-DISCOVERY-R48-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -4238,7 +4238,7 @@ def make_capability_validation_suite(db_path,domains=None,api_key="",model="gpt-
     if not inv.get('all_domains_two_targets') or len(targets)!=expected:
         gaps=[d for d,v in (inv.get('domains',{}) or {}).items() if not v.get('target_met')]
         raise RuntimeError(
-            f"R47 전수검증 시작 차단: 검증된 구조 후보가 {len(targets)}/{expected}입니다. "
+            f"R48 전수검증 시작 차단: 검증된 구조 후보가 {len(targets)}/{expected}입니다. "
             f"0-pass capability를 폐기한 뒤 부족 영역: {', '.join(gaps)}. "
             "18개를 억지로 채워 API를 다시 소모하지 않습니다."
         )

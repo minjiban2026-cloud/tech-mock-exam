@@ -174,3 +174,87 @@ def coverage_inventory(db_path,domains,formula_domains=None):
         rows[d]={'available_types':avail,'selected_target_types':chosen,'target_count':len(chosen),'target_met':len(chosen)>=2,'candidate_counts':{k:len(v) for k,v in caps.items()}}
         for typ in chosen: targets.append({'domain':d,'capability_id':typ,'coverage_key':d+'::'+typ})
     return {'domains':rows,'targets':targets,'target_total':len(domains)*2,'constructed_target_total':len(targets),'all_domains_two_targets':all(v['target_met'] for v in rows.values())}
+
+# R48: semantic-operation discovery. These are DISCOVERED only; they do not count
+# toward final coverage until a deterministic constructor + full Judge suite certifies them.
+CAP_DIRECTIONAL='directional_rule_application'
+CAP_CAUSAL='cause_intervention_prediction'
+_DIR_WORDS=('증가','감소','향상','저하','커지','작아지','높아지','낮아지','비례','반비례')
+_CAUSE_WORDS=('때문','원인','방지','예방','대책','위해','필요')
+
+def _semantic_operation_specs(db_path,domain,max_each=20):
+    con=sqlite3.connect(db_path)
+    rows=con.execute('select answer,evidence,source_name,page_no from anchors where domain=? order by source_name,page_no,id',(domain,)).fetchall()
+    con.close()
+    directional=[]; causal=[]; seen_d=set(); seen_c=set()
+    for ans,ev,src,pno in rows:
+        a=_clean(ans); e=_clean(ev)
+        if not (18<=len(e)<=320):
+            continue
+        # reject obvious page/list debris and incomplete fragments
+        if e.count('□')+e.count('■')>3 or e.endswith(('및','또는','으로부터','따라','경우')):
+            continue
+        dmarks=[w for w in _DIR_WORDS if w in e]
+        if dmarks and len(re.findall(r'[가-힣A-Za-z]',e))>=16:
+            key=(str(src),int(pno or 0),e)
+            if key not in seen_d:
+                seen_d.add(key); directional.append({'capability_id':CAP_DIRECTIONAL,'domain':domain,'answer':a,'evidence':e,'source_name':str(src),'page_no':int(pno or 0),'markers':dmarks})
+        cmarks=[w for w in _CAUSE_WORDS if w in e]
+        # causal candidate must contain an explicit action/effect cue as well, not just a heading.
+        if cmarks and any(x in e for x in ('방지','예방','대책','필요','향상','저하','증가','감소','사용','이용')) and len(re.findall(r'[가-힣A-Za-z]',e))>=18:
+            key=(str(src),int(pno or 0),e)
+            if key not in seen_c:
+                seen_c.add(key); causal.append({'capability_id':CAP_CAUSAL,'domain':domain,'answer':a,'evidence':e,'source_name':str(src),'page_no':int(pno or 0),'markers':cmarks})
+    return {CAP_DIRECTIONAL:directional[:max_each],CAP_CAUSAL:causal[:max_each]}
+
+def semantic_operation_inventory(db_path,domains):
+    out={}
+    for d in domains:
+        specs=_semantic_operation_specs(db_path,d,max_each=50)
+        out[d]={
+            'directional_rule_application':len(specs[CAP_DIRECTIONAL]),
+            'cause_intervention_prediction':len(specs[CAP_CAUSAL]),
+            'status':'DISCOVERED_ONLY',
+            'examples':{
+                CAP_DIRECTIONAL:[x['evidence'][:180] for x in specs[CAP_DIRECTIONAL][:2]],
+                CAP_CAUSAL:[x['evidence'][:180] for x in specs[CAP_CAUSAL][:2]],
+            }
+        }
+    return out
+
+# R48 authoritative coverage: only capabilities with actual full-suite PASS evidence
+# are CERTIFIED. R46 proved deterministic_formula_operation 3/3. Ordered remains
+# EXPERIMENTAL and cannot inflate readiness merely because a source sequence exists.
+def coverage_inventory(db_path,domains,formula_domains=None):
+    formula_domains=set(formula_domains or [])
+    rows={}; targets=[]
+    semantic=semantic_operation_inventory(db_path,domains)
+    for d in domains:
+        caps=discover_capabilities(db_path,d)
+        certified=[]; experimental=[]
+        if d in formula_domains:
+            certified.append('deterministic_formula_operation')
+        if caps.get(CAP_ORDERED):
+            experimental.append(CAP_ORDERED)
+        if semantic[d][CAP_DIRECTIONAL]: experimental.append(CAP_DIRECTIONAL)
+        if semantic[d][CAP_CAUSAL]: experimental.append(CAP_CAUSAL)
+        rows[d]={
+            'certified_types':certified,
+            'experimental_types':experimental,
+            'certified_count':len(certified),
+            'target_met':len(certified)>=2,
+            'semantic_discovery':semantic[d],
+            'retired_candidate_counts':{
+                CAP_CONDITION:len(caps.get(CAP_CONDITION,[])),
+                CAP_CONTRAST:len(caps.get(CAP_CONTRAST,[])),
+            }
+        }
+        for typ in certified:
+            targets.append({'domain':d,'capability_id':typ,'coverage_key':d+'::'+typ,'status':'AI_VERIFIED'})
+    return {
+        'domains':rows,'targets':targets,'target_total':len(domains)*2,
+        'certified_target_total':len(targets),'constructed_target_total':len(targets),
+        'all_domains_two_targets':all(v['target_met'] for v in rows.values()),
+        'status_legend':{'AI_VERIFIED':'실제 전수 Judge PASS','EXPERIMENTAL':'후보/구조 발견, coverage 미산입','RETIRED':'전수검증 0-pass로 폐기'},
+        'note':'R48: 최종 coverage에는 실제 전수 Judge로 인증된 capability만 산입. ordered 및 새 semantic operation은 인증 전까지 EXPERIMENTAL.'
+    }
