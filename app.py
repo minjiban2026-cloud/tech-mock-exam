@@ -30,7 +30,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · CAPABILITY18-R46-20260903")
+st.caption("배포 버전: FINAL-STABLE-20260831 · FAILURE-CLASS-R47-20260903")
 
 def secret(name, default=""):
     try:
@@ -293,7 +293,7 @@ with tabs[2]:
             "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
-        "R46 주 검증은 SAMPLE6 반복이 아닙니다. 9영역×2=18개 capability를 한 번에 전수 생성하고, "
+        "R47 주 검증은 0-pass capability를 coverage에서 제거한 뒤에만 전수검증합니다. 9영역×2=18개 capability를 한 번에 전수 생성하고, "
         "각 문항을 Judge 1회만 심사한 뒤 전체 failure class를 집계합니다. REJECT 문항은 같은 실행에서 교체·재시도하지 않습니다."
     )
 

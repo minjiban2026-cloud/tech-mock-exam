@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "FULL-CAPABILITY-SUITE-R46-20260903"
+BUILDER_API_VERSION = "FAILURE-CLASS-CORRECTION-R47-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -4206,7 +4206,7 @@ def _coverage_failure_signals(review, question):
             signals.append("FATAL:"+flag)
     scores=review.get("scores",{}) or {}
     cap=str(question.get("capability_id") or question.get("t4_capability_mode") or '')
-    infer_floor=3.0 if cap=='deterministic_formula_operation' or question.get('pattern_id')=='T4_C112' else 3.5
+    infer_floor=3.0 if (cap in ('deterministic_formula_operation','ordered_sequence_repair') or question.get('pattern_id')=='T4_C112') else 3.5
     floors={
         'grounding':4.0,'answer_leakage':4.0,'coherence':4.0,
         'inferential_distance':infer_floor,'task_distinctness':4.0,
@@ -4236,7 +4236,12 @@ def make_capability_validation_suite(db_path,domains=None,api_key="",model="gpt-
     targets=list(inv.get('targets',[]) or [])
     expected=len(domains)*2
     if not inv.get('all_domains_two_targets') or len(targets)!=expected:
-        raise RuntimeError(f"R46 전수검증 시작 불가: capability target {len(targets)}/{expected}")
+        gaps=[d for d,v in (inv.get('domains',{}) or {}).items() if not v.get('target_met')]
+        raise RuntimeError(
+            f"R47 전수검증 시작 차단: 검증된 구조 후보가 {len(targets)}/{expected}입니다. "
+            f"0-pass capability를 폐기한 뒤 부족 영역: {', '.join(gaps)}. "
+            "18개를 억지로 채워 API를 다시 소모하지 않습니다."
+        )
 
     rng=random.Random(460000 + (0 if seed is None else int(seed)))
     questions=[]

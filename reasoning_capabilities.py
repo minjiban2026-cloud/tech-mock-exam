@@ -165,7 +165,11 @@ def coverage_inventory(db_path,domains,formula_domains=None):
         caps=discover_capabilities(db_path,d)
         avail=[]
         if d in formula_domains: avail.append('deterministic_formula_operation')
-        avail += [k for k in (CAP_ORDERED,CAP_CONTRAST,CAP_CONDITION) if caps.get(k)]
+        # R47: the full 18-suite proved paired-concept (0/7) and condition-swap (0/1)
+        # are not valid 4-point capabilities.  They remain discoverable for diagnostics,
+        # but can never satisfy a coverage target.  Do not fabricate 9x2 readiness.
+        if caps.get(CAP_ORDERED):
+            avail.append(CAP_ORDERED)
         chosen=avail[:2]
         rows[d]={'available_types':avail,'selected_target_types':chosen,'target_count':len(chosen),'target_met':len(chosen)>=2,'candidate_counts':{k:len(v) for k,v in caps.items()}}
         for typ in chosen: targets.append({'domain':d,'capability_id':typ,'coverage_key':d+'::'+typ})

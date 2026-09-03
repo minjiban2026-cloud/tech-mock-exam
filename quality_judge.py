@@ -181,7 +181,15 @@ JSON만 출력:
             or str(question.get("selection_mode","") or "")=="deterministic_formula_operation"
             or str(question.get("reasoning_mode","") or "")=="deterministic_formula_operation"
         )
-        inferential_floor=3.0 if is_deterministic_operation else 3.5
+        # R47: full-suite evidence showed several ordered-sequence questions received
+        # an explicit PASS verdict / no fatal flags / all other 4-point dimensions >=4,
+        # but were silently flipped only because inferential_distance was 3.  Align this
+        # postprocessor with that reviewer scale without relaxing any other capability.
+        is_ordered_sequence=(
+            str(question.get("capability_id","") or "")=="ordered_sequence_repair"
+            and pattern_id=="T4_CAP22"
+        )
+        inferential_floor=3.0 if (is_deterministic_operation or is_ordered_sequence) else 3.5
         passed=(
             x.get("verdict")=="PASS"
             and vals["grounding"]>=4

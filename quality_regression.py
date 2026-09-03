@@ -223,3 +223,20 @@ def audit_r44_judge_alignment():
         "nonoperation_id3_reject": not bool(noncalc.get("pass")),
         "fatal_still_rejects": not bool(fatal.get("pass")),
     }
+
+# R47 full-suite failure-class regression: 0-pass architectures must never count
+# toward 9x2 coverage merely because a lexical candidate exists.
+def audit_r47_failure_class_correction(db_path, domains):
+    from reasoning_capabilities import coverage_inventory, CAP_CONTRAST, CAP_CONDITION
+    import exam_builder as eb
+    inv=coverage_inventory(db_path,domains,getattr(eb,'FORMULA_DOMAINS',set()))
+    selected=[t.get('capability_id') for t in inv.get('targets',[])]
+    bad=[x for x in selected if x in (CAP_CONTRAST,CAP_CONDITION)]
+    return {
+        'pass': not bad,
+        'retired_zero_pass_capabilities_not_selected': not bad,
+        'bad_selected': bad,
+        'constructed_target_total': inv.get('constructed_target_total'),
+        'target_total': inv.get('target_total'),
+        'all_domains_two_targets': inv.get('all_domains_two_targets'),
+    }
