@@ -1,9 +1,10 @@
 import copy
-BUILDER_API_VERSION = "T4-JUDGE-ALIGNMENT-R44-20260903"
+BUILDER_API_VERSION = "CAPABILITY-COVERAGE-R45-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
 from formula_templates import generate_formula_question
+from reasoning_capabilities import generate_reasoning_question, coverage_inventory
 from retrieval import related_bundle,bundle_context,official_style_profile,candidate_cluster
 from ai_wrapper import rewrite_bundle,safe_bundle_question
 from validators import validate_formula_question,validate_grounded_question,too_similar,validate_exam,fingerprint,t2_clause_quality,source_evidence_grounded
@@ -3583,29 +3584,43 @@ def _sample_t4_operation_domains(domains):
 
 def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-luna",
                  ai_enabled=True,ai_quality_enabled=True,judge_model=None,seed=None,
-                 previous_questions=None,shared_answers=None,tuning_mode=False):
+                 previous_questions=None,shared_answers=None,tuning_mode=False,coverage_targets=None):
     rng=random.Random(seed)
     domains=list(domains or DOMAINS)
     scores=score_pattern(section,count,points)
     plan=blueprint(section,scores,domains,rng)
     plan,_t2_capability,_t2_capability_diagnostics=_rebalance_t2_domains_by_capability(db_path,plan,domains,rng,previous_questions=previous_questions)
-    # R43: a relation chain is NOT sufficient evidence for a 4-point question.
-    # SAMPLE6 routes every 4-point slot only to an executable Python-owned operation
-    # capability.  The current certified operations are deterministic formula chains
-    # (intermediate value/relationship -> dependent final value).  Domains may repeat
-    # in SAMPLE6 because this stage validates the capability, not final domain coverage.
+    # R45: SAMPLE6 may run in coverage mode.  Four 4-point slots are bound to
+    # explicit domain x reasoning-capability targets.  A target never falls back to
+    # an unrelated capability; failed candidates stay failed so coverage is honest.
+    _coverage_targets=list(coverage_targets or [])
     if tuning_mode and section=="SAMPLE":
-        _t4_domains=_sample_t4_operation_domains(domains)
-        if not _t4_domains:
-            raise RuntimeError("SAMPLE6: Python으로 풀이 연산을 증명한 4점 capability 영역이 없습니다.")
-        _k=0
-        for _slot in plan:
-            if int(_slot.get("points",0) or 0)==4:
-                _slot["domain_override_from"]=_slot.get("domain")
-                _slot["domain"]=_t4_domains[_k % len(_t4_domains)]
-                _slot["question_type"]="계산/판단"
-                _slot["t4_capability_mode"]="deterministic_formula_operation"
-                _k+=1
+        if _coverage_targets:
+            if len(_coverage_targets)!=4:
+                raise RuntimeError("R45 coverage_targets는 4점 슬롯 4개와 정확히 대응해야 합니다.")
+            _k=0
+            for _slot in plan:
+                if int(_slot.get("points",0) or 0)==4:
+                    _t=dict(_coverage_targets[_k])
+                    _slot["domain_override_from"]=_slot.get("domain")
+                    _slot["domain"]=_t.get("domain")
+                    _slot["t4_capability_mode"]=_t.get("capability_id")
+                    _slot["coverage_key"]=_t.get("coverage_key") or (str(_slot["domain"])+"::"+str(_slot["t4_capability_mode"]))
+                    _slot["question_type"]="계산/판단" if _slot["t4_capability_mode"]=="deterministic_formula_operation" else "추론/적용"
+                    _k+=1
+        else:
+            _t4_domains=_sample_t4_operation_domains(domains)
+            if not _t4_domains:
+                raise RuntimeError("SAMPLE6: Python으로 풀이 연산을 증명한 4점 capability 영역이 없습니다.")
+            _k=0
+            for _slot in plan:
+                if int(_slot.get("points",0) or 0)==4:
+                    _slot["domain_override_from"]=_slot.get("domain")
+                    _slot["domain"]=_t4_domains[_k % len(_t4_domains)]
+                    _slot["question_type"]="계산/판단"
+                    _slot["t4_capability_mode"]="deterministic_formula_operation"
+                    _slot["coverage_key"]=str(_slot["domain"])+"::deterministic_formula_operation"
+                    _k+=1
     style=official_style_profile(db_path)
     judge_model=judge_model or model
     writer_active=bool(ai_enabled and api_key)
@@ -3660,6 +3675,20 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
             raise RuntimeError("R35 T2 capability planning failed before Writer/API: no proven relational or formula structure")
         pts=slot["points"]; dom=slot["domain"]; q=None
         wants_calc=slot["question_type"] in {"간단계산","계산/판단"}
+
+        # R45 source-owned reasoning capability. Python fixes the source spans,
+        # task shape and answers; AI Judge is used only after the complete SAMPLE.
+        _cap_mode=str(slot.get("t4_capability_mode","") or "")
+        if q is None and pts==4 and _cap_mode and _cap_mode!="deterministic_formula_operation":
+            cand=generate_reasoning_question(
+                db_path,dom,_cap_mode,rng,
+                avoid_fingerprints={str(x.get("fingerprint","")) for x in (prior+qs)}
+            )
+            if not cand:
+                raise RuntimeError(f"R45 source capability 후보 소진: {dom} · {_cap_mode}")
+            cand["coverage_key"]=slot.get("coverage_key") or (str(dom)+"::"+_cap_mode)
+            cand["ai_quality"]={"pass":None,"mode":"coverage_candidate_python_grounded"}
+            q=cand
 
         if wants_calc and dom not in FORMULA_DOMAINS:
             slot["question_type"]="자료해석" if pts==4 else "자료식별"
@@ -4028,6 +4057,8 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
             err.generation_diagnostics=diagnostics[-15:]
             raise err
 
+        if slot.get("coverage_key"):
+            q["coverage_key"]=slot.get("coverage_key")
         q["number"]=slot["number"]
         q["blueprint_domain"]=dom
         q["concept_families"]=sorted(families_for(q))
@@ -4095,7 +4126,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
 
 def make_quality_sample(db_path,domains=None,api_key="",model="gpt-5.6-luna",
-                        ai_enabled=True,judge_model=None,seed=None,ai_quality_enabled=True):
+                        ai_enabled=True,judge_model=None,seed=None,ai_quality_enabled=True,coverage_targets=None):
     """
     품질 튜닝 전용 6문항.
     정확히 2점 2개 + 4점 4개.
@@ -4105,7 +4136,7 @@ def make_quality_sample(db_path,domains=None,api_key="",model="gpt-5.6-luna",
     exam=make_section(
         db_path,"SAMPLE",6,20,domains,api_key,model,
         ai_enabled,False,judge_model,seed=seed,
-        tuning_mode=True
+        tuning_mode=True,coverage_targets=coverage_targets
     )
 
     stats=exam.get("generation_stats",{})
@@ -4149,6 +4180,7 @@ def make_quality_sample(db_path,domains=None,api_key="",model="gpt-5.6-luna",
             q["sample_ai_quality"]=rv
             sample_reviews.append({
                 "number":q.get("number"),"domain":q.get("domain"),"pattern_id":q.get("pattern_id"),
+                "coverage_key":q.get("coverage_key"),"capability_id":q.get("capability_id") or q.get("t4_capability_mode"),
                 "pass":bool(rv.get("pass")),"reason":str(rv.get("reason","")),
                 "fatal_flags":list(rv.get("fatal_flags",[]) or []),"scores":copy.deepcopy(rv.get("scores",{}))
             })

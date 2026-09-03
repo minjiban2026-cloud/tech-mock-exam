@@ -9,8 +9,10 @@ make_ab = exam_builder_module.make_ab
 make_quality_sample = getattr(exam_builder_module, "make_quality_sample", None)
 try:
     from quality_regression import run_release_regression
+    from reasoning_capabilities import coverage_inventory
 except Exception:
     run_release_regression = None
+    coverage_inventory = None
 DOMAINS = exam_builder_module.DOMAINS
 BUILDER_API_VERSION = getattr(exam_builder_module, "BUILDER_API_VERSION", "UNKNOWN")
 from pdf_export import export_pdf
@@ -27,7 +29,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R44-20260903")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R45-20260903")
 
 def secret(name, default=""):
     try:
@@ -290,10 +292,34 @@ with tabs[2]:
             "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
-        "먼저 API 0회의 전수 회귀검사를 권장합니다. 그 뒤 2점 2문항 + 4점 4문항을 생성하고, "
-        "완성된 6문항을 각각 딱 한 번 AI Judge에 넣어 실제 품질을 확인합니다. "
-        "Judge REJECT가 나와도 자동 재시도하지 않아 비용과 원인 추적을 통제합니다."
+        "R45는 횟수 랜덤검사가 아니라 9영역×2 reasoning capability=18개 coverage를 순환합니다. "
+        "API 0원 검사는 후보를 구성할 수 있는지만 확인하고, 실제 검증완료(AI_VERIFIED)는 SAMPLE Judge PASS 때만 기록합니다."
     )
+
+    try:
+        _cov_inv=coverage_inventory(DB,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())) if coverage_inventory else {"targets":[],"target_total":18,"all_domains_two_targets":False,"error":"coverage_inventory unavailable"}
+    except Exception as _cov_ex:
+        _cov_inv={"targets":[],"target_total":18,"all_domains_two_targets":False,"error":str(_cov_ex)}
+    if "CAPABILITY_VERIFIED" not in st.session_state:
+        st.session_state["CAPABILITY_VERIFIED"]={}
+    if "CAPABILITY_ATTEMPTED" not in st.session_state:
+        st.session_state["CAPABILITY_ATTEMPTED"]=[]
+    _verified=st.session_state["CAPABILITY_VERIFIED"]
+    _targets=list(_cov_inv.get("targets",[]) or [])
+    _verified_count=sum(1 for t in _targets if _verified.get(t.get("coverage_key")))
+    st.progress(min(1.0,_verified_count/max(1,int(_cov_inv.get("target_total",18) or 18))))
+    st.caption(f"4점 capability 실제 Judge 검증: {_verified_count}/{_cov_inv.get('target_total',18)} · 후보구성 9영역×2: {'완료' if _cov_inv.get('all_domains_two_targets') else '부족'}")
+    with st.expander("🧭 9영역×2 capability coverage 현황", expanded=False):
+        st.json({
+            "candidate_inventory":_cov_inv,
+            "ai_verified_keys":sorted([k for k,v in _verified.items() if v]),
+            "attempted_keys":list(st.session_state.get("CAPABILITY_ATTEMPTED",[])),
+            "final_ab_coverage_ready":bool(_verified_count>=int(_cov_inv.get("target_total",18) or 18))
+        })
+        if st.button("coverage 검증기록 초기화", key="reset_capability_coverage"):
+            st.session_state["CAPABILITY_VERIFIED"]={}
+            st.session_state["CAPABILITY_ATTEMPTED"]=[]
+            st.rerun()
 
     if st.button("API 0원 · DB 전체 회귀검사", use_container_width=True, disabled=(run_release_regression is None)):
         try:
@@ -323,15 +349,34 @@ with tabs[2]:
         else:
             with st.spinner("2점 2개 + 4점 4개 생성 중..."):
                 try:
+                    _attempted=set(st.session_state.get("CAPABILITY_ATTEMPTED",[]))
+                    _verified_now=st.session_state.get("CAPABILITY_VERIFIED",{})
+                    _unseen=[t for t in _targets if t.get("coverage_key") not in _attempted and not _verified_now.get(t.get("coverage_key"))]
+                    _retry=[t for t in _targets if not _verified_now.get(t.get("coverage_key")) and t.get("coverage_key") in _attempted]
+                    _already=[t for t in _targets if _verified_now.get(t.get("coverage_key"))]
+                    _coverage_batch=(_unseen+_retry+_already)[:4]
+                    if len(_coverage_batch)<4:
+                        raise RuntimeError("R45 capability coverage 후보가 4개 미만입니다. DB 전체 회귀검사 결과를 확인하세요.")
                     sample=make_quality_sample(
                         DB,domains=domains,api_key=key,model=model,
                         ai_enabled=bool(use_ai and key),
                         judge_model=judge_model,
                         seed=int(seed),
-                        ai_quality_enabled=bool(use_ai and key)
+                        ai_quality_enabled=bool(use_ai and key),
+                        coverage_targets=_coverage_batch
                     )
                     st.session_state["QUALITY_SAMPLE"]=sample
-                    st.success("6문항 품질 튜닝 샘플 생성 완료.")
+                    _attempted_list=list(st.session_state.get("CAPABILITY_ATTEMPTED",[]))
+                    _verified_map=dict(st.session_state.get("CAPABILITY_VERIFIED",{}))
+                    for _rv in (sample.get("sample_ai_reviews",[]) or []):
+                        _ck=_rv.get("coverage_key")
+                        if _ck and _ck not in _attempted_list:
+                            _attempted_list.append(_ck)
+                        if _ck and bool(_rv.get("pass")):
+                            _verified_map[_ck]=True
+                    st.session_state["CAPABILITY_ATTEMPTED"]=_attempted_list
+                    st.session_state["CAPABILITY_VERIFIED"]=_verified_map
+                    st.success("6문항 capability coverage 샘플 생성 완료.")
                     st.caption(
                         f"실행 모드: {sample.get('sample_mode','-')} · "
                         f"builder: {sample.get('builder_api_version','-')}"
@@ -362,7 +407,7 @@ with tabs[2]:
                 f"{q['points']}점({'+'.join(map(str,q.get('subpoints',[])))}) · {badge}",
                 expanded=True
             ):
-                st.caption(f"패턴: {q.get('pattern_id','-')} · 주제: {q.get('topic','')}")
+                st.caption(f"패턴: {q.get('pattern_id','-')} · capability: {q.get('coverage_key','-')} · 주제: {q.get('topic','')}")
                 st.write(q.get("passage",""))
                 if q.get("conditions"):
                     st.markdown("**<조건>**")
@@ -463,7 +508,7 @@ with tabs[2]:
 
     st.divider()
     st.markdown("#### 최종 A/B 생성")
-    st.caption("6문항 샘플 품질이 안정된 뒤 최종 A/B를 생성하세요.")
+    st.caption("9영역×2 capability가 AI_VERIFIED 18/18 된 뒤 최종 A/B를 생성하세요.")
 
     if st.button("전공 A + B 생성",type="primary",use_container_width=True):
         with st.spinner("정답 고정 → 문항 생성 → 근거 대조 → 중복 검사 → A/B 편성 → 보관 중..."):

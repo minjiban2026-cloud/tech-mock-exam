@@ -166,10 +166,18 @@ def run_release_regression(db_path,domains,seeds=50):
     grounding=run_grounding_regressions()
     t4=audit_t4_operation_capabilities(db_path,domains)
     plans=audit_sample_plans(db_path,domains,seeds=seeds)
+    from reasoning_capabilities import coverage_inventory
+    try:
+        import exam_builder as eb
+        coverage=coverage_inventory(db_path,domains,getattr(eb,"FORMULA_DOMAINS",set()))
+    except Exception as ex:
+        coverage={"all_domains_two_targets":False,"error":str(ex)}
+    structural_ok=bool(coverage.get("all_domains_two_targets"))
     return {
-      "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass")),
+      "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass") and structural_ok),
       "historical":hist,"grounding":grounding,"t4_operation_capabilities":t4,"sample_plan_coverage":plans,
-      "note":"API-free SAMPLE6 gate: historical failures + grounding/media regressions + executable Python 4점 operation capabilities + SAMPLE6 capability plans; direct-chain은 4점 자격으로 계산하지 않음"
+      "reasoning_coverage_candidates":coverage,
+      "note":"R45 API-free gate: 과거/grounding 회귀 + 기존 Python 연산형 + 9영역×2 reasoning coverage 후보 구성 가능 여부. 후보는 AI_VERIFIED가 아니며 실제 SAMPLE Judge PASS 후에만 검증완료로 승격."
     }
 
 
