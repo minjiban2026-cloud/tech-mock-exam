@@ -1,12 +1,12 @@
 import copy
-BUILDER_API_VERSION = "COVERAGE-REGRESSION-R39-20260903"
+BUILDER_API_VERSION = "GROUNDING-COVERAGE-R40-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
 from formula_templates import generate_formula_question
 from retrieval import related_bundle,bundle_context,official_style_profile,candidate_cluster
 from ai_wrapper import rewrite_bundle,safe_bundle_question
-from validators import validate_formula_question,validate_grounded_question,too_similar,validate_exam,fingerprint,t2_clause_quality
+from validators import validate_formula_question,validate_grounded_question,too_similar,validate_exam,fingerprint,t2_clause_quality,source_evidence_grounded
 from patterns import blueprint,weighted_pick
 from concept_families import families_for
 from quality_judge import select_coherent_bundle,judge_question,judge_exam,judge_ab_pair
@@ -2595,6 +2595,14 @@ def _select_four_point_single_anchor(anchors, page_map, raw_page_map, pd, rng, p
             z["derived_support"]=True
             derived.append(z)
         derived=derived[:need]
+        # R40: selector acceptance itself must guarantee that every fixed scoring fact
+        # is traceable to the exact local source block used to build this candidate.
+        # This makes the API-free universe gate exercise the same grounding contract
+        # as final question validation.
+        if any(not source_evidence_grounded(seg, d.get("evidence","")) for d in derived):
+            pd.setdefault("four_point_source_ground_reject",0)
+            pd["four_point_source_ground_reject"]+=1
+            continue
         _pre_ok,_pre_reason=_t4_candidate_prejudge(derived,pattern_id)
         if not _pre_ok:
             pd.setdefault("four_point_prejudge_reject",0)
@@ -3786,6 +3794,12 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                         ).strip()
 
                     ctx=bundle_context(db_path,bundle)
+                    # R40: single-concept T4 candidates are selected from an exact local
+                    # source block.  Use that same block for Writer/Judge/grounded validation
+                    # instead of silently switching back to the whole PDF page.
+                    _ctx_override=str(relation_meta.get("source_context_override","") or "").strip()
+                    if _ctx_override:
+                        ctx=_ctx_override
                     # R27: DECISION-FIRST의 비교용 sibling도 Writer/Judge가 검증할 수 있는
                     # source context에 포함한다. 같은 출처/인접 페이지에서 Python이 고른 원문만 사용한다.
                     if pts==2 and relation_meta.get("selection_mode") in {

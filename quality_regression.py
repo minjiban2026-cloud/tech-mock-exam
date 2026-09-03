@@ -1,5 +1,5 @@
 import random, copy
-from validators import static_quality_errors
+from validators import static_quality_errors, validate_grounded_question, source_evidence_grounded
 
 T4_PATTERNS={"T4_DATA112":3,"T4_ERR22":2,"T4_112":3}
 
@@ -46,6 +46,38 @@ def run_historical_regressions():
     return {"pass":ok,"cases":rows}
 
 
+
+def run_grounding_regressions():
+    """R40: regressions for PDF source noise and invented visual-media references."""
+    rows=[]; ok=True
+    # PDF extraction may insert a page number/header in the middle of an otherwise
+    # verbatim source sentence.  This must still ground, while new factual text must not.
+    src="기교론서브노트기가교강지현108문제확인기법문제를정확하게확인하기위한기법이있다"
+    good="기교론서브노트기가교강지현문제확인기법문제를정확하게확인하기위한기법이있다"
+    bad="기교론서브노트기가교강지현문제확인기법출처에없는새로운효과가발생한다"
+    g1=source_evidence_grounded(src,good)
+    g2=not source_evidence_grounded(src,bad)
+    rows.append({"name":"pdf_header_insertion_tolerance","pass":bool(g1)})
+    rows.append({"name":"new_fact_still_rejected","pass":bool(g2)})
+    ok &= bool(g1 and g2)
+
+    q={
+      "points":4,"pattern_id":"T4_DATA112","subpoints":[1,1,2],
+      "premise_mode":"ai_grounded","verifier":"source",
+      "intro":"","passage":"아래 그림을 보고 자료를 해석하시오.","conditions":[],
+      "tasks":["첫 판단을 쓰시오.","둘째 판단을 쓰시오.","앞 판단을 이용해 설명하시오."],
+      "answer":["A","B","C"],"evidence":["첫 사실","둘째 사실","셋째 사실"],
+      "sources":[{"source_name":"regression","page_no":1}],
+      "ai_quality":{"pass":True},"intended_thinking_types":["자료해석","적용"],
+      "master_concept":"x","relation":"x-y"
+    }
+    errs=validate_grounded_question(q,"첫 사실 둘째 사실 셋째 사실",allow_ai_grounded=True,require_ai_quality=False)
+    media_ok="실제 그림 없이 그림 언급" in errs
+    rows.append({"name":"invented_visual_reference_rejected","pass":media_ok,"errors":errs})
+    ok &= media_ok
+    return {"pass":ok,"cases":rows}
+
+
 def audit_t4_universe(db_path,domains):
     """API-free T4 universe audit.
     Each selector call already evaluates the whole domain/pattern universe; use its
@@ -65,23 +97,33 @@ def audit_t4_universe(db_path,domains):
             accepted=int(pd.get('candidate_accept',0) or 0)
             if bundle and accepted<=0:
                 accepted=int(pd.get('four_point_single_anchor_candidates',1) or 1)
+            ctx=str((meta or {}).get('source_context_override','') or '')
+            if not ctx and bundle:
+                ctx=eb.bundle_context(db_path,bundle)
+            grounding=[source_evidence_grounded(ctx,x.get('evidence','')) for x in bundle] if bundle else []
+            pre=eb._t4_candidate_prejudge(bundle,pid) if bundle else (False,'no_candidate')
             top={
                 'topics':[str(x.get('topic','')) for x in bundle],
                 'answers':[str(x.get('answer','')) for x in bundle],
                 'selection_mode':str((meta or {}).get('selection_mode','')),
                 'selector_reason':str((meta or {}).get('selector_reason','')),
-                'prejudge':eb._t4_candidate_prejudge(bundle,pid) if bundle else (False,'no_candidate')
+                'prejudge':pre,
+                'source_grounding':grounding
             }
+            cell_pass=bool(bundle and accepted>0 and pre[0] and grounding and all(grounding))
             result[domain][pid]={
+                'pass':cell_pass,
                 'accepted_count':accepted,
                 'top_candidate':top,
                 'prejudge_reject_count':int(pd.get('four_point_prejudge_reject',0) or 0),
+                'source_ground_reject_count':int(pd.get('four_point_source_ground_reject',0) or 0),
                 'prejudge_examples':copy.deepcopy(pd.get('four_point_prejudge_examples',[]) or []),
                 'final_reason':pd.get('final_reason',''),
                 'leaderboard':copy.deepcopy(sd.get('leaderboard',[]) or [])
             }
             total += accepted
-    return {'total_accepted_candidates':total,'domains':result}
+    all_pass=all(cell.get('pass') for dm in result.values() for cell in dm.values())
+    return {'pass':all_pass,'total_accepted_candidates':total,'domains':result}
 
 
 def audit_sample_plans(db_path,domains,seeds=50):
@@ -104,10 +146,11 @@ def audit_sample_plans(db_path,domains,seeds=50):
 
 def run_release_regression(db_path,domains,seeds=50):
     hist=run_historical_regressions()
+    grounding=run_grounding_regressions()
     t4=audit_t4_universe(db_path,domains)
     plans=audit_sample_plans(db_path,domains,seeds=seeds)
     return {
-      "pass":bool(hist.get("pass") and plans.get("pass")),
-      "historical":hist,"t4_universe":t4,"sample_plan_coverage":plans,
-      "note":"API-free release gate: historical failure classes + T4 DB universe + SAMPLE6 capability plans"
+      "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass")),
+      "historical":hist,"grounding":grounding,"t4_universe":t4,"sample_plan_coverage":plans,
+      "note":"API-free release gate: historical failures + grounding/media regressions + T4 grounded universe + SAMPLE6 capability plans"
     }

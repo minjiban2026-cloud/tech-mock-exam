@@ -5,6 +5,28 @@ from concept_families import concept_family,families_for
 def norm(s): return re.sub(r"[^0-9A-Za-z가-힣]+","",str(s)).lower()
 def contains_loose(h,n): return bool(norm(n)) and norm(n) in norm(h)
 
+def source_evidence_grounded(source_text, evidence):
+    """Ground evidence while tolerating PDF-only insertions such as page headers/numbers.
+
+    The evidence must still be almost entirely recoverable, in order, from the source.
+    This is not a semantic/paraphrase matcher: newly invented factual phrases remain rejected.
+    """
+    src=norm(source_text); ev=norm(evidence)
+    if not ev:
+        return False
+    if ev in src:
+        return True
+    if len(ev)<24 or len(src)<len(ev):
+        return False
+    sm=difflib.SequenceMatcher(None, src, ev, autojunk=False)
+    blocks=[b for b in sm.get_matching_blocks() if b.size>0]
+    matched=sum(b.size for b in blocks)
+    coverage=matched/max(1,len(ev))
+    largest=max((b.size for b in blocks),default=0)
+    # Source-side headers may split an otherwise exact sentence into two blocks.
+    # Require >=90% ordered character recovery plus a substantial exact block.
+    return coverage>=0.90 and largest>=max(12,int(len(ev)*0.35))
+
 def fingerprint(q):
     core={k:q.get(k) for k in ["domain","topic","pattern_id","passage","tasks","answer"]}
     return hashlib.sha256(json.dumps(core,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:20]
@@ -473,7 +495,7 @@ def validate_grounded_question(q,source_context,allow_ai_grounded=False,require_
     derived=list(q.get("derived_answer_flags",[]) or [])
     if len(ev)!=len(ans):e.append("근거-정답 수 불일치")
     for i,(a,v) in enumerate(zip(ans,ev)):
-        if not v or not contains_loose(source_context,v):e.append("근거가 원자료에 없음")
+        if not v or not source_evidence_grounded(source_context,v):e.append("근거가 원자료에 없음")
         is_derived=(i<len(derived) and bool(derived[i]))
         # ㉠/㉡ 같은 Python 결정형 답은 원자료의 사실을 근거로 계산된 채점값이므로
         # answer 문자열 자체가 evidence에 있을 필요는 없다.
