@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "GLOBAL-T2-UNIVERSE-GATE-R33-20260902"
+BUILDER_API_VERSION = "GLOBAL-T2-JOINT-UNIVERSE-R34-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -10,6 +10,79 @@ from validators import validate_formula_question,validate_grounded_question,too_
 from patterns import blueprint,weighted_pick
 from concept_families import families_for
 from quality_judge import select_coherent_bundle,judge_question,judge_exam,judge_ab_pair
+
+
+# R34: DB source/candidate analysis cache.  The cache is invalidated by DB mtime.
+_T2_SOURCE_CACHE={}
+_T2_CAPACITY_CACHE={}
+
+def _t2_identity_key(value):
+    """Preserve short numeric/alphanumeric identities such as 4G, 2.5G, p1, p16."""
+    x=_norm_anchor_text(value).lower()
+    x=re.sub(r"^[\s·•○▶□■♥ü\-–—]+","",x).strip()
+    x=re.split(r"[:：]",x,1)[0].strip()
+    x=re.sub(r"[()（）\[\]]","",x)
+    return re.sub(r"[^가-힣a-z0-9.]+","",x)
+
+def _t2_series_signature(value):
+    k=_t2_identity_key(value)
+    if not k: return ""
+    # Keep letters/shape, normalize varying numeric members.  p1/p2 and 4g/5g become stable series.
+    return re.sub(r"\d+(?:\.\d+)?","#",k)
+
+def _t2_structural_series(a,b):
+    ka,kb=_t2_identity_key(a),_t2_identity_key(b)
+    if not ka or not kb or ka==kb: return False
+    sa,sb=_t2_series_signature(a),_t2_series_signature(b)
+    return bool(sa and sa==sb and "#" in sa)
+
+def _t2_axis_signature(text):
+    x=_norm_anchor_text(text)
+    cats=set()
+    rules={
+      "number":r"\d", "speed":r"속도|bps|hz|대역", "start":r"시작|부터",
+      "count":r"개|회|번", "increase":r"증가|향상|높", "decrease":r"감소|저하|낮",
+      "condition":r"경우|조건|때|하면|따라", "effect":r"효과|가능|향상|개선|방지|촉진|억제",
+      "procedure":r"단계|순서|검사|반복|처리|수정|전송|분석|선정|생성|결합",
+      "property":r"특징|특성|장점|단점|범위|간격|크기|길이|온도|압력|전류|전압|응력|변형",
+    }
+    for name,pat in rules.items():
+        if re.search(pat,x,re.I): cats.add(name)
+    return cats
+
+def _t2_axis_similarity(a,b):
+    aa=re.sub(r"\d+(?:\.\d+)?","#",re.sub(r"[^가-힣A-Za-z0-9.%]+","",_norm_anchor_text(a)).lower())
+    bb=re.sub(r"\d+(?:\.\d+)?","#",re.sub(r"[^가-힣A-Za-z0-9.%]+","",_norm_anchor_text(b)).lower())
+    seq=SequenceMatcher(None,aa,bb).ratio() if aa and bb else 0.0
+    ca,cb=_t2_axis_signature(a),_t2_axis_signature(b)
+    cat=(len(ca&cb)/max(1,len(ca|cb))) if (ca or cb) else 0.0
+    return max(seq,0.55*seq+0.45*cat)
+
+def _t2_joint_pair_quality(core_anchor,core_pair,contrast_anchor,contrast_pair):
+    """Validate the comparison axis jointly, not as two independent good pairs."""
+    if not core_pair or not contrast_pair: return {"ok":False,"reason":"joint pair missing"}
+    a1,a2=map(_norm_anchor_text,core_pair); b1,b2=map(_norm_anchor_text,contrast_pair)
+    if _t2_identity_key(core_anchor.get("answer"))==_t2_identity_key(contrast_anchor.get("answer")):
+        return {"ok":False,"reason":"same identity"}
+    s1=_t2_axis_similarity(a1,b1); s2=_t2_axis_similarity(a2,b2)
+    series=_t2_structural_series(core_anchor.get("answer",""),contrast_anchor.get("answer",""))
+    # The swapped second fact must actually differ on the same axis.
+    cross=_t2_axis_similarity(a2,b2)
+    raw2a=re.sub(r"[^가-힣A-Za-z0-9]","",a2).lower(); raw2b=re.sub(r"[^가-힣A-Za-z0-9]","",b2).lower()
+    exact_same=bool(raw2a and raw2a==raw2b)
+    if exact_same: return {"ok":False,"reason":"slot2 identical"}
+    # Strong structural series (4G/5G, p1/p2...) may differ mainly by values; otherwise both axes need clear alignment.
+    if series:
+        ok=(s1>=0.30 and s2>=0.30)
+    else:
+        # Near-identical slot1 across unrelated labels is a strong sign of local-block ownership contamination.
+        n1a=re.findall(r"\d+(?:\.\d+)?",a1); n1b=re.findall(r"\d+(?:\.\d+)?",b1)
+        if s1>=0.985 and not (n1a and n1b and n1a!=n1b):
+            return {"ok":False,"reason":"slot1 ownership collision","slot1_axis":round(s1,3),"slot2_axis":round(s2,3),"series":False}
+        ok=(s1>=0.38 and s2>=0.38 and (s1+s2)>=1.28)
+    if not ok:
+        return {"ok":False,"reason":"comparison axis mismatch","slot1_axis":round(s1,3),"slot2_axis":round(s2,3),"series":series}
+    return {"ok":True,"reason":"joint_axis_pass","slot1_axis":round(s1,3),"slot2_axis":round(s2,3),"series":series}
 
 DOMAINS=["기술교육론","발명","제조기술","건설기술","생명기술","전기·전자","통신기술","재료역학","수송기술"]
 FORMULA_DOMAINS={"재료역학","수송기술","통신기술"}
@@ -1145,8 +1218,8 @@ def _two_point_core_anchor_clean(anchor):
     a=copy.deepcopy(anchor)
     for key in ("topic","answer"):
         v=_norm_anchor_text(a.get(key,"")).strip()
-        v=re.sub(r"^\s*\d+\)\s*","",v)
-        v=re.sub(r"^\s*[□▶■]+\s*","",v)
+        v=re.sub(r"^\s*(?:\(\d+\)|\d+[.)])\s*","",v)
+        v=re.sub(r"^\s*[□▶■·•○●♥ü\-–—]+\s*","",v)
         a[key]=v.strip()
     return a
 
@@ -1157,7 +1230,8 @@ def _two_point_core_target_ok(anchor):
     if not ans:
         return False
     # parser/문서 표지 및 문장 중간 조각
-    if re.search(r"(기출|여기서\s*[A-Za-z]|^\(|^[가나다라마바사아자차카타파하]\)$)",ans,re.I):
+    # Parenthesized numbering such as (1) SFD is a valid concept label; strip numbering before judging.
+    if re.search(r"(기출|여기서\s*[A-Za-z]|^[가나다라마바사아자차카타파하]\)$)",ans,re.I):
         return False
     if re.fullmatch(r"표준\s*\d+",ans):
         return False
@@ -1182,8 +1256,7 @@ def _two_point_core_target_ok(anchor):
         return False
 
     ev=_norm_anchor_text(anchor.get("evidence","")).strip()
-    if re.search(r"\(예제\s*\d+\)",ev) and (_topic_core(ans) in _topic_core(ev[:max(12,len(ans)+12)])):
-        return False
+    # Example markers may coexist with a complete definition/relationship; do not reject the whole anchor solely for that.
     if ev:
         # Remove leading bullets and the answer/topic label once.
         body=re.sub(r"^[■▶●♥□·•○\-\s]+","",ev).strip()
@@ -1390,99 +1463,34 @@ def _two_point_refine_support(core_anchor, support_text):
 
 
 def _two_point_contrast_anchors(core_anchor, anchors):
-    """같은 출처·동일/인접 페이지에서 비교용 sibling anchor를 고른다."""
-    generic={"역할","원인","결과","특징","정의","과정","방법","종류","활용","원료","사람",
-             "겨울철","여름철","봄철","가을철","목적","효과","기준","조건","절차"}
-    src=str(core_anchor.get("source_name",""))
-    page=int(core_anchor.get("page_no",0) or 0)
-    core_ans=_topic_core(core_anchor.get("answer",""))
+    """R34 discovery pool only. Final acceptance is decided by joint slot-axis validation.
+    Same-page proximity may broaden discovery, but can never by itself make a final T2 candidate valid.
+    """
+    src=str(core_anchor.get("source_name","")); page=int(core_anchor.get("page_no",0) or 0)
     ca=_anchor_tokens(core_anchor.get("topic"),core_anchor.get("answer"),core_anchor.get("evidence"))
     rows=[]
     for b0 in anchors:
         b=_two_point_core_anchor_clean(b0)
-        if str(b.get("source_name",""))!=src:
-            continue
-        bp=int(b.get("page_no",0) or 0)
-        gap=abs(bp-page)
-        if gap>1:
-            continue
-        ans=_norm_anchor_text(b.get("answer","")).strip()
-        if not ans or _topic_core(ans)==core_ans:
-            continue
-        if ans.replace(" ","") in {x.replace(" ","") for x in generic}:
-            continue
-        if not _two_point_core_target_ok(b):
-            continue
-        ev=_norm_anchor_text(b.get("evidence","")).strip()
-        if len(ev)<10:
-            continue
+        if str(b.get("source_name",""))!=src: continue
+        try: gap=abs(int(b.get("page_no",0) or 0)-page)
+        except Exception: continue
+        if gap>1: continue
+        if _t2_identity_key(b.get("answer",""))==_t2_identity_key(core_anchor.get("answer","")): continue
+        if not _two_point_core_target_ok(b): continue
+        if _anchor_fragment_reason(b) or _anchor_internal_contradiction_reason(b): continue
+        series=_t2_structural_series(core_anchor.get("answer",""),b.get("answer",""))
+        rel=float(_pair_relation_score(core_anchor,b))
         cb=_anchor_tokens(b.get("topic"),b.get("answer"),b.get("evidence"))
         shared={x for x in ca&cb if len(x)>=2}
-
-        core_ans_text=_norm_anchor_text(core_anchor.get("answer","")).strip()
-        series_family=(
-            (bool(re.match(r"^[A-Z]\s*\(",core_ans_text,re.I)) and bool(re.match(r"^[A-Z]\s*\(",ans,re.I)))
-            or (bool(re.match(r"^[①-⑳]",core_ans_text)) and bool(re.match(r"^[①-⑳]",ans)))
-        )
-
-        def _lex(x):
-            return {z for z in re.findall(r"[가-힣A-Za-z]{2,}",_norm_anchor_text(x))
-                    if z not in {"정의","특징","방법","경우","대한","하는","된다","있다","사용","이용"}}
-        cev=_lex(core_anchor.get("evidence",""))
-        bev=_lex(ev)
-        lex_shared=cev & bev
-
-        def _ngrams(x,n=3):
-            c=re.sub(r"[^가-힣A-Za-z0-9]","",_norm_anchor_text(x)).lower()
-            return {c[i:i+n] for i in range(max(0,len(c)-n+1))}
-        core_ng=_ngrams(core_anchor.get("answer","")) | _ngrams(core_anchor.get("topic",""))
-        cand_ng=_ngrams(ans) | _ngrams(b.get("topic",""))
-        ng_shared=core_ng & cand_ng
-        lexical_family=len(ng_shared)>=2
-
-        # R28: same-page alone is insufficient. Require an actual comparison axis.
-        if not (shared or lex_shared or series_family or lexical_family):
-            continue
-        if gap==1 and not (len(shared)>=1 or len(lex_shared)>=2 or series_family or len(ng_shared)>=3):
-            continue
-
-        score=(4.0 if gap==0 else 1.5)+min(3.0,len(shared)*0.8)+min(4.0,len(lex_shared)*1.0)
-        score+=min(3.0,len(ng_shared)*0.5)
-        if series_family:
-            score+=5.0
-        if re.search(r"(방법|기법|단자|처리|번식|오차|주형|평가|사고|방정식|법칙)",ans+" "+ev):
-            score+=1.0
+        # Discovery can be broad because _t2_joint_pair_quality is the mandatory final gate.
+        # Adjacent-page candidates still require a real relation; same-page candidates need at least
+        # one weak relation signal unless they are an explicit structural series.
+        if gap==1 and not series and rel<4.5: continue
+        # same-page is discovery-only; final acceptance still requires _t2_joint_pair_quality.
+        score=rel+(6.0 if series else 0.0)+min(2.0,len(shared)*0.4)-(1.5*gap)
         rows.append((score,b))
-    # 관계점수 후보를 우선하되, 같은 페이지의 완결된 sibling도 뒤에 보조 후보로 붙인다.
-    # scored 후보가 하나라도 있다는 이유로 fallback universe 전체를 버리지 않는다.
-    fallback=[]
-    scored_ids={(_topic_core(x[1].get("answer","")),str(x[1].get("source_name","")),int(x[1].get("page_no",0) or 0)) for x in rows}
-    for b0 in anchors:
-        b=_two_point_core_anchor_clean(b0)
-        _b_ans=_norm_anchor_text(b.get("answer","")).strip()
-        _b_ev=_norm_anchor_text(b.get("evidence","")).strip()
-        if (not _b_ans or not _b_ev or _heading_like(_b_ans)
-                or _anchor_fragment_reason(b) or _anchor_internal_contradiction_reason(b)):
-            continue
-        if _topic_core(_b_ans)==core_ans or str(b.get("source_name",""))!=src:
-            continue
-        try:
-            gap=abs(int(b.get("page_no",0) or 0)-page)
-        except Exception:
-            continue
-        if gap!=0:
-            continue
-        if len(_b_ev)<24 or _heading_like(b.get("answer","")):
-            continue
-        _id=(_topic_core(_b_ans),str(b.get("source_name","")),int(b.get("page_no",0) or 0))
-        if _id in scored_ids:
-            continue
-        fallback.append((float(b.get("exam_value_score") or 0)+float(b.get("importance_score") or 0),b))
     rows.sort(key=lambda x:x[0],reverse=True)
-    fallback.sort(key=lambda x:x[0],reverse=True)
-    merged=[copy.deepcopy(x[1]) for x in rows]+[copy.deepcopy(x[1]) for x in fallback]
-    return merged[:12]
-
+    return [copy.deepcopy(b) for _,b in rows[:24]]
 
 
 def _two_point_contrast_anchor(core_anchor, anchors):
@@ -1719,12 +1727,20 @@ def _t2_local_item_segment(anchor, page_text, anchors):
     lines=[x.rstrip() for x in raw.splitlines() if x.strip()]
     ac=_topic_core(anchor.get("answer",""))
     tc=_topic_core(anchor.get("topic",""))
+    aid=_t2_identity_key(anchor.get("answer","")); tid=_t2_identity_key(anchor.get("topic",""))
     matches=[]
     for i,line in enumerate(lines):
+        clean=re.sub(r"^[\s·•○▶□■♥ü\-–—]+","",line).strip()
+        left=re.split(r"[:：]",clean,1)[0].strip()
+        lid=_t2_identity_key(left)
         lc=_topic_core(line)
-        if not ((ac and ac in lc) or (tc and tc in lc)):
+        # R34: short labels use exact left-label identity; do not let 5G match 2.5G or p1 match p16.
+        short_identity=bool(aid and len(aid)<=5)
+        if short_identity:
+            if lid!=aid:
+                continue
+        elif not ((ac and ac in lc) or (tc and tc in lc) or (aid and lid==aid) or (tid and lid==tid)):
             continue
-        clean=re.sub(r"^[\s·•○▶□■♥ü-]+","",line).strip()
         cc=_topic_core(clean)
         score=0.0
         # explicit "용어 :" or bullet label is the strongest item start
@@ -1758,9 +1774,9 @@ def _t2_local_item_segment(anchor, page_text, anchors):
         except Exception:
             continue
         for v in (b.get("answer",""),b.get("topic","")):
-            c=_topic_core(v)
-            if len(c.replace(" ",""))>=3 and c not in {ac,tc}:
-                siblings.append(c)
+            c=_topic_core(v); kid=_t2_identity_key(v)
+            if kid and kid not in {aid,tid}:
+                siblings.append((c,kid))
     siblings=list(dict.fromkeys(siblings))
 
     end=min(len(lines),start+28)
@@ -1778,11 +1794,18 @@ def _t2_local_item_segment(anchor, page_text, anchors):
         # 짧은 독립 표제/예제 번호 뒤에 새 설명이 시작되면 현재 항목의 경계로 본다.
         _cur=lines[j].strip()
         _nxt=lines[j+1].strip() if j+1 < len(lines) else ""
+        _nxt2=lines[j+2].strip() if j+2 < len(lines) else ""
+        # PDF may split a new short heading across two lines, followed by its bullet/explanation.
+        # Treat it as a boundary only when the two-line title is short and the following line clearly starts content.
+        if (2<=len(_cur)<=16 and 2<=len(_nxt)<=20 and len((_cur+_nxt).replace(" ",""))<=28
+                and re.match(r"^[·•●○□\-]",_nxt2)):
+            end=j; break
         # "용어 : 설명"도 실제 sibling anchor가 그 줄의 왼쪽 표제로 시작할 때만 새 항목으로 본다.
         # ※ 노치 효과 : ... 같은 현재 개념의 보조설명을 잘못 끊지 않는다.
         if re.match(r"^[^:：]{2,40}\s*[:：]",_cur):
             _left=_topic_core(re.split(r"[:：]",re.sub(r"^[\s·•○▶□■♥ü\-–—]+","",_cur),1)[0])
-            if _left and any(_left==c for c in siblings):
+            _left_id=_t2_identity_key(re.split(r"[:：]",re.sub(r"^[\s·•○▶□■♥ü\-–—]+","",_cur),1)[0])
+            if _left_id and any(_left_id==kid for _c,kid in siblings):
                 end=j; break
         if (len(_cur)<=24 and (
                 re.match(r"^\(?예제\s*\d+\)?$",_cur)
@@ -1793,8 +1816,11 @@ def _t2_local_item_segment(anchor, page_text, anchors):
             end=j; break
         # known sibling anchor가 문장 안에 단순 포함된 경우가 아니라 새 항목의 표제로 시작할 때만 경계로 본다.
         _clean_boundary=re.sub(r"^[\s·•○▶□■♥ü\-–—]+","",lines[j]).strip()
-        _cb_core=_topic_core(_clean_boundary)
-        if any(c and (_cb_core==c or _cb_core.startswith(c+" ") or _cb_core.startswith(c+":") or _cb_core.startswith(c+"：")) for c in siblings):
+        _boundary_left=re.split(r"[:：]",_clean_boundary,1)[0].strip()
+        _boundary_id=_t2_identity_key(_boundary_left)
+        _next_boundary=(lines[j+1].strip() if j+1 < len(lines) else "")
+        _two_line_id=_t2_identity_key(_boundary_left+" "+_next_boundary)
+        if (_boundary_id and any(_boundary_id==kid for _c,kid in siblings)) or (_two_line_id and any(_two_line_id==kid for _c,kid in siblings)):
             end=j; break
     return "\n".join(lines[start:end]).strip()
 
@@ -1858,17 +1884,42 @@ def _t2_atomic_facts(anchor, local_segment):
                 if label and part.startswith(label):
                     part=part[len(label):].lstrip(" :：-_").strip()
             part=re.sub(r"^(?:정의|특징|목적|원리)\s*[-:：]?\s*","",part).strip()
-            if 12<=len(part)<=220:
+            _pc=re.sub(r"[^가-힣A-Za-z0-9]","",part)
+            if (12<=len(part)<=220) or (len(_pc)>=7 and re.search(r"\d",part) and re.search(r"(시작|검사|반복|속도|비율|범위|이상|이하|증가|감소)",part)):
                 chunks.append(part)
+
+    # R34: split compound facts only inside the current anchor's own local block.
+    # This recovers safe series such as p1/p2 and 4G/5G without borrowing sibling sentences.
+    expanded=[]
+    relsig=re.compile(r"(시작|검사|반복|증가|감소|가능|사용|이용|전송|속도|범위|비율|과정|단계|기능|장점|단점|효과|조건|경우|때|따라|발생|변화|작용|제어|처리|저장|연결|통합)")
+    for c0 in chunks:
+        parts=[z.strip() for z in re.split(r"\s*[,，]\s*",c0) if z.strip()]
+        if len(parts)>=2:
+            good=[]
+            for z in parts:
+                zc=re.sub(r"[^가-힣A-Za-z0-9]","",z)
+                if len(zc)>=7 and (relsig.search(z) or re.search(r"\d",z)):
+                    good.append(z)
+            if len(good)>=2:
+                expanded.extend(good)
+                # keep the full clause too; pair selection may prefer it when split pieces are weak.
+                expanded.append(c0)
+                continue
+        expanded.append(c0)
+    chunks=expanded
 
     facts=[]; seen=[]
     for c in chunks:
+        # Normalize common source fragments into complete factual clauses without adding new facts.
+        c=re.sub(r"^(\d+번\s*비트)\s*를\s*시작으로$",r"검사는 \1에서 시작한다",c).strip()
+        c=re.sub(r"\s+즉$","",c).strip()
         if re.search(r"(_최|★\d|기출|서브노트|^\d+[AB]\()",c):
             c=re.sub(r"_최.*?(?=정의|특징|-|$)","",c)
             c=re.sub(r"★\S+","",c).strip()
-        if len(c)<12:
+        _shortc=re.sub(r"[^가-힣A-Za-z0-9]","",c)
+        if len(c)<12 and not (len(_shortc)>=7 and re.search(r"\d",c) and re.search(r"(시작|검사|반복|속도|비율|범위|이상|이하|증가|감소)",c)):
             continue
-        cc=re.sub(r"[^가-힣A-Za-z0-9]","",c).lower()
+        cc=_shortc.lower()
         if not cc:
             continue
         if any(cc==x or (len(cc)>=18 and (cc in x or x in cc)) for x in seen):
@@ -1925,11 +1976,37 @@ def _t2_choose_fact_pair(anchor, facts):
 
 
 
+def _t2_candidate_fact_pairs(anchor, facts, anchors):
+    """Return multiple internally complete fact pairs.
+    Discrimination is evaluated jointly after the comparison item is known; structural series often
+    contain intentionally parallel/generic wording (p1/p2, 4G/5G) that is not discriminative alone.
+    """
+    vals=[]
+    fs=[_norm_anchor_text(x).strip() for x in (facts or []) if _norm_anchor_text(x).strip()]
+    for i in range(len(fs)):
+        for j in range(i+1,len(fs)):
+            pair=(fs[i],fs[j])
+            bad=False
+            for x in pair:
+                if _t2_complete_fact_reason(x): bad=True; break
+                ok,_why=_t2_fact_scope_compatible(anchor,x)
+                if not ok: bad=True; break
+            if bad: continue
+            sim=_t2_axis_similarity(pair[0],pair[1])
+            if sim>=0.90: continue
+            score=2.0
+            if re.search(r"\d",pair[0]): score+=0.25
+            if re.search(r"\d",pair[1]): score+=0.25
+            vals.append((score,pair))
+    vals.sort(key=lambda x:x[0],reverse=True)
+    return [p for _,p in vals[:16]]
+
+
 def _t2_complete_fact_reason(text):
     """R33: 모든 T2 source fact에 공통 적용하는 완결성 gate."""
     x=_norm_anchor_text(text).strip()
     c=re.sub(r"[^가-힣A-Za-z0-9]","",x)
-    if len(c)<14:
+    if len(c)<14 and not (len(c)>=7 and re.search(r"\d",x) and re.search(r"(시작|검사|반복|속도|비율|범위|이상|이하|증가|감소)",x)):
         return "사실 문구가 너무 짧음"
     if len(x)>180:
         return "사실 문구가 지나치게 김"
@@ -1941,11 +2018,14 @@ def _t2_complete_fact_reason(text):
     if re.search(r"(?:,|;|:|·|/|그리고|또는|및)\s*$",x):
         return "끝이 열린 부분 문구"
     # 조사·관형형·연결형으로 끝나는 조각은 독립 채점답/자료문구로 쓰지 않는다.
-    if re.search(r"(?:의|을|를|이|가|은|는|와|과|및|또는|으로|로|에|에서|위한|통한|하는|되는|있는|없는|독특한|같은|따른|관한|때|경우)\s*[.!?]?$",x):
-        return "완결되지 않은 조사/관형형 종결"
+    # Do not use single Korean particles as suffix tests: words such as '증가' cause false positives.
+    # Reject only clearly connective/attributive endings that require following context.
+    if re.search(r"(?:위한|통한|하는|되는|있는|없는|같은|따른|관한|비롯한|의한|때문인|경우의)\s*[.!?]?$",x):
+        return "완결되지 않은 관형형 종결"
     # 충분한 길이와 동작/관계 표현이 있으면 완결 명사구도 허용한다(예: '... 아이디어를 생성').
     relational=bool(re.search(r"(한다|된다|이다|있다|없다|함|됨|생성|산출|발휘|도움|분석|판단|선정|발견|비교|사용|이용|적용|촉진|억제|향상|증가|감소|변화|작용|해결|제시|기록|연결|분류|평가|표현|시각화|반복|예상|조사|생산|구성|유지|구별|설명|목적|원리|특징|장점|단점|방법|기법|과정|현상|방식|구조|상태|관계|조건|기준|단계|활동|기능)",x))
-    if not relational and len(c)<24:
+    technical_value=bool(re.search(r"\d|증가|감소|가능|불가능|이상|이하|초과|미만|시작|반복|전송|통합|결합|저장|발생|유지|제어|검사",x))
+    if not relational and not technical_value and len(c)<24:
         return "독립 사실로서 정보량 부족"
     return ""
 
@@ -2043,63 +2123,65 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
         atomic_facts=_t2_atomic_facts(a,page_text)
 
         support=None
-        _core_pair=_t2_choose_fact_pair(a,atomic_facts)
-        _core_quality=_t2_pair_global_quality(a,_core_pair,anchors) if _core_pair else {"ok":False,"reason":"사실쌍 없음"}
-        if _core_pair and _core_quality.get("ok"):
-            # R33: local pair가 전역 완결성·식별력·범위 gate를 통과한 경우만 사용한다.
-            a["reasoning_base_fact"]=_core_pair[0]
-            a["t2_global_quality"]=copy.deepcopy(_core_quality)
-            support=copy.deepcopy(a)
-            support["topic"]=f"{_norm_anchor_text(a.get('topic','')).strip()} · 연결사실"
-            support["answer"]=_core_pair[1]
-            support["evidence"]=_core_pair[1]
-            support["derived_support"]=True
-            support_quality={"ok":True,"score":4.2,"reason":"atomic_best_pair_ready","action":"keep",
-                             "atomic_fact_count":len(atomic_facts)}
-        else:
+        core_pairs=_t2_candidate_fact_pairs(a,atomic_facts,anchors)
+        if not core_pairs:
             pd.setdefault("two_point_global_pair_reject",0)
             pd["two_point_global_pair_reject"]+=1
             continue
-            if _topic_core(support.get("answer",""))==_topic_core(a.get("answer","")):
-                continue
-            _refined=_two_point_refine_support(a,support.get("answer",""))
-            if _refined:
-                support["answer"]=_refined
-                support["evidence"]=_refined
-            support_quality=_two_point_support_quality(a,support.get("answer",""),page_text)
-            if not support_quality.get("ok"):
-                pd.setdefault("two_point_support_distinct_reject",0)
-                pd["two_point_support_distinct_reject"]+=1
-                continue
 
-        support["support_quality"]=copy.deepcopy(support_quality)
-
+        chosen_core_pair=None
         contrast_anchor=None
         contrast_facts=None
+        reasoning_spec=None
+        joint_quality=None
+
+        # R34 JOINT SELECTION: do not pick A-pair and B-pair independently.
+        # Search all valid pair combinations and require both slots to share a comparison axis.
         for _ca in _two_point_contrast_anchors(a,anchors):
             _ck=(str(_ca.get("source_name","")),int(_ca.get("page_no",0) or 0))
             _cpage=raw_page_map.get(_ck) or page_map.get(_ck,"")
             _clocal=_t2_local_item_segment(_ca,_cpage,anchors)
             _cfacts=_t2_atomic_facts(_ca,_clocal)
-            _cpair=_t2_choose_fact_pair(_ca,_cfacts)
-            _cquality=_t2_pair_global_quality(_ca,_cpair,anchors) if _cpair else {"ok":False,"reason":"사실쌍 없음"}
-            if not _cpair or not _cquality.get("ok"):
+            _contrast_pairs=_t2_candidate_fact_pairs(_ca,_cfacts,anchors)
+            if not _contrast_pairs:
                 continue
-            _trial=_t2_reasoning_spec(a,support,_ca,list(_cpair),rng)
-            if _trial:
+            best_local=None
+            for _ap in core_pairs:
+                for _bp in _contrast_pairs:
+                    jq=_t2_joint_pair_quality(a,_ap,_ca,_bp)
+                    if not jq.get("ok"):
+                        continue
+                    # Build support only after the joint axis has been proven.
+                    _support=copy.deepcopy(a)
+                    _support["topic"]=f"{_norm_anchor_text(a.get('topic','')).strip()} · 연결사실"
+                    _support["answer"]=_ap[1]
+                    _support["evidence"]=_ap[1]
+                    _support["derived_support"]=True
+                    _trial_a=copy.deepcopy(a); _trial_a["reasoning_base_fact"]=_ap[0]
+                    _trial=_t2_reasoning_spec(_trial_a,_support,_ca,list(_bp),rng)
+                    if not _trial:
+                        continue
+                    axis=float(jq.get("slot1_axis",0))+float(jq.get("slot2_axis",0))+(0.8 if jq.get("series") else 0.0)
+                    cand=(axis,_ap,_bp,_trial,jq,_support,_trial_a)
+                    if best_local is None or cand[0]>best_local[0]:
+                        best_local=cand
+            if best_local is not None:
+                _,chosen_core_pair,contrast_facts,reasoning_spec,joint_quality,support,a=best_local
                 contrast_anchor=copy.deepcopy(_ca)
-                contrast_facts=list(_cpair)
-                reasoning_spec=_trial
                 break
-        if not contrast_anchor:
+
+        if not contrast_anchor or not chosen_core_pair:
             pd.setdefault("two_point_no_contrast_pair_reject",0)
             pd["two_point_no_contrast_pair_reject"]+=1
             continue
+
+        a["reasoning_base_fact"]=chosen_core_pair[0]
+        a["t2_joint_quality"]=copy.deepcopy(joint_quality or {})
+        support["support_quality"]={"ok":True,"score":4.6,"reason":"r34_joint_axis_ready","action":"keep",
+                                    "atomic_fact_count":len(atomic_facts),"joint_quality":copy.deepcopy(joint_quality or {})}
         support["contrast_anchor"]=copy.deepcopy(contrast_anchor)
         support["contrast_facts"]=copy.deepcopy(contrast_facts)
         support["reasoning_spec"]=copy.deepcopy(reasoning_spec)
-        support["reasoning_spec"]=copy.deepcopy(reasoning_spec)
-
         try:
             conf=float(a.get("confidence") or 0)
         except Exception:
@@ -2140,7 +2222,7 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
     uniq=[]
     seen=set()
     for score,bundle in ranked:
-        k=_topic_core(bundle[0].get("answer",""))
+        k=_t2_identity_key(bundle[0].get("answer",""))
         if k in seen:
             continue
         seen.add(k)
@@ -2372,32 +2454,30 @@ def _select_four_point_single_anchor(anchors, page_map, raw_page_map, pd, rng, p
     }
     return derived,relation_meta
 
-def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics, rng, pattern_id=""):
-    con=sqlite3.connect(db_path)
-    con.row_factory=sqlite3.Row
-
-    cols={r[1] for r in con.execute("PRAGMA table_info(anchors)").fetchall()}
-    required={"domain","topic","answer","evidence","source_name","page_no"}
-    missing=sorted(required-cols)
-    if missing:
-        con.close()
-        raise RuntimeError("knowledge.db anchors 스키마 누락: "+", ".join(missing))
-
-    has_conf="confidence" in cols
-    conf_expr="COALESCE(confidence,0)" if has_conf else "0"
-    rows=con.execute(
-        f"""SELECT domain,topic,answer,evidence,source_name,page_no,
-                   {conf_expr} AS confidence
-            FROM anchors
-            WHERE domain=?
-            ORDER BY {conf_expr} DESC, source_name, page_no""",
-        (domain,)
-    ).fetchall()
-    source_kinds=_source_kind_map(con)
-    _source_names={str(r["source_name"]) for r in rows}
-    page_map=_page_text_map(con,_source_names)
-    raw_page_map=_page_raw_text_map(con,_source_names)
-    con.close()
+def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics, rng, pattern_id="", used_source_pages=None):
+    import os
+    try: _mtime=os.path.getmtime(db_path)
+    except Exception: _mtime=0
+    _cache_key=(os.path.abspath(db_path),_mtime,domain)
+    _cached=_T2_SOURCE_CACHE.get(_cache_key) if not str(pattern_id).upper().startswith("T4") else None
+    if _cached is not None:
+        rows=copy.deepcopy(_cached["rows"]); source_kinds=copy.deepcopy(_cached["source_kinds"])
+        page_map=copy.deepcopy(_cached["page_map"]); raw_page_map=copy.deepcopy(_cached["raw_page_map"])
+    else:
+        con=sqlite3.connect(db_path); con.row_factory=sqlite3.Row
+        cols={r[1] for r in con.execute("PRAGMA table_info(anchors)").fetchall()}
+        required={"domain","topic","answer","evidence","source_name","page_no"}
+        missing=sorted(required-cols)
+        if missing:
+            con.close(); raise RuntimeError("knowledge.db anchors 스키마 누락: "+", ".join(missing))
+        has_conf="confidence" in cols; conf_expr="COALESCE(confidence,0)" if has_conf else "0"
+        rows=[dict(r) for r in con.execute(
+            f"""SELECT domain,topic,answer,evidence,source_name,page_no, {conf_expr} AS confidence
+                FROM anchors WHERE domain=? ORDER BY {conf_expr} DESC, source_name, page_no""",(domain,)).fetchall()]
+        source_kinds=_source_kind_map(con); _source_names={str(r["source_name"]) for r in rows}
+        page_map=_page_text_map(con,_source_names); raw_page_map=_page_raw_text_map(con,_source_names); con.close()
+        if not str(pattern_id).upper().startswith("T4"):
+            _T2_SOURCE_CACHE[_cache_key]={"rows":copy.deepcopy(rows),"source_kinds":copy.deepcopy(source_kinds),"page_map":copy.deepcopy(page_map),"raw_page_map":copy.deepcopy(raw_page_map)}
 
     _pd={
         "domain":domain,
@@ -2445,8 +2525,10 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         },
     }
 
-    used_answers={_topic_core(x) for x in (used_answers or set())}
-    excluded_topics={_topic_core(x) for x in (excluded_topics or set())}
+    _is_t2=not str(pattern_id).upper().startswith("T4")
+    _idnorm=(_t2_identity_key if _is_t2 else _topic_core)
+    used_answers={_idnorm(x) for x in (used_answers or set()) if _idnorm(x)}
+    excluded_topics={_idnorm(x) for x in (excluded_topics or set()) if _idnorm(x)}
 
     anchors=[]
     seen=set()
@@ -2490,13 +2572,15 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         a["core_exam_tier"]=_core["tier"]
         a["core_exam_qualified"]=_core["qualified"]
         a["core_exam_breakdown"]=_core
-        if _topic_core(a["answer"]) in used_answers:
+        if used_source_pages and (str(a.get("source_name","")),int(a.get("page_no",0) or 0)) in set(used_source_pages):
+            continue
+        if _idnorm(a["answer"]) in used_answers:
             _pd["used_answer_reject"]+=1
             continue
-        if _topic_core(a["topic"]) in excluded_topics:
+        if _idnorm(a["topic"]) in excluded_topics:
             _pd["excluded_topic_reject"]+=1
             continue
-        key=(_topic_core(a["topic"]),_topic_core(a["answer"]),a.get("source_name"),a.get("page_no"))
+        key=(_idnorm(a["topic"]),_idnorm(a["answer"]),a.get("source_name"),a.get("page_no"))
         if key in seen:
             _pd["dedupe_reject"]+=1
             continue
@@ -3125,40 +3209,87 @@ def _source_neighborhood_conflict(bundle, used_source_pages):
     return False
 
 
-def _rebalance_t2_domains_by_capability(db_path, plan, domains, rng):
-    """R33: DB 전체 capability scan 후 paired-slot T2에 부적합한 영역을 4점 슬롯과 교환한다.
-    영역을 제외하지 않고 배점 구조만 맞바꾸므로 원래 blueprint의 영역 구성은 보존한다.
+def _t2_remaining_capacity(db_path,domain,previous_questions=None):
+    """R34 candidate-universe capacity scan using distinct source units.
+    This is deterministic, API-free, and cached for the exact prior-source state.
     """
-    capability={}
-    diagnostics={}
+    import os
+    used_pages=set(); used_answers=set()
+    for q in previous_questions or []:
+        for src in q.get("sources",[]) or []:
+            sn=str(src.get("source_name",""));
+            try: pn=int(src.get("page_no",0) or 0)
+            except Exception: pn=0
+            if sn: used_pages.add((sn,pn))
+    try: mt=os.path.getmtime(db_path)
+    except Exception: mt=0
+    key=(os.path.abspath(db_path),mt,domain,tuple(sorted(used_pages)))
+    if key in _T2_CAPACITY_CACHE:
+        return copy.deepcopy(_T2_CAPACITY_CACHE[key])
+    universe=[]
+    local_pages=set(used_pages); local_answers=set(used_answers)
+    for k in range(16):
+        b,m=_smart_relation_bundle(db_path,domain,2,local_answers,set(),random.Random(91731+k),"T2_REL",used_source_pages=local_pages)
+        if not b: break
+        ca=_norm_anchor_text(b[0].get("answer","")); cb=_norm_anchor_text((b[1].get("contrast_anchor") or {}).get("answer",""))
+        rs=copy.deepcopy(b[1].get("reasoning_spec") or {})
+        pages=set()
+        for a in [b[0],b[1].get("contrast_anchor") or {}]:
+            sn=str(a.get("source_name",""));
+            try: pn=int(a.get("page_no",0) or 0)
+            except Exception: pn=0
+            if sn: pages.add((sn,pn))
+        universe.append({"core":ca,"contrast":cb,"pages":sorted(pages),"spec":rs})
+        local_answers.update(x for x in (ca,cb) if x)
+        local_pages.update(pages)
+    out={"capacity":len(universe),"universe":universe}
+    _T2_CAPACITY_CACHE[key]=copy.deepcopy(out)
+    return out
+
+def _rebalance_t2_domains_by_capability(db_path, plan, domains, rng, previous_questions=None):
+    """R34 capacity-aware assignment.
+    Paired-slot is used only where the DB has a proven remaining candidate universe.
+    If the entire safe paired universe is insufficient, at most the missing 2-point slots are converted
+    to existing Python formula templates in formula-capable domains; no weak paired candidate is admitted.
+    Domain multiset is preserved by swapping with 4-point slots.
+    """
+    diagnostics={}; capacity={}
     for d in domains:
         try:
-            b,m=_smart_relation_bundle(db_path,d,2,set(),set(),random.Random(91731),"T2_REL")
-            capability[d]=bool(b)
-            pd=(m or {}).get("score_pipeline_diagnostic",{})
-            diagnostics[d]={"capable":bool(b),"candidate_count":int(pd.get("candidate_accept",0) or 0),"reason":pd.get("final_reason","")}
+            scan=_t2_remaining_capacity(db_path,d,previous_questions)
+            capacity[d]=int(scan.get("capacity",0) or 0)
+            diagnostics[d]={"capable":capacity[d]>0,"candidate_count":capacity[d],"reason":"r34_cached_joint_universe","universe":scan.get("universe",[])}
         except Exception as ex:
-            capability[d]=False
-            diagnostics[d]={"capable":False,"candidate_count":0,"reason":"capability_scan_error:"+str(ex)}
-    bad=[i for i,s in enumerate(plan) if int(s.get("points",0) or 0)==2 and not capability.get(s.get("domain"),False)]
-    used_swap=set()
-    for i in bad:
-        # paired-slot 가능 영역이 배정된 4점 슬롯과 domain을 교환해 전체 영역분포를 보존한다.
-        choices=[j for j,s in enumerate(plan)
-                 if j not in used_swap and int(s.get("points",0) or 0)==4
-                 and capability.get(s.get("domain"),False)]
-        if not choices:
-            continue
-        # 같은 영역의 2점 중복을 줄이는 방향으로 선택
-        two_domains=[x.get("domain") for k,x in enumerate(plan) if k!=i and int(x.get("points",0) or 0)==2]
-        choices.sort(key=lambda j:(two_domains.count(plan[j].get("domain")),j))
-        j=choices[0]
-        old2=plan[i].get("domain"); old4=plan[j].get("domain")
-        plan[i]["domain"],plan[j]["domain"]=old4,old2
-        plan[i]["capability_swap_from"]=old2
-        plan[j]["capability_swap_from"]=old4
-        used_swap.add(j)
-    return plan,capability,diagnostics
+            capacity[d]=0; diagnostics[d]={"capable":False,"candidate_count":0,"reason":"capacity_scan_error:"+str(ex)}
+
+    t2idx=[i for i,s in enumerate(plan) if int(s.get("points",0) or 0)==2]
+    used4=set(); formula_fallbacks=0
+    for i in t2idx:
+        cur=plan[i].get("domain")
+        if capacity.get(cur,0)>0:
+            capacity[cur]-=1; plan[i]["t2_capability_mode"]="paired_joint"; continue
+        choices=[j for j,s in enumerate(plan) if j not in used4 and int(s.get("points",0) or 0)==4 and capacity.get(s.get("domain"),0)>0]
+        if choices:
+            choices.sort(key=lambda j:(-capacity.get(plan[j].get("domain"),0),j))
+            j=choices[0]; old2=cur; old4=plan[j].get("domain")
+            plan[i]["domain"],plan[j]["domain"]=old4,old2
+            plan[i]["capability_swap_from"]=old2; plan[j]["capability_swap_from"]=old4
+            plan[i]["t2_capability_mode"]="paired_joint"; capacity[old4]-=1; used4.add(j); continue
+
+        # No safe paired candidate remains. Use an existing deterministic calculation structure rather than lower quality gates.
+        if cur in FORMULA_DOMAINS and formula_fallbacks<2:
+            plan[i]["question_type"]="간단계산"; plan[i]["t2_capability_mode"]="formula_fallback"
+            formula_fallbacks+=1; continue
+        fchoices=[j for j,s in enumerate(plan) if j not in used4 and int(s.get("points",0) or 0)==4 and s.get("domain") in FORMULA_DOMAINS]
+        if fchoices and formula_fallbacks<2:
+            j=fchoices[0]; old2=cur; old4=plan[j].get("domain")
+            plan[i]["domain"],plan[j]["domain"]=old4,old2
+            plan[i]["capability_swap_from"]=old2; plan[j]["capability_swap_from"]=old4
+            plan[i]["question_type"]="간단계산"; plan[i]["t2_capability_mode"]="formula_fallback"
+            formula_fallbacks+=1; used4.add(j); continue
+        plan[i]["t2_capability_mode"]="no_safe_structure"
+    return plan,{d:(diagnostics[d]["candidate_count"]>0) for d in domains},diagnostics
+
 
 def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-luna",
                  ai_enabled=True,ai_quality_enabled=True,judge_model=None,seed=None,
@@ -3167,7 +3298,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
     domains=list(domains or DOMAINS)
     scores=score_pattern(section,count,points)
     plan=blueprint(section,scores,domains,rng)
-    plan,_t2_capability,_t2_capability_diagnostics=_rebalance_t2_domains_by_capability(db_path,plan,domains,rng)
+    plan,_t2_capability,_t2_capability_diagnostics=_rebalance_t2_domains_by_capability(db_path,plan,domains,rng,previous_questions=previous_questions)
     style=official_style_profile(db_path)
     judge_model=judge_model or model
     writer_active=bool(ai_enabled and api_key)
@@ -3310,7 +3441,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                         bundle,relation_meta=_smart_relation_bundle(
                             db_path,dom,need,used_answers,
                             set(used_topics)|local_rejected_topics,rng,
-                            pattern_id=pat.get("id","")
+                            pattern_id=pat.get("id",""), used_source_pages=used_source_pages
                         )
                         if len(bundle)<need:
                             diag(slot,"python_exam_value_selector",
