@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "GROUNDING-COVERAGE-R40-20260903"
+BUILDER_API_VERSION = "T4-CONTRACT-SYNC-R41-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -3679,7 +3679,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
             # 한 문제 슬롯이 수십 번 반복되지 않도록 AI 후보 예산을 제한한다.
             # 품질 기준은 그대로이며, 실패 원인에 따라 다른 패턴으로 즉시 전환한다.
-            slot_candidate_budget = ((4 if pts==2 else 2) if quality_active else (4 if tuning_mode else 8))
+            slot_candidate_budget = ((4 if pts==2 else 2) if quality_active else ((4 if pts==2 else 3) if tuning_mode else 8))
             slot_candidates_used = 0
             # selector 자체 호출도 슬롯당 제한한다. REJECT/timeout도 호출 1회로 계산한다.
             selector_attempt_limit = 0
@@ -3704,7 +3704,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                     break
                 need=len(pat["subpoints"])
 
-                for _ in range(1 if quality_active else (2 if tuning_mode else 32)):
+                for _ in range(1 if (quality_active or tuning_mode) else 32):
                     if (quality_active or tuning_mode) and (
                         slot_candidates_used >= slot_candidate_budget or
                         False

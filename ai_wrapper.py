@@ -259,6 +259,27 @@ Python 선결정 채점 논리={json.dumps(relation_meta.get('scoring_plan',[]),
     else:
         _writer_tasks=[str(v).strip() for v in x.get("tasks",[]) if str(v).strip()]
 
+    # R41: the final validator already requires a genuine 4-point reasoning chain,
+    # but free-form Writer wording could accidentally turn a valid source bundle into
+    # recall-only tasks (e.g. repeated "명칭을 쓰시오").  Keep the fixed answers
+    # untouched while Python owns the minimum scoring-action contract.
+    if int(points)==4 and len(_writer_tasks)==len(pattern.get("subpoints",[])):
+        _pid=str(pattern.get("id","")).upper()
+        if _pid in {"T4_DATA112","T4_112"} and len(_writer_tasks)>=3:
+            _writer_tasks=[
+                "자료의 조건을 해석하여 ㉠에 해당하는 내용을 판단해 쓰시오.",
+                "첫 판단과 자료의 관계를 검토하여 ㉡에 해당하는 내용을 판단해 쓰시오.",
+                "앞의 두 판단을 근거로 ㉢에 해당하는 내용을 설명하시오.",
+            ]
+        elif _pid=="T4_ERR22" and len(_writer_tasks)>=2:
+            # ERR22 is kept answer-compatible: do not require an extra correction value
+            # unless that value is already a fixed answer.  The common-principle link is
+            # expressed as the reasoning action rather than an additional scoring element.
+            _writer_tasks=[
+                "첫 자료의 오류 여부와 근거를 판단하여 ㉠에 해당하는 내용을 쓰시오.",
+                "앞의 판단과 같은 원리를 적용하여 둘째 자료를 검토하고 ㉡에 해당하는 내용을 쓰시오.",
+            ]
+
     _sources=[{"source_name":a["source_name"],"page_no":a["page_no"]} for a in bundle]
     if int(points)==2 and selection_mode in {"python_exam_value_decision_first_t2","python_exam_value_t2_reasoning_matrix"}:
         _cs=str(relation_meta.get("contrast_source_name","") or "")

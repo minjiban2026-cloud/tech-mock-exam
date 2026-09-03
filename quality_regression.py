@@ -32,6 +32,25 @@ def historical_regression_cases():
       "evidence":["자기력선에 관한 올바른 설명","자기력에 관한 올바른 설명"]
     })
     cases.append(("t4_err22_answer_contract",q,{"4점 채점요구-정답 계약 불일치(1번 task)","4점 ERR22 수정정답 누락 위험(1번 task)"}))
+
+    # R41: generated 4-point tasks must never regress to three independent recall prompts.
+    q=copy.deepcopy(base)
+    q.update({
+      "pattern_id":"T4_112","subpoints":[1,1,2],
+      "passage":"자료 A, 자료 B, 자료 C를 제시하였다.",
+      "tasks":["A의 명칭을 쓰시오.","B의 명칭을 쓰시오.","C의 명칭을 쓰시오."],
+      "answer":["A","B","C"],"evidence":["A 근거","B 근거","C 근거"]
+    })
+    cases.append(("t4_recall_only_tasks",q,{"4점 독립 명칭회상 과다","4점 단순회상형"}))
+
+    q=copy.deepcopy(base)
+    q.update({
+      "pattern_id":"T4_DATA112","subpoints":[1,1,2],
+      "passage":"① A, ② B, ③ C, ④ D, ⑤ E, ⑥ F, ⑦ G, ⑧ H의 사실을 나열하였다.",
+      "tasks":["자료를 해석하여 첫 판단을 쓰시오.","첫 판단과의 관계를 판단하여 둘째 내용을 쓰시오.","앞의 두 판단을 근거로 결과를 설명하시오."],
+      "answer":["판단A","판단B","결과C"],"evidence":["근거A","근거B","근거C"]
+    })
+    cases.append(("t4_independent_fact_listing",q,{"4점 독립사실 나열 과다"}))
     return cases
 
 
