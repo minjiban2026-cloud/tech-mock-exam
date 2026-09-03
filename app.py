@@ -10,10 +10,11 @@ make_quality_sample = getattr(exam_builder_module, "make_quality_sample", None)
 make_capability_validation_suite = getattr(exam_builder_module, "make_capability_validation_suite", None)
 try:
     from quality_regression import run_release_regression
-    from reasoning_capabilities import coverage_inventory
+    from reasoning_capabilities import coverage_inventory, validation_inventory
 except Exception:
     run_release_regression = None
     coverage_inventory = None
+    validation_inventory = None
 DOMAINS = exam_builder_module.DOMAINS
 BUILDER_API_VERSION = getattr(exam_builder_module, "BUILDER_API_VERSION", "UNKNOWN")
 from pdf_export import export_pdf
@@ -30,7 +31,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SEMANTIC-OP-R48-20260903")
+st.caption("배포 버전: FINAL-STABLE-20260831 · EXECUTABLE-SEMANTIC-R49-20260903")
 
 def secret(name, default=""):
     try:
@@ -293,7 +294,7 @@ with tabs[2]:
             "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
-        "R48은 실제 전수 Judge PASS capability만 최종 coverage에 산입합니다. 새 semantic operation은 EXPERIMENTAL로 발견만 하며 인증 전에는 18개에 포함하지 않습니다. 9영역×2=18개 capability를 한 번에 전수 생성하고, "
+        "R49는 기존 0-pass 구조를 되살리지 않고, 새 semantic operation을 Python 실행 가능한 18개 검증 후보로 구성합니다. 최종 coverage에는 여전히 실제 Judge PASS만 산입합니다. 9영역×2=18개 후보를 한 번에 전수 생성하고, "
         "각 문항을 Judge 1회만 심사한 뒤 전체 failure class를 집계합니다. REJECT 문항은 같은 실행에서 교체·재시도하지 않습니다."
     )
 
@@ -301,12 +302,18 @@ with tabs[2]:
         _cov_inv=coverage_inventory(DB,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())) if coverage_inventory else {"targets":[],"target_total":18,"all_domains_two_targets":False,"error":"coverage_inventory unavailable"}
     except Exception as _cov_ex:
         _cov_inv={"targets":[],"target_total":18,"all_domains_two_targets":False,"error":str(_cov_ex)}
-    with st.expander("🧭 18 capability 전수검증 대상", expanded=False):
+    try:
+        _val_inv=validation_inventory(DB,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set()))
+    except Exception as _val_ex:
+        _val_inv={"targets":[],"target_total":18,"all_domains_two_targets":False,"error":str(_val_ex)}
+    with st.expander("🧭 최종 인증 coverage", expanded=False):
         st.json(_cov_inv)
+    with st.expander("🧪 이번 18개 전수 Judge 후보", expanded=True):
+        st.json(_val_inv)
 
     if st.button("API 0원 · DB 전체 회귀검사", use_container_width=True, disabled=(run_release_regression is None)):
         try:
-            with st.spinner("과거 실패 회귀 + grounding + 18 capability 구성 가능 여부 검사 중..."):
+            with st.spinner("과거 실패 회귀 + grounding + 새 semantic operation 포함 18/18 실제 구성 검사 중..."):
                 rr=run_release_regression(DB,domains,seeds=50)
             st.session_state["QUALITY_REGRESSION"]=rr
             if rr.get("pass"):

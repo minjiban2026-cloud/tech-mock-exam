@@ -258,3 +258,117 @@ def coverage_inventory(db_path,domains,formula_domains=None):
         'status_legend':{'AI_VERIFIED':'실제 전수 Judge PASS','EXPERIMENTAL':'후보/구조 발견, coverage 미산입','RETIRED':'전수검증 0-pass로 폐기'},
         'note':'R48: 최종 coverage에는 실제 전수 Judge로 인증된 capability만 산입. ordered 및 새 semantic operation은 인증 전까지 EXPERIMENTAL.'
     }
+
+
+# R49: executable semantic-operation candidates.  These are Python-grounded
+# constructors for full-suite validation; they remain EXPERIMENTAL until Judge PASS.
+
+def _direction_from_evidence(e):
+    e=_clean(e)
+    if '반비례' in e: return '반대 방향으로 변한다'
+    if '비례' in e: return '같은 방향으로 변한다'
+    # retain the strongest explicit directional predicate without inventing a variable name
+    for w,ans in [('증가','증가한다'),('향상','향상된다'),('높아지','높아진다'),('커지','커진다'),('감소','감소한다'),('저하','저하된다'),('낮아지','낮아진다'),('작아지','작아진다')]:
+        if w in e: return ans
+    return None
+
+def generate_directional_question(spec,rng=None):
+    e=_clean(spec.get('evidence'))
+    direction=_direction_from_evidence(e)
+    if not direction: return None
+    # The source rule is provided as evidence, but the tasks force two-step transfer:
+    # identify the operative relation, then apply it to a changed condition.
+    passage=(
+        '다음은 한 기술적 관계에 관한 원자료의 설명이다.\n'
+        f'자료 | {e}\n\n'
+        '학생 A는 이 관계를 이용할 때 원자료의 변화 방향을 그대로 적용해야 한다고 보았고, '
+        '학생 B는 조건이 달라지면 변화 방향도 반대로 보아야 한다고 주장하였다.'
+    )
+    q={'domain':spec['domain'],'topic':'관계 규칙의 조건 적용','points':4,'verifier':'python_semantic_operation',
+       'pattern_id':'T4_SEM22','capability_id':CAP_DIRECTIONAL,'question_type':'관계판단/적용','material_form':'관계자료',
+       'intro':'다음 자료를 바탕으로 기술적 관계를 판단하시오.','passage':passage,
+       'conditions':['원자료에 명시된 변화 방향만을 근거로 판단한다.','새로운 사실이나 수치를 가정하지 않는다.'],
+       'tasks':['원자료에서 판단에 사용되는 변화 관계를 한 문장으로 정리하시오.',
+                '그 관계가 유지되는 조건에서 원인 쪽 변수가 더 커지는 경우 결과 쪽 변수의 변화 방향을 쓰고, 학생 A와 B 중 타당한 판단을 한 학생을 함께 쓰시오.'],
+       'answer':[direction,f'{direction} / 학생 A'],
+       'solution':[f'원자료의 명시적 변화 관계는 {direction}.',f'같은 관계가 유지되므로 결과 변화는 {direction}이며 학생 A가 타당하다.'],
+       'subpoints':[2,2],'sources':_source_meta(spec),'source_context_override':e,
+       'source_basis':'원자료에 명시된 방향성 관계를 동일 조건의 새로운 상황에 적용','derived_answer_flags':[True,True]}
+    q['fingerprint']=_fp({k:q[k] for k in ['domain','capability_id','passage','answer']}); return q
+
+def _causal_action(e):
+    e=_clean(e)
+    # Only explicit intervention clauses are allowed.  Generic explanatory text,
+    # headings such as "목적", and definition-like sentences are not actions.
+    strong=('대책','예방','방지','설치','첨가','제염','재배','차단','보강','유지')
+    if not any(k in e for k in strong):
+        return None
+    # Prefer text following explicit heading/cue.
+    for cue in ('대책 :','대책:','예방 :','예방:','방지 :','방지:'):
+        if cue in e:
+            frag=_clean(e.split(cue,1)[1])
+            if 8<=len(frag)<=180:
+                return frag
+    # Otherwise take the sentence/clause containing the intervention cue.
+    chunks=[_clean(x) for x in re.split(r'[.;]|\s/\s|▶|■|□',e) if _clean(x)]
+    for ch in chunks:
+        if any(k in ch for k in ('설치','첨가','제염','재배','차단','보강','유지','방지','예방')) and 8<=len(ch)<=180:
+            return ch
+    return None
+
+def _causal_problem(e):
+    e=_clean(e)
+    for marker in ('때문','원인','악취','벌레','누전','장해','저하','파손','편마멸'):
+        if marker in e:
+            return marker
+    return '문제 상황'
+
+def generate_causal_question(spec,rng=None):
+    e=_clean(spec.get('evidence')); action=_causal_action(e)
+    if not action: return None
+    problem=_causal_problem(e)
+    passage=(
+        '다음은 한 기술적 문제와 그에 대한 원자료의 설명이다.\n'
+        f'자료 | {e}\n\n'
+        f'현장에서는 자료와 같은 계열의 {problem}이 발생하였으며, 학생은 원자료의 조치가 이 상황에도 적용 가능한지 검토하고 있다.'
+    )
+    q={'domain':spec['domain'],'topic':'원인-조치 관계의 적용','points':4,'verifier':'python_semantic_operation',
+       'pattern_id':'T4_SEM22','capability_id':CAP_CAUSAL,'question_type':'원인진단/대책적용','material_form':'문제상황자료',
+       'intro':'다음 자료를 바탕으로 문제 상황에 대한 조치를 판단하시오.','passage':passage,
+       'conditions':['원자료에 직접 명시된 조치만 사용한다.','자료에 없는 효과나 원리를 새로 추가하지 않는다.'],
+       'tasks':['자료에서 문제 상황에 대응하기 위해 사용되는 조치를 쓰시오.',
+                '그 조치를 적용하는 것이 타당한 이유를 원자료의 문제-조치 관계에 근거하여 설명하시오.'],
+       'answer':[action,f'{problem}에 대응하기 위한 조치이기 때문이다.'],
+       'solution':[action,f'원자료에서 {problem}과 해당 조치가 직접 연결되어 있으므로 같은 계열의 문제 상황에 적용한다.'],
+       'subpoints':[2,2],'sources':_source_meta(spec),'source_context_override':e,
+       'source_basis':'원자료에 명시된 문제/원인과 조치의 연결을 새로운 상황에 적용','derived_answer_flags':[True,True]}
+    q['fingerprint']=_fp({k:q[k] for k in ['domain','capability_id','passage','answer']}); return q
+
+def generate_semantic_question(db_path,domain,capability_id,rng=None,avoid_fingerprints=None):
+    rng=rng or random.Random(); avoid=set(avoid_fingerprints or [])
+    specs=list(_semantic_operation_specs(db_path,domain,max_each=50).get(capability_id,[])); rng.shuffle(specs)
+    for spec in specs:
+        q=generate_directional_question(spec,rng) if capability_id==CAP_DIRECTIONAL else generate_causal_question(spec,rng)
+        if q and q.get('fingerprint') not in avoid: return q
+    return None
+
+def validation_inventory(db_path,domains,formula_domains=None):
+    """Build exactly two executable candidates per domain for the next full Judge suite.
+    Selection priority favors already-certified formula operations, then semantic operations,
+    and only then ordered sequence as an experimental fallback. Retired 0-pass structures are excluded.
+    """
+    formula_domains=set(formula_domains or [])
+    rows={}; targets=[]
+    for d in domains:
+        sem=_semantic_operation_specs(db_path,d,max_each=50); old=discover_capabilities(db_path,d)
+        avail=[]
+        if d in formula_domains: avail.append('deterministic_formula_operation')
+        if any(generate_directional_question(x) for x in sem.get(CAP_DIRECTIONAL,[])[:8]): avail.append(CAP_DIRECTIONAL)
+        if any(generate_causal_question(x) for x in sem.get(CAP_CAUSAL,[])[:8]): avail.append(CAP_CAUSAL)
+        if old.get(CAP_ORDERED): avail.append(CAP_ORDERED)
+        chosen=avail[:2]
+        rows[d]={'executable_types':avail,'selected_target_types':chosen,'target_count':len(chosen),'target_met':len(chosen)>=2,
+                 'candidate_counts':{CAP_DIRECTIONAL:len(sem.get(CAP_DIRECTIONAL,[])),CAP_CAUSAL:len(sem.get(CAP_CAUSAL,[])),CAP_ORDERED:len(old.get(CAP_ORDERED,[]))}}
+        for typ in chosen: targets.append({'domain':d,'capability_id':typ,'coverage_key':d+'::'+typ,'status':'VALIDATION_CANDIDATE'})
+    return {'domains':rows,'targets':targets,'target_total':len(domains)*2,'constructed_target_total':len(targets),'all_domains_two_targets':all(v['target_met'] for v in rows.values()),
+            'note':'R49: full-suite validation pool. Retired paired/swap are excluded; semantic operations are executable but not certified until Judge PASS.'}

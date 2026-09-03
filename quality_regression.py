@@ -166,23 +166,27 @@ def run_release_regression(db_path,domains,seeds=50):
     grounding=run_grounding_regressions()
     t4=audit_t4_operation_capabilities(db_path,domains)
     plans=audit_sample_plans(db_path,domains,seeds=seeds)
-    from reasoning_capabilities import coverage_inventory
+    from reasoning_capabilities import coverage_inventory, validation_inventory
     try:
         import exam_builder as eb
         coverage=coverage_inventory(db_path,domains,getattr(eb,"FORMULA_DOMAINS",set()))
+        validation=validation_inventory(db_path,domains,getattr(eb,"FORMULA_DOMAINS",set()))
+        # Actually construct all 18 without Judge. This is the API-free gate.
+        suite=eb.make_capability_validation_suite(db_path,domains=domains,api_key="",ai_quality_enabled=False,seed=4901)
+        constructed=len(suite.get("questions",[]) or [])
+        suite_construct={"pass":constructed==len(domains)*2,"constructed":constructed,"target":len(domains)*2,
+                         "selected_targets":validation.get("targets",[])}
     except Exception as ex:
         coverage={"all_domains_two_targets":False,"error":str(ex)}
+        validation={"all_domains_two_targets":False,"error":str(ex)}
+        suite_construct={"pass":False,"error":str(ex)}
     coverage_ready=bool(coverage.get("all_domains_two_targets"))
-    # R48: API-free regression tests code/data integrity.  Coverage readiness is a
-    # separate release state; do not label a healthy regression as failed merely
-    # because unverified capabilities were correctly removed.
-    suite_construct={"pass":False,"skipped":True,"reason":"AI_VERIFIED coverage is not 18/18; full Judge suite is intentionally blocked","certified":coverage.get("certified_target_total",coverage.get("constructed_target_total",0)),"target":coverage.get("target_total",len(domains)*2)}
     return {
-      "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass")),
+      "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass") and suite_construct.get("pass")),
       "coverage_ready":coverage_ready,
       "historical":hist,"grounding":grounding,"t4_operation_capabilities":t4,"sample_plan_coverage":plans,
-      "reasoning_coverage_candidates":coverage,"capability18_construction":suite_construct,
-      "note":"R48: API-free 회귀 PASS와 최종 18/18 readiness를 분리. coverage에는 실제 AI_VERIFIED capability만 산입하고 새 semantic operation은 EXPERIMENTAL로만 진단."
+      "certified_coverage":coverage,"reasoning_validation_candidates":validation,"capability18_construction":suite_construct,
+      "note":"R49: API-free gate는 새 semantic operation을 포함한 18개 문항의 실제 구성 가능성을 검사한다. 최종 coverage에는 Judge PASS만 산입한다."
     }
 
 
