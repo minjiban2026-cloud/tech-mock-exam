@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "T4-CAPABILITY-ONLY-R42-20260903"
+BUILDER_API_VERSION = "T4-OPERATION-CAPABILITY-R43-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -3557,25 +3557,29 @@ def _rebalance_t2_domains_by_capability(db_path, plan, domains, rng, previous_qu
 
 _SAMPLE_T4_CAP_CACHE={}
 
-def _sample_t4_capable_domains(db_path, domains):
-    """R42 SAMPLE6 only: find domains with at least one proven non-fallback 4pt capability.
-    We probe ERR22 because it is the least source-hungry active 4pt structure; production
-    selection still validates the actual slot pattern and may switch patterns.  Results are
-    cached by DB mtime so the scan is paid once per deployment/database revision.
+def _sample_t4_operation_domains(domains):
+    """R43 SAMPLE6: rank domains by deterministic 4-point operation diversity.
+
+    The ranking is derived from Python-generated 1+1+2 templates, not concept names.
+    Richer domains are repeated first when SAMPLE6 needs four 4-point slots.
     """
-    import os
-    try: mt=os.path.getmtime(db_path)
-    except Exception: mt=0
-    key=(os.path.abspath(db_path),mt,tuple(domains))
-    if key in _SAMPLE_T4_CAP_CACHE:
-        return list(_SAMPLE_T4_CAP_CACHE[key])
-    out=[]
+    ranked=[]
     for d in domains:
-        b,m=_smart_relation_bundle(db_path,d,2,set(),set(),random.Random(4242),pattern_id="T4_ERR22",used_source_pages=set())
-        if b and str((m or {}).get("selection_mode",""))=="python_exam_value_direct_chain":
-            out.append(d)
-    _SAMPLE_T4_CAP_CACHE[key]=tuple(out)
-    return out
+        if d not in FORMULA_DOMAINS:
+            continue
+        topics=set(); accepted=0
+        for seed in range(18):
+            q=generate_formula_question(d,random.Random(43100+seed))
+            if not q:
+                continue
+            q=_enrich_formula(q,4)
+            if not q or validate_formula_question(q):
+                continue
+            accepted+=1; topics.add(str(q.get("topic","")))
+        if accepted:
+            ranked.append((len(topics),accepted,d))
+    ranked.sort(key=lambda x:(-x[0],-x[1],str(x[2])))
+    return [x[2] for x in ranked]
 
 def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt-5.6-luna",
                  ai_enabled=True,ai_quality_enabled=True,judge_model=None,seed=None,
@@ -3585,19 +3589,22 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
     scores=score_pattern(section,count,points)
     plan=blueprint(section,scores,domains,rng)
     plan,_t2_capability,_t2_capability_diagnostics=_rebalance_t2_domains_by_capability(db_path,plan,domains,rng,previous_questions=previous_questions)
-    # R42: SAMPLE6 must test proven 4pt capability, not force weak domains through the
-    # retired single-concept raw-fact fallback.  Final A/B is intentionally not changed
-    # here; it remains blocked until unsupported domains gain real 4pt capabilities.
+    # R43: a relation chain is NOT sufficient evidence for a 4-point question.
+    # SAMPLE6 routes every 4-point slot only to an executable Python-owned operation
+    # capability.  The current certified operations are deterministic formula chains
+    # (intermediate value/relationship -> dependent final value).  Domains may repeat
+    # in SAMPLE6 because this stage validates the capability, not final domain coverage.
     if tuning_mode and section=="SAMPLE":
-        _t4_domains=_sample_t4_capable_domains(db_path,domains)
-        if len(_t4_domains)<1:
-            raise RuntimeError("SAMPLE6: 검증된 4점 capability 영역이 없습니다. single-concept fallback은 R42에서 금지되었습니다.")
+        _t4_domains=_sample_t4_operation_domains(domains)
+        if not _t4_domains:
+            raise RuntimeError("SAMPLE6: Python으로 풀이 연산을 증명한 4점 capability 영역이 없습니다.")
         _k=0
         for _slot in plan:
             if int(_slot.get("points",0) or 0)==4:
                 _slot["domain_override_from"]=_slot.get("domain")
                 _slot["domain"]=_t4_domains[_k % len(_t4_domains)]
-                _slot["t4_capability_mode"]="proven_direct_chain_only"
+                _slot["question_type"]="계산/판단"
+                _slot["t4_capability_mode"]="deterministic_formula_operation"
                 _k+=1
     style=official_style_profile(db_path)
     judge_model=judge_model or model
@@ -3624,7 +3631,10 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
     judge_calls=0; judge_rejects=0; selector_calls=0
     # R35: source-capability planning decides how many 2-point formula fallbacks are required.
     # Do not silently push a pre-routed formula slot back into the relation selector.
-    formula_cap=max(2, sum(1 for _s in plan if int(_s.get("points",0) or 0)==2 and str(_s.get("t2_capability_mode","")).startswith("formula_capability")))
+    formula_cap=max(2, sum(1 for _s in plan if (
+        (int(_s.get("points",0) or 0)==2 and str(_s.get("t2_capability_mode","")).startswith("formula_capability"))
+        or (int(_s.get("points",0) or 0)==4 and _s.get("t4_capability_mode")=="deterministic_formula_operation")
+    )))
 
     diagnostics=[]
     diagnostic_limit=100
@@ -3657,7 +3667,8 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
         if wants_calc and dom in FORMULA_DOMAINS and formula_used<formula_cap:
             _formula_enrich_failures=0
-            for _ in range(16 if quality_active else 40):
+            _formula_attempt_cap = (120 if pts==4 and slot.get("t4_capability_mode")=="deterministic_formula_operation" else (16 if quality_active else 40))
+            for _ in range(_formula_attempt_cap):
                 cand=generate_formula_question(dom,rng)
                 if not cand:
                     diag(slot,"formula_generator","계산형 템플릿 후보 없음")
@@ -3668,7 +3679,8 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                     diag(slot,"formula_enrich","계산형 채점요소 조건 불충족")
                     # Same template family repeatedly failing cannot improve by brute-force retries.
                     # Fall back to the normal selector early to save time/API and avoid noisy loops.
-                    if _formula_enrich_failures>=4:
+                    _enrich_fail_limit = (80 if pts==4 and slot.get("t4_capability_mode")=="deterministic_formula_operation" else 4)
+                    if _formula_enrich_failures>=_enrich_fail_limit:
                         diag(slot,"formula_fallback","계산 템플릿 채점요소 부족으로 일반 출제 경로 전환")
                         break
                     continue
@@ -3709,6 +3721,11 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
         if q is None and pts==2 and str(slot.get("t2_capability_mode","")).startswith("formula_capability"):
             raise RuntimeError(
                 f"R35 formula capability exhausted before Writer fallback: {section}-{slot.get('number')} · {dom}"
+            )
+        if q is None and pts==4 and slot.get("t4_capability_mode")=="deterministic_formula_operation":
+            raise RuntimeError(
+                f"R43 4점 풀이연산 capability 소진: {section}-{slot.get('number')} · {dom}. "
+                "relation/direct-chain fallback은 허용하지 않습니다."
             )
 
         if q is None:

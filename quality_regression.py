@@ -97,71 +97,51 @@ def run_grounding_regressions():
     return {"pass":ok,"cases":rows}
 
 
-def audit_t4_universe(db_path,domains):
-    """API-free T4 universe audit.
-    Each selector call already evaluates the whole domain/pattern universe; use its
-    candidate_accept/leaderboard diagnostics instead of repeatedly re-reading the DB.
+def audit_t4_operation_capabilities(db_path,domains,seeds=40):
+    """R43 API-free audit of executable 4-point capabilities.
+
+    A domain is 4-point-capable only when Python can repeatedly generate a three-element
+    1+1+2 question, compute all fixed answers, and pass the formula validator.  Concept
+    relation/direct-chain candidates are deliberately not counted.
     """
     import exam_builder as eb
-    result={}; total=0
+    from formula_templates import generate_formula_question
+    from validators import validate_formula_question
+    cells={}
+    capable=[]
     for domain in domains:
-        result[domain]={}
-        for pid,need in T4_PATTERNS.items():
-            bundle,meta=eb._smart_relation_bundle(
-                db_path,domain,need,set(),set(),random.Random(39000),
-                pattern_id=pid,used_source_pages=set()
-            )
-            pd=copy.deepcopy((meta or {}).get('score_pipeline_diagnostic',{}) or {})
-            sd=copy.deepcopy((meta or {}).get('score_diagnostic',{}) or {})
-            accepted=int(pd.get('candidate_accept',0) or 0)
-            if bundle and accepted<=0:
-                accepted=int(pd.get('four_point_single_anchor_candidates',1) or 1)
-            ctx=str((meta or {}).get('source_context_override','') or '')
-            if not ctx and bundle:
-                ctx=eb.bundle_context(db_path,bundle)
-            grounding=[source_evidence_grounded(ctx,x.get('evidence','')) for x in bundle] if bundle else []
-            pre=eb._t4_candidate_prejudge(bundle,pid) if bundle else (False,'no_candidate')
-            top={
-                'topics':[str(x.get('topic','')) for x in bundle],
-                'answers':[str(x.get('answer','')) for x in bundle],
-                'selection_mode':str((meta or {}).get('selection_mode','')),
-                'selector_reason':str((meta or {}).get('selector_reason','')),
-                'prejudge':pre,
-                'source_grounding':grounding
-            }
-            cell_pass=bool(bundle and accepted>0 and pre[0] and grounding and all(grounding))
-            result[domain][pid]={
-                'pass':cell_pass,
-                'accepted_count':accepted,
-                'top_candidate':top,
-                'prejudge_reject_count':int(pd.get('four_point_prejudge_reject',0) or 0),
-                'source_ground_reject_count':int(pd.get('four_point_source_ground_reject',0) or 0),
-                'prejudge_examples':copy.deepcopy(pd.get('four_point_prejudge_examples',[]) or []),
-                'final_reason':pd.get('final_reason',''),
-                'leaderboard':copy.deepcopy(sd.get('leaderboard',[]) or [])
-            }
-            total += accepted
-    # R42: not every domain currently has a proven 4pt capability once the unsafe
-    # single-concept fallback is removed.  Release-gate PASS therefore means the
-    # SAMPLE6 validation pool is real and sufficiently diverse, not that unsupported
-    # domains are silently treated as safe.  Final A/B must still address the reported
-    # unsupported domains before release.
-    capable_domains=[d for d,cells in result.items() if any(cell.get('pass') for cell in cells.values())]
-    pattern_coverage={pid:any(result[d][pid].get('pass') for d in result) for pid in T4_PATTERNS}
-    unsafe_modes=[]
-    for d,cells in result.items():
-        for pid,cell in cells.items():
-            if str((cell.get('top_candidate') or {}).get('selection_mode',''))=='python_global_t4_single_concept_chain':
-                unsafe_modes.append({'domain':d,'pattern_id':pid})
-    sample_ready=(len(capable_domains)>=4 and all(pattern_coverage.values()) and not unsafe_modes)
-    unsupported=[d for d in result if d not in capable_domains]
+        attempts=0; accepted=0; topics=set(); failures=[]
+        if domain in eb.FORMULA_DOMAINS:
+            for seed in range(int(seeds)):
+                attempts+=1
+                q=generate_formula_question(domain,random.Random(43000+seed))
+                if not q:
+                    failures.append('no_template'); continue
+                q=eb._enrich_formula(q,4)
+                if not q:
+                    failures.append('not_three_step'); continue
+                errs=validate_formula_question(q)
+                if errs:
+                    failures.extend([str(x) for x in errs[:2]]); continue
+                if list(q.get('subpoints',[])) != [1,1,2] or len(q.get('answer',[])) != 3:
+                    failures.append('bad_scoring_shape'); continue
+                accepted+=1; topics.add(str(q.get('topic','')))
+        passed=accepted>0
+        if passed: capable.append(domain)
+        cells[domain]={
+            'pass':passed,'attempts':attempts,'accepted':accepted,
+            'topics':sorted(topics),'failure_examples':failures[:8],
+            'capability_mode':'deterministic_formula_operation' if passed else 'none'
+        }
+    unsupported=[d for d in domains if d not in capable]
+    # Four SAMPLE slots can safely reuse a certified operation domain; final A/B cannot
+    # claim domain-complete 4-point readiness until every required domain has a capability.
     return {
-      'pass':sample_ready,'sample_ready':sample_ready,'final_ab_ready':not unsupported,
-      'total_accepted_candidates':total,'domains':result,
-      'capable_domains':capable_domains,'unsupported_domains':unsupported,
-      'pattern_coverage':pattern_coverage,'unsafe_single_concept_modes':unsafe_modes
+        'pass':bool(capable),'sample_ready':bool(capable),'final_ab_ready':not unsupported,
+        'capable_domains':capable,'unsupported_domains':unsupported,'domains':cells,
+        'relation_chain_counted_as_capability':False,
+        'note':'R43: 4점 capability는 Python 실행 가능한 풀이연산만 인정; direct-chain/core score는 자격 근거가 아님'
     }
-
 
 def audit_sample_plans(db_path,domains,seeds=50):
     import exam_builder as eb
@@ -184,10 +164,10 @@ def audit_sample_plans(db_path,domains,seeds=50):
 def run_release_regression(db_path,domains,seeds=50):
     hist=run_historical_regressions()
     grounding=run_grounding_regressions()
-    t4=audit_t4_universe(db_path,domains)
+    t4=audit_t4_operation_capabilities(db_path,domains)
     plans=audit_sample_plans(db_path,domains,seeds=seeds)
     return {
       "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass")),
-      "historical":hist,"grounding":grounding,"t4_universe":t4,"sample_plan_coverage":plans,
-      "note":"API-free SAMPLE6 gate: historical failures + grounding/media regressions + proven direct-chain T4 pool + SAMPLE6 capability plans; final_ab_ready is reported separately"
+      "historical":hist,"grounding":grounding,"t4_operation_capabilities":t4,"sample_plan_coverage":plans,
+      "note":"API-free SAMPLE6 gate: historical failures + grounding/media regressions + executable Python 4점 operation capabilities + SAMPLE6 capability plans; direct-chain은 4점 자격으로 계산하지 않음"
     }

@@ -27,7 +27,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R42-20260903")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R43-20260903")
 
 def secret(name, default=""):
     try:
@@ -301,9 +301,9 @@ with tabs[2]:
                 rr=run_release_regression(DB,domains,seeds=50)
             st.session_state["QUALITY_REGRESSION"]=rr
             if rr.get("pass"):
-                st.success("DB 전체 회귀검사 통과")
+                st.success("DB/Python 풀이연산 회귀검사 통과")
             else:
-                st.error("DB 전체 회귀검사 실패: 6문항 AI 검사를 실행하기 전에 아래 항목을 먼저 수정하세요.")
+                st.error("DB/Python 풀이연산 회귀검사 실패: 6문항 AI 검사를 실행하기 전에 아래 항목을 먼저 수정하세요.")
         except Exception as e:
             st.error("회귀검사 실행 실패: "+str(e))
 
