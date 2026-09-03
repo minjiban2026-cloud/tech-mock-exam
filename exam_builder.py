@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "T2-PIPELINE-AUDIT-R37-20260903"
+BUILDER_API_VERSION = "T2-RULE-APPLICATION-R38-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -1586,6 +1586,20 @@ def _t2_reasoning_shape_errors(cand, relation_meta, bundle):
     if int(cand.get("points",0) or 0)!=2:
         return []
     spec=(relation_meta or {}).get("reasoning_spec") or {}
+    if spec.get("mode")=="numeric_series_rule_application":
+        errs=[]
+        passage=str(cand.get("passage","") or "")
+        tasks=[str(x) for x in (cand.get("tasks",[]) or [])]
+        ans=[str(x) for x in (cand.get("answer",[]) or [])]
+        if len(tasks)!=2 or len(ans)!=2:
+            errs.append("2점 규칙도출형 채점구조 오류")
+        if not ("자료 A" in passage and "자료 B" in passage and "자료 C" in passage and "?" in passage):
+            errs.append("2점 규칙도출형 자료구조 누락")
+        if len(tasks)>=2 and not any(k in tasks[1] for k in ("앞에서","도출한","이용")):
+            errs.append("2점 적용요구 선행규칙 의존성 부족")
+        if len(ans)>=2 and re.sub(r"[^가-힣A-Za-z0-9]","",ans[1]).lower() in re.sub(r"[^가-힣A-Za-z0-9]","",passage).lower():
+            errs.append("2점 적용 정답 직접 노출")
+        return errs
     if spec.get("mode")!="paired_fact_slot_consistency":
         return ["2점 reasoning_spec 누락"]
 
@@ -2109,12 +2123,143 @@ def _t2_clause_copy_score(clause, source_fact):
     sh=len(fa&fb)/max(1,min(len(fa),len(fb)))
     return max(seq,sh)
 
+
+
+def _t2_equal_parameter_rule(anchor):
+    """Detect a source-owned numeric procedure rule without concept hardcoding.
+    Requires one parameter to control start position, inspected count and skipped count.
+    Example shape: n번째에서 시작, n개 검사, n개 건너뛰기.
+    """
+    text=_norm_anchor_text(anchor.get("evidence", ""))
+    label=_t2_identity_key(anchor.get("answer", ""))
+    sig=_t2_series_signature(anchor.get("answer", ""))
+    if not sig or "#" not in sig:
+        return None
+    lm=re.search(r"(\d+(?:\.\d+)?)",label)
+    sm=re.search(r"(\d+)\s*번[^,;]{0,40}시작",text)
+    cm=re.search(r"(\d+)\s*개\s*검사",text)
+    km=re.search(r"(\d+)\s*개\s*건너",text)
+    if not (lm and sm and cm and km):
+        return None
+    try:
+        lv=float(lm.group(1)); sv=int(sm.group(1)); cv=int(cm.group(1)); kv=int(km.group(1))
+    except Exception:
+        return None
+    if abs(lv-round(lv))>1e-9 or int(round(lv))!=sv or not (sv==cv==kv):
+        return None
+    return {"signature":sig,"n":sv,"source":text}
+
+def _t2_numeric_rule_application_candidate(anchors, pd):
+    """R38 capability-first T2.
+    A relationship question is allowed only when >=3 source items in the same structural
+    series independently instantiate the same numeric rule. Two items establish the rule;
+    a third item is reserved for application. This prevents definition comparison/copy tasks.
+    """
+    groups={}
+    for a0 in anchors:
+        a=_two_point_core_anchor_clean(a0)
+        if not _two_point_core_target_ok(a):
+            continue
+        r=_t2_equal_parameter_rule(a)
+        if not r:
+            continue
+        groups.setdefault(r["signature"],[]).append((r["n"],copy.deepcopy(a),r))
+    candidates=[]
+    for sig,rows in groups.items():
+        uniq={}
+        for n,a,r in rows:
+            uniq.setdefault(n,(n,a,r))
+        rows=sorted(uniq.values(),key=lambda z:z[0])
+        if len(rows)<3:
+            continue
+        # Use separated examples and a later target when possible; this makes rule induction
+        # and application distinct scoring actions rather than a one-line lookup.
+        ex1=rows[0]; ex2=rows[1]; target=rows[-1]
+        if target[0] in {ex1[0],ex2[0]}:
+            continue
+        n1,a1,r1=ex1; n2,a2,r2=ex2; nt,at,rt=target
+        rule_answer="한 주기의 비트 수는 시작 비트 번호의 2배이다."
+        target_answer=f"{2*nt}개"
+        spec={
+            "mode":"numeric_series_rule_application",
+            "series_signature":sig,
+            "example_values":[n1,n2],
+            "target_value":nt,
+            "example_sources":[r1["source"],r2["source"]],
+            "target_source":rt["source"],
+            "rule_answer":rule_answer,
+            "target_answer":target_answer,
+            "target_rule_detail":f"{nt}개 검사 후 {nt}개 건너뛰므로 한 주기는 {2*nt}개 비트이다.",
+            "source_items":[
+                {"answer":a1.get("answer",""),"source_name":a1.get("source_name",""),"page_no":a1.get("page_no",0),"evidence":r1["source"]},
+                {"answer":a2.get("answer",""),"source_name":a2.get("source_name",""),"page_no":a2.get("page_no",0),"evidence":r2["source"]},
+                {"answer":at.get("answer",""),"source_name":at.get("source_name",""),"page_no":at.get("page_no",0),"evidence":rt["source"]},
+            ],
+            "minimum_inference_steps":2,
+        }
+        support=copy.deepcopy(a1)
+        support["topic"]=f"{_norm_anchor_text(a1.get('topic','')).strip()} · 규칙적용"
+        support["answer"]=target_answer
+        support["evidence"]=rt["source"]
+        support["derived_support"]=True
+        support["reasoning_spec"]=copy.deepcopy(spec)
+        support["contrast_anchor"]=copy.deepcopy(at)
+        score=float(a1.get("exam_value_score") or 0)+float(a1.get("core_exam_score") or 0)*0.15+len(rows)
+        candidates.append((score,[a1,support],spec,a2,at))
+    if not candidates:
+        pd["final_reason"]="no_numeric_rule_application_candidates"
+        pd["candidate_accept"]=0
+        return None
+    candidates.sort(key=lambda x:x[0],reverse=True)
+    score,bundle,spec,a2,at=candidates[0]
+    pd["candidate_accept"]=len(candidates)
+    pd["two_point_rule_application_candidates"]=len(candidates)
+    pd["final_reason"]="numeric_rule_application_ready"
+    core=bundle[0]
+    meta={
+        "master_concept":_norm_anchor_text(core.get("topic","")),
+        "relation":"여러 source item에서 공통 수치 규칙을 도출한 뒤 새 source item에 적용",
+        "thinking_types":["자료비교","규칙도출","적용계산"],
+        "exam_skeleton":"두 사례의 공통 수치관계 도출 → 관계식 일반화 → 세 번째 사례에 적용",
+        "scoring_plan":[
+            {"points":1,"action":"공통 규칙 도출","answer":spec["rule_answer"]},
+            {"points":1,"action":"도출한 규칙을 목표 사례에 적용","answer":spec["target_answer"]},
+        ],
+        "material_limits":_compact_material_limits(2),
+        "natural_unit_score":None,
+        "two_point_label_policy":"RULE-APPLICATION: source에 반복 확인되는 규칙을 먼저 도출하고 다음 source item에 적용한다.",
+        "reasoning_spec":copy.deepcopy(spec),
+        "contrast_context":spec["target_source"],
+        "contrast_topic":_norm_anchor_text(at.get("topic","")),
+        "contrast_answer":_norm_anchor_text(at.get("answer","")),
+        "contrast_source_name":str(at.get("source_name","")),
+        "contrast_page_no":at.get("page_no"),
+        "correct_option":"",
+        "hidden_core_answer":_norm_anchor_text(core.get("answer","")),
+        "core_exam_profile":[{"topic":core.get("topic",""),"score":core.get("core_exam_score",0),"tier":core.get("core_exam_tier","SUPPORT"),"breakdown":core.get("core_exam_breakdown",{})}],
+        "quality_directive":"자료 문구 찾기/복사형 금지. 두 예에서 공통 규칙을 도출해야 첫 1점을 얻고, 그 규칙을 세 번째 source item에 적용해야 둘째 1점을 얻도록 Python이 고정한다.",
+        "selector_reason":f"R38 numeric series rule-application score={score:.2f}",
+        "relation_score":round(score,2),
+        "selection_mode":"python_exam_value_t2_reasoning_matrix",
+        "source_policy":"subnote_only_for_answer_content",
+        "score_pipeline_diagnostic":copy.deepcopy(pd),
+        "score_diagnostic":{"selected_mode":"numeric_series_rule_application","series_signature":spec["series_signature"],"example_values":spec["example_values"],"target_value":spec["target_value"]},
+    }
+    return bundle,meta
+
 def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id):
     """
     T2 전용 selector.
     DB 정답 anchor는 1개만 선택하고, 두 번째 1점은 같은 anchor/page의 근거·오류수정·비교·적용으로 만든다.
     """
-    ranked=[]
+    # R38: old paired-slot lookup/correction is disabled.  Only a rule that is
+    # independently instantiated by at least three source items may become a relational T2.
+    _rule=_t2_numeric_rule_application_candidate(anchors,pd)
+    if _rule is not None:
+        return _rule
+    return [],{"score_pipeline_diagnostic":pd}
+
+    ranked=[]  # legacy paired code retained below for compatibility, intentionally unreachable
     for a0 in anchors:
         a=_two_point_core_anchor_clean(a0)
         if not _two_point_core_target_ok(a):
@@ -2164,7 +2309,7 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
                     jq=_t2_joint_pair_quality(a,_ap,_ca,_bp)
                     if not jq.get("ok"):
                         continue
-                    jq["capability"]="paired_structural_series"
+                    jq["capability"]="numeric_series_rule_application"
                     # Build support only after the joint axis has been proven.
                     _support=copy.deepcopy(a)
                     _support["topic"]=f"{_norm_anchor_text(a.get('topic','')).strip()} · 연결사실"
@@ -3225,7 +3370,7 @@ def _source_neighborhood_conflict(bundle, used_source_pages):
 
 def _t2_remaining_capacity(db_path,domain,previous_questions=None):
     """R35 source-capability scan using distinct source units.
-    Only candidates already proven as structural-series paired capability are counted.
+    Only candidates already proven as multi-item numeric rule-application capability are counted.
     Deterministic, API-free, cached for the exact prior-source state.
     """
     import os
@@ -3248,7 +3393,14 @@ def _t2_remaining_capacity(db_path,domain,previous_questions=None):
         if not b: break
         ca=_norm_anchor_text(b[0].get("answer","")); cb=_norm_anchor_text((b[1].get("contrast_anchor") or {}).get("answer",""))
         rs=copy.deepcopy(b[1].get("reasoning_spec") or {})
+        if rs.get("mode")!="numeric_series_rule_application":
+            break
         pages=set()
+        for _si in rs.get("source_items",[]) or []:
+            _sn=str(_si.get("source_name", ""));
+            try: _pn=int(_si.get("page_no",0) or 0)
+            except Exception: _pn=0
+            if _sn: pages.add((_sn,_pn))
         for a in [b[0],b[1].get("contrast_anchor") or {}]:
             sn=str(a.get("source_name",""));
             try: pn=int(a.get("page_no",0) or 0)
@@ -3281,7 +3433,7 @@ def _rebalance_t2_domains_by_capability(db_path, plan, domains, rng, previous_qu
             diagnostics[d]={
                 "capable":capacity[d]>0,
                 "candidate_count":capacity[d],
-                "reason":"r35_structural_series_capability",
+                "reason":"r38_numeric_rule_application_capability",
                 "universe":scan.get("universe",[])
             }
         except Exception as ex:
@@ -3294,7 +3446,7 @@ def _rebalance_t2_domains_by_capability(db_path, plan, domains, rng, previous_qu
         cur=plan[i].get("domain")
         if capacity.get(cur,0)>0:
             capacity[cur]-=1
-            plan[i]["t2_capability_mode"]="paired_structural_series"
+            plan[i]["t2_capability_mode"]="numeric_series_rule_application"
             continue
 
         # Prefer swapping in another proven paired capability.
@@ -3306,7 +3458,7 @@ def _rebalance_t2_domains_by_capability(db_path, plan, domains, rng, previous_qu
             j=choices[0]; old2=cur; old4=plan[j].get("domain")
             plan[i]["domain"],plan[j]["domain"]=old4,old2
             plan[i]["capability_swap_from"]=old2; plan[j]["capability_swap_from"]=old4
-            plan[i]["t2_capability_mode"]="paired_structural_series"
+            plan[i]["t2_capability_mode"]="numeric_series_rule_application"
             capacity[old4]-=1; used4.add(j)
             continue
 
@@ -3480,10 +3632,10 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
             selector_attempts = 0
 
             for pat in _concept_patterns(rng,pts,first_pat):
-                # R35 capability owns pattern eligibility.  Structural paired questions use the
+                # R35 capability owns pattern eligibility.  Rule-application questions use the
                 # error-correction frame only; DATA/CMP/REL are not retried against the same source
                 # merely to fill a slot.
-                if pts==2 and slot.get("t2_capability_mode")=="paired_structural_series" and pat.get("id")!="T2_ERR":
+                if pts==2 and slot.get("t2_capability_mode")=="numeric_series_rule_application" and pat.get("id")!="T2_ERR":
                     continue
                 if (quality_active or tuning_mode) and (
                     slot_candidates_used >= slot_candidate_budget or

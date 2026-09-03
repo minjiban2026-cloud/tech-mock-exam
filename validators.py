@@ -313,6 +313,34 @@ def _subpoint_scope_errors(q):
             e.append(f"1점 소문항 과다요구({i}번 task)")
     return e
 
+
+
+def _t2_rule_application_errors(q):
+    e=[]
+    if int(q.get("points",0) or 0)!=2:
+        return e
+    if not q.get("python_owned_t2"):
+        return e
+    tasks=[str(x) for x in q.get("tasks",[]) or []]
+    passage=str(q.get("passage", ""))
+    answers=[str(x) for x in q.get("answer",[]) or []]
+    if len(tasks)!=2 or len(answers)!=2:
+        return ["2점 규칙도출형 채점구조 오류"]
+    if not all(k in tasks[0] for k in ("비교","n")):
+        e.append("2점 첫 요구 규칙도출 부족")
+    if not any(k in tasks[1] for k in ("앞에서","도출한","이용")):
+        e.append("2점 둘째 요구의 첫 판단 의존성 부족")
+    # The target answer must not be visible in the material.
+    if answers[1] and contains_loose(passage,answers[1]):
+        e.append("2점 적용 정답 직접 노출")
+    # At least two complete examples plus one unresolved target are required.
+    if passage.count("자료 A")!=1 or passage.count("자료 B")!=1 or passage.count("자료 C")!=1 or "?" not in passage:
+        e.append("2점 규칙도출 자료구조 부족")
+    # Rule answer should be genuinely derived, not copied from passage.
+    if answers[0] and contains_loose(passage,answers[0]):
+        e.append("2점 도출 규칙 직접 노출")
+    return e
+
 def static_quality_errors(q,require_ai_quality=True):
     e=[]
     if q.get("premise_mode")!="ai_grounded":
@@ -330,6 +358,7 @@ def static_quality_errors(q,require_ai_quality=True):
     e.extend(_material_length_errors(q))
     e.extend(_independent_fact_listing_errors(q))
     e.extend(_subpoint_scope_errors(q))
+    e.extend(_t2_rule_application_errors(q))
     if pts==4:
         aq=q.get("ai_quality",{}) or {}
         # 최종 A/B: judge 결과가 있으면 judge의 thinking_types 사용.

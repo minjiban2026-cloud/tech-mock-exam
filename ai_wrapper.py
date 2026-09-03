@@ -33,10 +33,57 @@ def _strip_json(text):
 
 def rewrite_bundle(api_key,model,bundle,points,section,pattern,question_type,material_form,style_profile,
                    source_context="",relation_meta=None):
+    relation_meta=relation_meta or {}
+    _spec=relation_meta.get("reasoning_spec") or {}
+    # R38: numeric-series rule application is fully Python-owned.  No Writer call is
+    # needed because free-form paraphrasing would reduce a rule task back to lookup/copy.
+    if int(points)==2 and _spec.get("mode")=="numeric_series_rule_application":
+        vals=list(_spec.get("example_values") or [])
+        if len(vals)!=2:
+            raise ValueError("R38 numeric rule examples missing")
+        n1,n2=int(vals[0]),int(vals[1]); nt=int(_spec.get("target_value"))
+        passage=(
+            f"자료 A | 시작 위치: {n1}번 비트 / 연속 검사: {n1}개 / 건너뛰기: {n1}개\n"
+            f"자료 B | 시작 위치: {n2}번 비트 / 연속 검사: {n2}개 / 건너뛰기: {n2}개\n"
+            f"자료 C | 시작 위치: {nt}번 비트 / 한 주기의 비트 수: ?"
+        )
+        answers=[str(_spec.get("rule_answer","")),str(_spec.get("target_answer",""))]
+        evidence=[str((_spec.get("example_sources") or [""])[0]),str(_spec.get("target_source",""))]
+        srcs=[]; seen=set()
+        for z in _spec.get("source_items",[]) or []:
+            k=(str(z.get("source_name","")),int(z.get("page_no",0) or 0))
+            if k in seen or not k[0]: continue
+            seen.add(k); srcs.append({"source_name":k[0],"page_no":k[1]})
+        q={
+          "domain":bundle[0]["domain"],
+          "topic":" · ".join(a["topic"] for a in bundle),
+          "points":points,"subpoints":pattern["subpoints"],"pattern_id":pattern["id"],
+          "question_type":"규칙도출·적용","material_form":"표형자료",
+          "verifier":"source",
+          "intro":"다음 자료를 비교하여 <작성 방법>에 따라 쓰시오.",
+          "passage":passage,"conditions":[],
+          "tasks":[
+             "자료 A와 B를 비교하여, 시작 비트 번호를 n이라 할 때 한 주기의 비트 수를 n으로 나타내시오.",
+             "앞에서 도출한 관계를 이용하여 자료 C의 한 주기 비트 수를 구하시오."
+          ],
+          "answer":answers,
+          "solution":[f"㉠: {answers[0]}",f"㉡: {answers[1]}"],
+          "evidence":evidence,
+          "derived_answer_flags":[True,True],
+          "sources":srcs,
+          "source_basis":"; ".join(f"{z['source_name']} p.{z['page_no']}" for z in srcs),
+          "premise_mode":"ai_grounded",
+          "master_concept":relation_meta.get("master_concept",""),
+          "relation":relation_meta.get("relation",""),
+          "selection_mode":"python_exam_value_t2_reasoning_matrix",
+          "intended_thinking_types":["자료비교","규칙도출","적용계산"],
+          "python_owned_t2":True,
+        }
+        q["fingerprint"]=fingerprint(q)
+        return q
     from openai import OpenAI
     client=OpenAI(api_key=api_key,timeout=60,max_retries=1)
     answers=[a["answer"] for a in bundle]
-    relation_meta=relation_meta or {}
     evidence=[a["evidence"] for a in bundle]
     selection_mode=str(relation_meta.get("selection_mode",""))
     derived_answer_flags=[False]*len(answers)
