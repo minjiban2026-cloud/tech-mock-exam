@@ -341,6 +341,86 @@ def _t2_rule_application_errors(q):
         e.append("2점 도출 규칙 직접 노출")
     return e
 
+
+
+def _simple_answer_label(text):
+    t=str(text or '').strip()
+    n=norm(t)
+    if not n:
+        return True
+    if re.search(r"[=/%℃°]",t) or re.search(r"\d+(?:\.\d+)?\s*(?:Pa|MPa|kPa|N|kN|V|A|W|Hz|byte|bit|mm|cm|m|kg|s|Gbps|Mbps)",t,re.I):
+        return False
+    if len(n)>=22 or re.search(r"(때문|따라|증가|감소|변화|관계|오류|영향|과정|작용|이용|조건|수정|검사|반복|전송)",t):
+        return False
+    return len(n)<=16
+
+def _action_signature(task):
+    t=str(task or '')
+    groups=[]
+    lex={
+      'name':('명칭','용어','이름','개념을 쓰','무엇인지 쓰'),
+      'judge':('판단','선택','옳은','잘못'),
+      'correct':('수정','바르게 고','고쳐'),
+      'reason':('이유','근거','설명','원리'),
+      'apply':('적용','이용하여','도출','예측','계산','구하'),
+      'compare':('비교','차이','구분'),
+    }
+    for k,terms in lex.items():
+        if any(x in t for x in terms): groups.append(k)
+    return groups
+
+def _four_point_scoring_contract_errors(q):
+    """R39: task가 실제 고정정답보다 더 많은 채점행동을 요구하는 경우를 차단한다.
+    특히 T4_ERR22에서 '명칭+오류수정'을 요구하면서 answer에는 명칭 하나만 있는 오류를 전역 차단한다.
+    """
+    e=[]
+    if int(q.get('points',0) or 0)!=4:
+        return e
+    pid=str(q.get('pattern_id','')).upper()
+    tasks=[str(x or '') for x in q.get('tasks',[]) or []]
+    answers=[str(x or '') for x in q.get('answer',[]) or []]
+    evidences=[str(x or '') for x in q.get('evidence',[]) or []]
+    for i,(task,ans) in enumerate(zip(tasks,answers),1):
+        acts=_action_signature(task)
+        # 한 개의 단순 명칭 정답으로 명칭+수정/근거/적용 두 행동을 동시에 채점할 수 없다.
+        if _simple_answer_label(ans) and 'name' in acts and any(x in acts for x in ('correct','reason','apply','compare')):
+            e.append(f'4점 채점요구-정답 계약 불일치({i}번 task)')
+        if pid=='T4_ERR22' and _simple_answer_label(ans) and 'correct' in acts:
+            ev=evidences[i-1] if i-1<len(evidences) else ''
+            # 수정값/올바른 서술이 answer에 담겨 있지 않은 단순 label이면 계약 불완전.
+            if ans and (not ev or len(norm(ans))<=16):
+                e.append(f'4점 ERR22 수정정답 누락 위험({i}번 task)')
+    return e
+
+def _four_point_inferential_distance_errors(q):
+    """R39: 4점 자료가 사실상 정답표인지 task 표현이 아니라 실제 변환거리로 검사한다.
+    두 개 이상의 채점요소가 source 근거를 거의 그대로 읽어 단순 label/value로 답할 수 있으면 탈락.
+    """
+    e=[]
+    if int(q.get('points',0) or 0)!=4:
+        return e
+    passage=str(q.get('passage',''))
+    tasks=[str(x or '') for x in q.get('tasks',[]) or []]
+    answers=[str(x or '') for x in q.get('answer',[]) or []]
+    evidences=[str(x or '') for x in q.get('evidence',[]) or []]
+    low=[]
+    for i,(ans,ev) in enumerate(zip(answers,evidences)):
+        task=tasks[i] if i<len(tasks) else ''
+        sim=_max_copy_similarity(passage,ev,ans)
+        # 단순 명칭/값 + 높은 source support + 실제 적용/계산이 없는 task = 저변환 채점요소
+        substantive=any(k in task for k in ('계산','도출','예측','적용','비교하여','관계를 이용','앞의 결과','이를 이용','위 판단'))
+        if _simple_answer_label(ans) and sim>=0.58 and not substantive:
+            low.append(i+1)
+    if len(low)>=2:
+        e.append('4점 추론거리 부족(자료→정답 직접대응 과다)')
+    pid=str(q.get('pattern_id','')).upper()
+    if pid in {'T4_DATA112','T4_112'} and len(tasks)>=3:
+        # 마지막 2점이 앞 답을 실제로 사용하지 않고 단순 명칭/정의 대조면 1+1+2 체인이 아님.
+        last=tasks[-1]
+        if not any(k in last for k in ('앞의','앞서','이를 이용','위 판단','위 결과','두 결과')):
+            e.append('4점 마지막 2점의 선행판단 실사용 부족')
+    return e
+
 def static_quality_errors(q,require_ai_quality=True):
     e=[]
     if q.get("premise_mode")!="ai_grounded":
@@ -358,6 +438,8 @@ def static_quality_errors(q,require_ai_quality=True):
     e.extend(_material_length_errors(q))
     e.extend(_independent_fact_listing_errors(q))
     e.extend(_subpoint_scope_errors(q))
+    e.extend(_four_point_scoring_contract_errors(q))
+    e.extend(_four_point_inferential_distance_errors(q))
     e.extend(_t2_rule_application_errors(q))
     if pts==4:
         aq=q.get("ai_quality",{}) or {}

@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "T2-RULE-APPLICATION-R38-20260903"
+BUILDER_API_VERSION = "COVERAGE-REGRESSION-R39-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -2518,6 +2518,33 @@ def _four_point_core_target_ok(anchor):
         return False
     return True
 
+def _t4_candidate_prejudge(chosen, pattern_id):
+    """R39: Writer/API 전에 4점 후보의 구조적 저난도 위험을 제거한다.
+    특정 개념이 아니라 answer/evidence의 형태와 패턴 요구만 본다.
+    """
+    pid=str(pattern_id or '').upper()
+    rows=list(chosen or [])
+    if not rows:
+        return False,'empty'
+    def _raw_label(x):
+        a=_norm_anchor_text(x.get("answer","")).strip()
+        if not a: return True
+        if re.search(r"[=/%℃°]",a) or re.search(r"\d+(?:\.\d+)?\s*(?:Pa|MPa|kPa|N|kN|V|A|W|Hz|byte|bit|mm|cm|m|kg|s|Gbps|Mbps)",a,re.I):
+            return False
+        if len(a)>22 or re.search(r"(때문|따라|증가|감소|변화|관계|오류|영향|과정|작용|이용|조건|수정|검사|반복|전송|한다$|된다$|있다$)",a):
+            return False
+        return True
+    simple=sum(1 for x in rows if _raw_label(x))
+    evs=[_norm_anchor_text(x.get('evidence','')).strip() for x in rows]
+    relation_hits=sum(1 for ev in evs if re.search(r'(때문|따라|경우|하면|결과|영향|변화|증가|감소|과정|순서|오류|수정|계산|비교|관계|비례|반비례)',ev))
+    # DATA112/112가 단순 label 2~3개 + 정의문 대응이라면 Writer가 사고사슬을 꾸며도 본질은 회상형이다.
+    if pid in {'T4_DATA112','T4_112'} and simple>=2 and relation_hits<=2:
+        return False,'t4_definition_lookup_risk'
+    # ERR22는 두 정답이 모두 단순 명칭이면 '명칭+오류수정' 계약이 깨지기 쉽고 실제 수정값이 고정되지 않는다.
+    if pid=='T4_ERR22' and simple>=2:
+        return False,'t4_err22_label_only_risk'
+    return True,''
+
 def _select_four_point_single_anchor(anchors, page_map, raw_page_map, pd, rng, pattern_id, need):
     """Multi-anchor chain이 없는 영역에서도 통용되는 4점 fallback.
     하나의 검증된 핵심 anchor의 local source block 안에서 서로 다른 2~3개 사실을
@@ -2568,6 +2595,14 @@ def _select_four_point_single_anchor(anchors, page_map, raw_page_map, pd, rng, p
             z["derived_support"]=True
             derived.append(z)
         derived=derived[:need]
+        _pre_ok,_pre_reason=_t4_candidate_prejudge(derived,pattern_id)
+        if not _pre_ok:
+            pd.setdefault("four_point_prejudge_reject",0)
+            pd["four_point_prejudge_reject"]+=1
+            pd.setdefault("four_point_prejudge_examples",[])
+            if len(pd["four_point_prejudge_examples"])<5:
+                pd["four_point_prejudge_examples"].append({"topic":a.get("topic",""),"reason":_pre_reason})
+            continue
         _fact_text=" ".join(chosen_facts)
         _reasoning_signals=len(re.findall(r"(때문|따라|경우|하면|위해|결과|발생|증가|감소|분리|결합|촉진|금지|이용|작용|과정|처리|조건|변화|대체|해결)",_fact_text))
         score=(float(a.get("importance_score") or 0)*1.05
@@ -2991,6 +3026,17 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
                     # 두 채점요소가 모두 단순 명칭회상형이면 API 호출 전에 제거한다.
                     continue
                 score_total += label_adjust
+            if str(pattern_id).upper().startswith("T4"):
+                _pre_ok,_pre_reason=_t4_candidate_prejudge(chosen,pattern_id)
+                if not _pre_ok:
+                    _pd.setdefault("four_point_prejudge_reject",0)
+                    _pd["four_point_prejudge_reject"]+=1
+                    _pd.setdefault("four_point_prejudge_examples",[])
+                    if len(_pd["four_point_prejudge_examples"])<5:
+                        _pd["four_point_prejudge_examples"].append({
+                            "topics":[str(x.get("topic","")) for x in chosen],"reason":_pre_reason
+                        })
+                    continue
             candidates.append((score_total,chosen))
             _pd["candidate_accept"]+=1
 
@@ -3980,7 +4026,7 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
 
 def make_quality_sample(db_path,domains=None,api_key="",model="gpt-5.6-luna",
-                        ai_enabled=True,judge_model=None,seed=None):
+                        ai_enabled=True,judge_model=None,seed=None,ai_quality_enabled=True):
     """
     품질 튜닝 전용 6문항.
     정확히 2점 2개 + 4점 4개.
@@ -4016,12 +4062,32 @@ def make_quality_sample(db_path,domains=None,api_key="",model="gpt-5.6-luna",
     )
     if judge_count != 0:
         raise RuntimeError(
-            "SAMPLE6 내부 검증 실패: 튜닝 모드에서 AI 품질심사가 호출되었습니다. "
-            "현재 배포 파일 버전이 섞여 있습니다."
+            "SAMPLE6 내부 검증 실패: 생성 단계에서 AI 품질심사가 호출되었습니다. "
+            "SAMPLE6은 생성 후 문항별 1회 심사만 허용합니다."
         )
 
+    # R39: SAMPLE6은 재시도 없는 실전 품질검사다.
+    # 생성 단계에서는 Judge를 호출하지 않고, 완성된 6문항을 각각 정확히 한 번만 심사한다.
+    sample_reviews=[]
+    if bool(ai_quality_enabled and ai_enabled and api_key):
+        _style=official_style_profile(db_path)
+        _jm=judge_model or model
+        for q in exam.get("questions",[]):
+            try:
+                rv=judge_question(api_key,_jm,q,"",_style)
+            except Exception as ex:
+                rv={"pass":False,"reason":"SAMPLE6 AI 품질심사 호출 실패: "+str(ex),"fatal_flags":["JUDGE_CALL_ERROR"]}
+            q["sample_ai_quality"]=rv
+            sample_reviews.append({
+                "number":q.get("number"),"domain":q.get("domain"),"pattern_id":q.get("pattern_id"),
+                "pass":bool(rv.get("pass")),"reason":str(rv.get("reason","")),
+                "fatal_flags":list(rv.get("fatal_flags",[]) or []),"scores":copy.deepcopy(rv.get("scores",{}))
+            })
+    exam["sample_ai_reviews"]=sample_reviews
+    exam["sample_ai_pass_count"]=sum(1 for r in sample_reviews if r.get("pass"))
+    exam["sample_ai_reject_count"]=sum(1 for r in sample_reviews if not r.get("pass"))
     exam["builder_api_version"]=BUILDER_API_VERSION
-    exam["sample_mode"]="PYTHON_RELATION_WRITER_ONLY"
+    exam["sample_mode"]="PYTHON_PREFLIGHT_THEN_SINGLE_JUDGE"
     return exam
 
 

@@ -7,6 +7,10 @@ import streamlit as st
 import exam_builder as exam_builder_module
 make_ab = exam_builder_module.make_ab
 make_quality_sample = getattr(exam_builder_module, "make_quality_sample", None)
+try:
+    from quality_regression import run_release_regression
+except Exception:
+    run_release_regression = None
 DOMAINS = exam_builder_module.DOMAINS
 BUILDER_API_VERSION = getattr(exam_builder_module, "BUILDER_API_VERSION", "UNKNOWN")
 from pdf_export import export_pdf
@@ -23,7 +27,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R38-20260903")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SAMPLE6-R39-20260903")
 
 def secret(name, default=""):
     try:
@@ -286,10 +290,27 @@ with tabs[2]:
             "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
-        "한 번에 2점 2문항 + 4점 4문항만 생성합니다. "
-        "이 단계에서는 AI 관계성 selector와 최종 Blind/Grounded/섹션 심사를 생략하고, "
-        "Python 강한 관계 그래프 + Luna 문항작성 + deterministic 구조·근거 검증만 사용합니다."
+        "먼저 API 0회의 전수 회귀검사를 권장합니다. 그 뒤 2점 2문항 + 4점 4문항을 생성하고, "
+        "완성된 6문항을 각각 딱 한 번 AI Judge에 넣어 실제 품질을 확인합니다. "
+        "Judge REJECT가 나와도 자동 재시도하지 않아 비용과 원인 추적을 통제합니다."
     )
+
+    if st.button("API 0원 · DB 전체 회귀검사", use_container_width=True, disabled=(run_release_regression is None)):
+        try:
+            with st.spinner("과거 실패 회귀 + T4 전체 후보 + 6문항 capability 청사진 검사 중..."):
+                rr=run_release_regression(DB,domains,seeds=50)
+            st.session_state["QUALITY_REGRESSION"]=rr
+            if rr.get("pass"):
+                st.success("DB 전체 회귀검사 통과")
+            else:
+                st.error("DB 전체 회귀검사 실패: 6문항 AI 검사를 실행하기 전에 아래 항목을 먼저 수정하세요.")
+        except Exception as e:
+            st.error("회귀검사 실행 실패: "+str(e))
+
+    if "QUALITY_REGRESSION" in st.session_state:
+        rr=st.session_state["QUALITY_REGRESSION"]
+        with st.expander("🧪 DB 전체 회귀검사 결과", expanded=not bool(rr.get("pass"))):
+            st.json(rr)
 
     if st.button(
         "6문항 빠른 품질 샘플 생성",
@@ -306,7 +327,8 @@ with tabs[2]:
                         DB,domains=domains,api_key=key,model=model,
                         ai_enabled=bool(use_ai and key),
                         judge_model=judge_model,
-                        seed=int(seed)
+                        seed=int(seed),
+                        ai_quality_enabled=bool(use_ai and key)
                     )
                     st.session_state["QUALITY_SAMPLE"]=sample
                     st.success("6문항 품질 튜닝 샘플 생성 완료.")
@@ -320,6 +342,11 @@ with tabs[2]:
                         f"AI 관계성 선별 {ss.get('ai_selector_calls',0)}회(정상=0) · "
                         f"계산형 {ss.get('formula_questions',0)}문항"
                     )
+                    if sample.get("sample_ai_reviews"):
+                        st.caption(
+                            f"단발 AI Judge: PASS {sample.get('sample_ai_pass_count',0)} · "
+                            f"REJECT {sample.get('sample_ai_reject_count',0)} · 자동 재시도 0회"
+                        )
                 except Exception as e:
                     st.error(str(e))
                     show_generation_diagnostics(e)
@@ -351,6 +378,17 @@ with tabs[2]:
                         st.write("출처:",q.get("source_basis"))
                     if q.get("evidence"):
                         st.write("근거:",q.get("evidence"))
+
+                _sq=q.get("sample_ai_quality") or {}
+                if _sq:
+                    if _sq.get("pass"):
+                        st.success("AI Judge: PASS")
+                    else:
+                        st.error("AI Judge: REJECT · "+str(_sq.get("reason","")))
+                    if _sq.get("fatal_flags"):
+                        st.write("Fatal flags:",_sq.get("fatal_flags"))
+                    if _sq.get("scores"):
+                        st.write("심사 점수:",_sq.get("scores"))
 
                 # R14D1: 실제 후보 점수 진단. PDF에는 넣지 않고 화면에서만 확인한다.
                 _sd=q.get("_score_diagnostic",{})
