@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "GLOBAL-T2-JOINT-UNIVERSE-R34-20260903"
+BUILDER_API_VERSION = "SOURCE-CAPABILITY-FIRST-R35-20260903"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -2148,9 +2148,16 @@ def _select_two_point_one_anchor(anchors, page_map, raw_page_map, pd, rng, patte
             best_local=None
             for _ap in core_pairs:
                 for _bp in _contrast_pairs:
+                    # R35: paired-slot is a capability, not a generic similarity fallback.
+                    # Only explicit structural series (4G/5G, p1/p2, numbered generations/stages)
+                    # may enter this structure.  Non-series pairs are never rescued by page proximity
+                    # or lexical similarity.
+                    if not _t2_structural_series(a.get("answer",""), _ca.get("answer","")):
+                        continue
                     jq=_t2_joint_pair_quality(a,_ap,_ca,_bp)
                     if not jq.get("ok"):
                         continue
+                    jq["capability"]="paired_structural_series"
                     # Build support only after the joint axis has been proven.
                     _support=copy.deepcopy(a)
                     _support["topic"]=f"{_norm_anchor_text(a.get('topic','')).strip()} · 연결사실"
@@ -3210,8 +3217,9 @@ def _source_neighborhood_conflict(bundle, used_source_pages):
 
 
 def _t2_remaining_capacity(db_path,domain,previous_questions=None):
-    """R34 candidate-universe capacity scan using distinct source units.
-    This is deterministic, API-free, and cached for the exact prior-source state.
+    """R35 source-capability scan using distinct source units.
+    Only candidates already proven as structural-series paired capability are counted.
+    Deterministic, API-free, cached for the exact prior-source state.
     """
     import os
     used_pages=set(); used_answers=set()
@@ -3247,47 +3255,88 @@ def _t2_remaining_capacity(db_path,domain,previous_questions=None):
     return out
 
 def _rebalance_t2_domains_by_capability(db_path, plan, domains, rng, previous_questions=None):
-    """R34 capacity-aware assignment.
-    Paired-slot is used only where the DB has a proven remaining candidate universe.
-    If the entire safe paired universe is insufficient, at most the missing 2-point slots are converted
-    to existing Python formula templates in formula-capable domains; no weak paired candidate is admitted.
-    Domain multiset is preserved by swapping with 4-point slots.
+    """R35 source-capability-first assignment.
+
+    1) Count only deterministic structural-series paired candidates.
+    2) Assign those candidates before any question pattern is chosen.
+    3) Every remaining 2-point slot is routed to an existing deterministic formula capability
+       by swapping domains with a 4-point slot when needed.
+    4) Never lower the paired gate and never leave a normal 2-point slot in
+       ``no_safe_structure`` state.
+
+    The domain multiset is preserved whenever a formula-capable 4-point slot is available.
     """
     diagnostics={}; capacity={}
     for d in domains:
         try:
             scan=_t2_remaining_capacity(db_path,d,previous_questions)
             capacity[d]=int(scan.get("capacity",0) or 0)
-            diagnostics[d]={"capable":capacity[d]>0,"candidate_count":capacity[d],"reason":"r34_cached_joint_universe","universe":scan.get("universe",[])}
+            diagnostics[d]={
+                "capable":capacity[d]>0,
+                "candidate_count":capacity[d],
+                "reason":"r35_structural_series_capability",
+                "universe":scan.get("universe",[])
+            }
         except Exception as ex:
-            capacity[d]=0; diagnostics[d]={"capable":False,"candidate_count":0,"reason":"capacity_scan_error:"+str(ex)}
+            capacity[d]=0
+            diagnostics[d]={"capable":False,"candidate_count":0,"reason":"capacity_scan_error:"+str(ex),"universe":[]}
 
     t2idx=[i for i,s in enumerate(plan) if int(s.get("points",0) or 0)==2]
-    used4=set(); formula_fallbacks=0
+    used4=set()
     for i in t2idx:
         cur=plan[i].get("domain")
         if capacity.get(cur,0)>0:
-            capacity[cur]-=1; plan[i]["t2_capability_mode"]="paired_joint"; continue
-        choices=[j for j,s in enumerate(plan) if j not in used4 and int(s.get("points",0) or 0)==4 and capacity.get(s.get("domain"),0)>0]
+            capacity[cur]-=1
+            plan[i]["t2_capability_mode"]="paired_structural_series"
+            continue
+
+        # Prefer swapping in another proven paired capability.
+        choices=[j for j,s in enumerate(plan)
+                 if j not in used4 and int(s.get("points",0) or 0)==4
+                 and capacity.get(s.get("domain"),0)>0]
         if choices:
             choices.sort(key=lambda j:(-capacity.get(plan[j].get("domain"),0),j))
             j=choices[0]; old2=cur; old4=plan[j].get("domain")
             plan[i]["domain"],plan[j]["domain"]=old4,old2
             plan[i]["capability_swap_from"]=old2; plan[j]["capability_swap_from"]=old4
-            plan[i]["t2_capability_mode"]="paired_joint"; capacity[old4]-=1; used4.add(j); continue
+            plan[i]["t2_capability_mode"]="paired_structural_series"
+            capacity[old4]-=1; used4.add(j)
+            continue
 
-        # No safe paired candidate remains. Use an existing deterministic calculation structure rather than lower quality gates.
-        if cur in FORMULA_DOMAINS and formula_fallbacks<2:
-            plan[i]["question_type"]="간단계산"; plan[i]["t2_capability_mode"]="formula_fallback"
-            formula_fallbacks+=1; continue
-        fchoices=[j for j,s in enumerate(plan) if j not in used4 and int(s.get("points",0) or 0)==4 and s.get("domain") in FORMULA_DOMAINS]
-        if fchoices and formula_fallbacks<2:
+        # No proven relational structure remains.  Route before generation to deterministic
+        # formula capability; do not let REL/ERR/DATA/CMP selectors discover a bad pair.
+        if cur in FORMULA_DOMAINS:
+            plan[i]["question_type"]="간단계산"
+            plan[i]["t2_capability_mode"]="formula_capability"
+            continue
+
+        fchoices=[j for j,s in enumerate(plan)
+                  if j not in used4 and int(s.get("points",0) or 0)==4
+                  and s.get("domain") in FORMULA_DOMAINS]
+        if fchoices:
+            # Prefer a domain-preserving swap when possible.
             j=fchoices[0]; old2=cur; old4=plan[j].get("domain")
             plan[i]["domain"],plan[j]["domain"]=old4,old2
             plan[i]["capability_swap_from"]=old2; plan[j]["capability_swap_from"]=old4
-            plan[i]["question_type"]="간단계산"; plan[i]["t2_capability_mode"]="formula_fallback"
-            formula_fallbacks+=1; used4.add(j); continue
-        plan[i]["t2_capability_mode"]="no_safe_structure"
+            plan[i]["question_type"]="간단계산"
+            plan[i]["t2_capability_mode"]="formula_capability"
+            used4.add(j)
+            continue
+
+        # If preserving the total domain multiset is impossible, never lower relation quality.
+        # Keep all 4-point coverage intact and let only the 2-point slot repeat a proven formula domain.
+        # Choose the least-used formula domain among already planned 2-point capability slots.
+        counts={d:0 for d in FORMULA_DOMAINS}
+        for _k,_s in enumerate(plan):
+            if _k==i: continue
+            if int(_s.get("points",0) or 0)==2 and _s.get("domain") in counts:
+                counts[_s.get("domain")]+=1
+        fd=sorted(FORMULA_DOMAINS,key=lambda d:(counts[d],d))[0]
+        plan[i]["capability_domain_override_from"]=cur
+        plan[i]["domain"]=fd
+        plan[i]["question_type"]="간단계산"
+        plan[i]["t2_capability_mode"]="formula_capability_repeat_domain"
+
     return plan,{d:(diagnostics[d]["candidate_count"]>0) for d in domains},diagnostics
 
 
@@ -3322,7 +3371,9 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
                 used_source_pages.add((_sn,_pn))
     ai_calls=0; fallbacks=0; formula_used=0
     judge_calls=0; judge_rejects=0; selector_calls=0
-    formula_cap=2
+    # R35: source-capability planning decides how many 2-point formula fallbacks are required.
+    # Do not silently push a pre-routed formula slot back into the relation selector.
+    formula_cap=max(2, sum(1 for _s in plan if int(_s.get("points",0) or 0)==2 and str(_s.get("t2_capability_mode","")).startswith("formula_capability")))
 
     diagnostics=[]
     diagnostic_limit=100
@@ -3344,6 +3395,8 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
         diagnostics.append(row)
 
     for slot in plan:
+        if int(slot.get("points",0) or 0)==2 and slot.get("t2_capability_mode")=="planning_error_no_capability":
+            raise RuntimeError("R35 T2 capability planning failed before Writer/API: no proven relational or formula structure")
         pts=slot["points"]; dom=slot["domain"]; q=None
         wants_calc=slot["question_type"] in {"간단계산","계산/판단"}
 
@@ -3400,6 +3453,13 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
 
                 q=cand;formula_used+=1;break
 
+        # R35: capability routing is binding.  A formula-capability slot may never
+        # silently fall back to a relational selector after template/judge failure.
+        if q is None and pts==2 and str(slot.get("t2_capability_mode","")).startswith("formula_capability"):
+            raise RuntimeError(
+                f"R35 formula capability exhausted before Writer fallback: {section}-{slot.get('number')} · {dom}"
+            )
+
         if q is None:
             first_pat=weighted_pick(rng,pts,calc=False,used=used_patterns)
             local_rejected_topics=set()
@@ -3413,6 +3473,11 @@ def make_section(db_path,section,count,points,domains=None,api_key="",model="gpt
             selector_attempts = 0
 
             for pat in _concept_patterns(rng,pts,first_pat):
+                # R35 capability owns pattern eligibility.  Structural paired questions use the
+                # error-correction frame only; DATA/CMP/REL are not retried against the same source
+                # merely to fill a slot.
+                if pts==2 and slot.get("t2_capability_mode")=="paired_structural_series" and pat.get("id")!="T2_ERR":
+                    continue
                 if (quality_active or tuning_mode) and (
                     slot_candidates_used >= slot_candidate_budget or
                     False
