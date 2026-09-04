@@ -10,7 +10,7 @@ make_quality_sample = getattr(exam_builder_module, "make_quality_sample", None)
 make_capability_validation_suite = getattr(exam_builder_module, "make_capability_validation_suite", None)
 make_contract_validation_suite = getattr(exam_builder_module, "make_contract_validation_suite", None)
 make_hybrid_contract_validation_suite = getattr(exam_builder_module, "make_hybrid_contract_validation_suite", None)
-certify_r58_missing_slots = getattr(exam_builder_module, "certify_r58_missing_slots", getattr(exam_builder_module, "certify_r57_missing_slots", None))
+certify_r59_missing_slots = getattr(exam_builder_module, "certify_r59_missing_slots", getattr(exam_builder_module, "certify_r57_missing_slots", None))
 try:
     from quality_regression import run_release_regression
     from reasoning_capabilities import coverage_inventory, validation_inventory
@@ -34,7 +34,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · RESILIENT-NARROW-R58-20260904")
+st.caption("배포 버전: FINAL-STABLE-20260831 · ACTUAL-EXAM-TRANSFER-R59-20260904")
 
 def secret(name, default=""):
     try:
@@ -314,15 +314,15 @@ with tabs[2]:
             _raw=_uploaded_contracts.getvalue(); _upload_sha=hashlib.sha256(_raw).hexdigest()
             if st.session_state.get("R58_IMPORTED_CONTRACT_SHA") != _upload_sha:
                 _obj=json.loads(_raw.decode("utf-8")); _rows=_obj.get("contracts",[]) if isinstance(_obj,dict) else []
-                st.session_state["R58_CONTRACTS"]=list(_rows or [])
+                st.session_state["R59_CONTRACTS"]=list(_rows or [])
                 st.session_state["R58_IMPORTED_CONTRACT_SHA"]=_upload_sha
                 st.success(f"contract {len(_rows or [])}개를 1회 불러왔습니다. R51~R56 구형 계약은 보존되더라도 R58 verified coverage에는 계산하지 않습니다.")
         except Exception as _ex:
             st.error("contract JSON 불러오기 실패: "+str(_ex))
-    if "R58_CONTRACTS" not in st.session_state:
+    if "R59_CONTRACTS" not in st.session_state:
         # Preserve old session artifacts only as archive data; they are not counted until R57 Judge PASS.
-        st.session_state["R58_CONTRACTS"]=list(st.session_state.get("R57_CONTRACTS",st.session_state.get("R56_CONTRACTS",st.session_state.get("R54_CONTRACTS",[]))))
-    _contracts=list(st.session_state.get("R58_CONTRACTS",[]))
+        st.session_state["R59_CONTRACTS"]=list(st.session_state.get("R57_CONTRACTS",st.session_state.get("R56_CONTRACTS",st.session_state.get("R54_CONTRACTS",[]))))
+    _contracts=list(st.session_state.get("R59_CONTRACTS",[]))
     if _contracts:
         st.download_button("R58 contract JSON 저장", data=json.dumps({"schema_version":"R58-NARROW-BUNDLE-V1","contracts":_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
     _r57_inv=combined_coverage_inventory(DB,_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())) if combined_coverage_inventory else {"all_domains_two":False,"domains":{},"verified_slots":0,"target":18}
@@ -331,14 +331,14 @@ with tabs[2]:
     _missing=[d for d,v in (_r57_inv.get("domains") or {}).items() if not v.get("target_met")]
     if _missing:
         st.warning("현재 실제 부족 영역: "+", ".join(f"{d}(-{(_r57_inv.get('domains') or {}).get(d,{}).get('missing',0)})" for d in _missing))
-    if st.button("R58 부족 슬롯 한 번에 생성 + Judge 인증", type="primary", use_container_width=True, disabled=(certify_r58_missing_slots is None or not _missing)):
+    if st.button("R59 실제기출 전이형 생성 + Judge 인증", type="primary", use_container_width=True, disabled=(certify_r59_missing_slots is None or not _missing)):
         if not (use_ai and use_ai_judge and key):
             st.error("R58 원클릭 인증에는 AI Writer, AI Judge, OPENAI_API_KEY가 모두 필요합니다.")
         else:
             with st.spinner("실제 기출 구조 참조 → 고정 후보 풀 생성 → Python hard gate → source context 포함 Judge 인증 중..."):
                 try:
-                    _run=certify_r58_missing_slots(DB,_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed))
-                    st.session_state["R58_CONTRACTS"]=_run.get("contracts",_contracts)
+                    _run=certify_r59_missing_slots(DB,_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed))
+                    st.session_state["R59_CONTRACTS"]=_run.get("contracts",_contracts)
                     st.session_state["R58_CERT_RUN"]=_run
                     st.rerun()
                 except Exception as _ex:
@@ -354,7 +354,7 @@ with tabs[2]:
             st.success("R58 실제 AI_VERIFIED 18/18 달성. 이제 최종 A/B 생성으로 넘어갈 수 있습니다.")
         else:
             st.warning("이번 고정 후보 풀 안에서 통과하지 못한 슬롯이 남았습니다. 아래 로그가 원인 진단용으로 보존됩니다.")
-    st.info("R58 핵심: 대형 160-anchor Writer 요청을 폐기하고 소규모 evidence bundle만 사용합니다. Writer timeout/형식 실패 시에도 Python grounded fallback 후보를 만들어 pool=0을 방지하며, 실제 Judge PASS만 coverage에 반영합니다.")
+    st.info("R59 핵심: 관계선별 → 실제 기출 구조 참조 → 오류수정·전이형 Writer → Python hard gate → Judge 순서로만 진행합니다. 단어 겹침만으로 묶거나 가린 정의를 다시 맞히는 fallback은 폐기했습니다.")
 
     st.divider()
     st.caption("아래 SAMPLE6은 개별 확인용 보조 기능입니다. 18 capability 최종 coverage 판정에는 사용하지 않습니다.")

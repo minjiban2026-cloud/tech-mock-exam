@@ -4734,3 +4734,42 @@ def certify_r58_missing_slots(db_path, contracts, domains=None, api_key="", mode
 
 # Compatibility alias used by the current UI; it now executes R58.
 certify_r57_missing_slots = certify_r58_missing_slots
+
+# ========================= R59 actual-exam transfer certification =========================
+def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',judge_model=None,domains=None):
+    from capability_contracts import synthesize_r59_pool,validate_r59_contract,r59_contract_to_question
+    if domains is None: domains=list(DEFAULT_DOMAINS)
+    existing=list(contracts or []); jm=judge_model or model; style=official_style_profile(db_path)
+    # Only historical certified + R59 AI verified count. Older Python-only contracts never count.
+    before=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)
+    logs=[]; reviews=[]; accepted=[]
+    for d in domains:
+        inv=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)
+        need=int(inv['domains'][d].get('missing',0))
+        if need<=0:
+            logs.append({'domain':d,'need_before':0,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'skipped':'already_verified'}); continue
+        pool=synthesize_r59_pool(api_key,model,db_path,d,need,pool_size=(4 if need==1 else 6))
+        tested=passed=kept=0
+        for c in pool:
+            ok,_=validate_r59_contract(db_path,d,c)
+            if not ok: continue
+            q=r59_contract_to_question(c)
+            if not q: continue
+            tested+=1
+            try: rv=judge_question(api_key,jm,q,q.get('source_context_override',''),style)
+            except Exception as ex: rv={'pass':False,'reason':'Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+            sig=_coverage_failure_signals(rv,q)
+            reviews.append({'domain':d,'contract_type':c.get('contract_type'),'topic':c.get('topic'),'pass':rv.get('pass'),'reason':rv.get('reason',''),'scores':rv.get('scores',{}),'fatal_flags':rv.get('fatal_flags',[]),'failure_signals':sig})
+            if rv.get('pass') is True:
+                passed+=1; cc=copy.deepcopy(c); cc['status']='R59_AI_VERIFIED'; cc['ai_quality']=copy.deepcopy(rv); cc['judge_model']=jm
+                if cc.get('contract_id') not in {x.get('contract_id') for x in existing}: existing.append(cc)
+                accepted.append(cc); kept+=1
+                if combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing']<=0: break
+        logs.append({'domain':d,'need_before':need,'pool_constructed':len(pool),'python_validated':len(pool),'judge_tested':tested,'judge_pass':passed,'accepted':kept,'missing_after':combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing'],'accepted_types':[x.get('contract_type') for x in accepted if x.get('domain')==d]})
+    after=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS); fc={}
+    for r in reviews:
+        if r.get('pass') is False:
+            for z in r.get('failure_signals',[]): fc[z]=fc.get(z,0)+1
+    return {'mode':'R59_ACTUAL_EXAM_TRANSFER','builder_api_version':'ACTUAL-EXAM-TRANSFER-R59-20260904','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
+
+BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R59-20260904'

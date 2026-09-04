@@ -1176,3 +1176,289 @@ def combined_coverage_inventory(db_path, contracts, domains, formula_domains=Non
         rows[d]={'historical_ai_verified_types':hist,'r58_ai_verified_contract_types':ctypes,'verified_slots':count,'target_met':count>=2,'missing':max(0,2-count)}
     return {'domains':rows,'verified_slots':total,'target':2*len(domains),'all_domains_two':total>=2*len(domains),'missing_domains':[d for d,v in rows.items() if not v['target_met']],'note':'R58: historical Judge PASS + R58 real Judge PASS only.'}
 
+
+# ========================= R59 actual-exam transfer architecture =========================
+R59_ALLOWED_TYPES = ('contrastive_error_transfer','criterion_conflict_resolution')
+R59_SCHEMA_VERSION = 'R59-ACTUAL-EXAM-TRANSFER-V1'
+
+def _r59_official_examples(db_path, limit=3):
+    con=sqlite3.connect(f'file:{db_path}?immutable=1',uri=True); con.row_factory=sqlite3.Row
+    rows=con.execute("""select p.text,s.name,p.page_no from pages p join sources s on s.id=p.source_id
+                       where s.kind='official_exam' and p.text like '%[4점]%' order by s.id,p.page_no limit ?""",(int(limit*3),)).fetchall()
+    con.close(); out=[]
+    for r in rows:
+        txt=_clean(r['text'])
+        # retain only a bounded style sample, never use it as answer ground truth
+        if len(txt)>400: out.append({'source':r['name'],'page_no':r['page_no'],'text':txt[:1800]})
+        if len(out)>=limit: break
+    return out
+
+def _r59_source_bundles(db_path,domain,max_bundles=8):
+    # Start from R58 same-source bundles but require richer, genuinely distinct answers/evidence.
+    raw=build_r58_bundles(db_path,domain,max_bundles=max_bundles*3)
+    out=[]; seen=set()
+    for b in raw:
+        aa=b.get('anchors') or []
+        if len(aa)<2: continue
+        a1,a2=aa[0],aa[1]
+        if _norm(a1.get('answer'))==_norm(a2.get('answer')): continue
+        w1=_r57_words((a1.get('topic') or '')+' '+(a1.get('evidence') or ''))
+        w2=_r57_words((a2.get('topic') or '')+' '+(a2.get('evidence') or ''))
+        if len(w1&w2)<1 and abs(int(a1.get('page_no') or 0)-int(a2.get('page_no') or 0))>1: continue
+        key=tuple(sorted(int(x['id']) for x in aa[:3]))
+        if key in seen: continue
+        seen.add(key); out.append(b)
+        if len(out)>=max_bundles: break
+    return out
+
+def _r59_grounded_fragment(fragment, anchor, min_shared=3):
+    f=_clean(fragment); src=_clean(anchor.get('evidence'))
+    if len(_norm(f))<18: return False
+    if _norm(anchor.get('answer')) in _norm(f): return False
+    return len(_r57_words(f)&_r57_words(src))>=min_shared
+
+def validate_r59_contract(db_path,domain,c):
+    errs=[]; typ=str(c.get('contract_type') or '')
+    if typ not in R59_ALLOWED_TYPES: errs.append('R59_BAD_TYPE')
+    ids=[]
+    for x in c.get('cited_anchor_ids') or []:
+        try: ids.append(int(x))
+        except: pass
+    ids=list(dict.fromkeys(ids))
+    if len(ids)<2 or len(ids)>3: errs.append('R59_NEED_2_TO_3_ANCHORS')
+    con=sqlite3.connect(f'file:{db_path}?immutable=1',uri=True); con.row_factory=sqlite3.Row
+    anchors=[]
+    if ids:
+        q='select id,domain,topic,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(ids)))
+        anchors=[dict(r) for r in con.execute(q,tuple(ids)).fetchall()]
+    con.close(); amap={int(a['id']):a for a in anchors}
+    if len(amap)!=len(ids): errs.append('R59_ANCHOR_NOT_FOUND')
+    if any(a.get('domain')!=domain for a in anchors): errs.append('R59_CROSS_DOMAIN')
+    if len({a.get('source_name') for a in anchors})>1: errs.append('R59_MULTI_SOURCE')
+    answers=[_clean(x) for x in c.get('exact_answers') or [] if _clean(x)]
+    if len(answers)<2 or len({_norm(x) for x in answers})<2: errs.append('R59_NEED_DISTINCT_ANSWERS')
+    whole=_norm(' '.join(_clean(a.get('answer'))+' '+_clean(a.get('evidence')) for a in anchors))
+    for ans in answers[:2]:
+        if _norm(ans) not in whole: errs.append('R59_ANSWER_NOT_GROUNDED')
+    clues=list(c.get('clues') or [])
+    if len(clues)<4: errs.append('R59_NEED_4_CLUES')
+    per={}
+    visible=[]
+    for i,cl in enumerate(clues):
+        try: aid=int(cl.get('anchor_id'))
+        except: aid=-1
+        txt=_clean(cl.get('text')); visible.append(txt); per[aid]=per.get(aid,0)+1
+        if aid not in amap: errs.append(f'R59_CLUE_{i}_BAD_ANCHOR'); continue
+        if not _r59_grounded_fragment(txt,amap[aid],2): errs.append(f'R59_CLUE_{i}_WEAK_GROUNDING')
+    if len([a for a,n in per.items() if n>=2])<2: errs.append('R59_NEED_TWO_CLUES_PER_SIDE')
+    tasks=[_clean(x) for x in c.get('tasks') or [] if _clean(x)]
+    if len(tasks)!=2: errs.append('R59_NEED_2_TASKS')
+    if len(tasks)==2 and not any(k in tasks[1] for k in ('①','판단 기준','고친','수정한','앞의')): errs.append('R59_TASK2_NOT_DEPENDENT')
+    nv=_norm(' '.join(visible)+' '+' '.join(tasks)+' '+_clean(c.get('student_claim'))+' '+_clean(c.get('transfer_case')))
+    for ans in answers[:2]:
+        if len(_norm(ans))>=2 and _norm(ans) in nv: errs.append('R59_DIRECT_ANSWER_LEAK:'+ans[:24])
+    if not _clean(c.get('student_claim')): errs.append('R59_NO_STUDENT_CLAIM')
+    if not _clean(c.get('transfer_case')): errs.append('R59_NO_TRANSFER_CASE')
+    chain=[_clean(x) for x in c.get('reasoning_chain') or [] if _clean(x)]
+    if len(chain)<3: errs.append('R59_REASONING_LT3')
+    if c.get('task2_uses_task1') is not True: errs.append('R59_DEPENDENCY_FALSE')
+    # The public task must contain an explicit error/choice operation, not pure identification.
+    optext=' '.join(tasks)+' '+_clean(c.get('student_claim'))
+    if not any(k in optext for k in ('잘못','오류','수정','적절','선택','판단')): errs.append('R59_NO_DECISION_OPERATION')
+    return (not errs,{'errors':errs,'anchors':anchors})
+
+def r59_contract_to_question(c):
+    if c.get('status') not in ('R59_PYTHON_VALIDATED','R59_AI_VERIFIED'): return None
+    clues=list(c.get('clues') or [])
+    side1=[_clean(x.get('text')) for x in clues if x.get('side')=='A']
+    side2=[_clean(x.get('text')) for x in clues if x.get('side')=='B']
+    passage=("[사례 A]\n- "+'\n- '.join(side1)+"\n\n[사례 B]\n- "+'\n- '.join(side2)+
+             "\n\n[학생의 판단]\n"+_clean(c.get('student_claim'))+
+             "\n\n[추가 상황]\n"+_clean(c.get('transfer_case')))
+    anchors=(c.get('validation') or {}).get('anchors') or []
+    ctx='\n\n'.join(f"[{a.get('source_name','')} p.{a.get('page_no',0)} / anchor {a.get('id')}]\n정답/개념: {_clean(a.get('answer'))}\n근거: {_clean(a.get('evidence'))}" for a in anchors)
+    return {'domain':c.get('domain'),'topic':c.get('topic'),'points':4,'pattern_id':'T4_R59','capability_id':'contract:'+str(c.get('contract_type')),
+            'question_type':'오류판단/근거설명/전이적용','material_form':'대비 사례+학생 판단+추가 상황',
+            'intro':'다음 <자료>의 학생 판단을 검토하고 <작성 방법>에 따라 순서대로 서술하시오.',
+            'passage':passage,'conditions':[], 'tasks':c.get('tasks') or [],'answer':c.get('exact_answers') or [],
+            'solution':c.get('reasoning_chain') or [],'subpoints':[2,2],
+            'evidence':[_clean(a.get('evidence')) for a in anchors],'source_context_override':ctx,
+            'contract_id':c.get('contract_id'),'contract_type':c.get('contract_type')}
+
+def _r59_prompt(domain,bundles,official):
+    payload=[]
+    for i,b in enumerate(bundles):
+        aa=b['anchors'][:3]
+        payload.append({'bundle_id':i,'anchors':[{'id':x['id'],'topic':x['topic'],'answer':x['answer'],'evidence':_clean(x['evidence'])[:850],'page_no':x['page_no']} for x in aa]})
+    return f'''대한민국 중등 기술 임용 4점 문항의 설계자다. 아래 실제 기출은 오직 구조만 참고하고 사실/정답은 복사하지 않는다.
+영역: {domain}
+실제 기출 구조 예시: {json.dumps(official,ensure_ascii=False)[:5200]}
+서브노트 근거 bundle: {json.dumps(payload,ensure_ascii=False)}
+
+목표는 정의 맞히기가 아니다. 각 bundle마다 "잘못 적용된 학생 판단을 수정 → 수정 근거를 두 단서 이상으로 설명 → 그 판단 기준을 추가 상황에 전이"하는 후보 1개를 작성한다.
+중요:
+- 기술 사실은 anchor evidence에 있는 것만 사용한다. 새로운 사례의 기술적 속성은 만들지 않는다.
+- 추가 상황은 anchor에 이미 있는 단서들을 재조합할 뿐 새 인과/수치/효과를 추가하지 않는다.
+- 실제 정답명은 material/student_claim/transfer_case/tasks에 절대 노출하지 않는다.
+- 각 정답 측면에 서로 다른 단서가 최소 2개 있어야 한다.
+- 학생 판단은 두 사례 중 하나를 의도적으로 잘못 연결한다. 이것은 '학생의 오류'이지 기술 사실 진술이 아니다.
+- ①은 단순 명칭 2개 쓰기가 아니라 오류를 찾아 올바르게 수정하고 근거를 설명해야 한다.
+- ②는 ①에서 고친 판단 기준 없이는 답할 수 없게 만든다.
+- bundle 안 두 anchor가 실제로 대비/선택 관계를 만들 수 없으면 그 bundle은 OMIT한다.
+
+JSON만 출력:
+{{"contracts":[{{"bundle_id":0,"contract_type":"contrastive_error_transfer|criterion_conflict_resolution","topic":"...","cited_anchor_ids":[1,2],"exact_answers":["anchor answer 그대로 2개"],"clues":[{{"side":"A","anchor_id":1,"text":"근거 단서1"}},{{"side":"A","anchor_id":1,"text":"근거 단서2"}},{{"side":"B","anchor_id":2,"text":"근거 단서1"}},{{"side":"B","anchor_id":2,"text":"근거 단서2"}}],"student_claim":"사례 A와 B를 잘못 연결한 학생 판단. 실제 정답명 금지","transfer_case":"위 단서 중 2개 이상을 조합한 추가 상황. 실제 정답명 금지","tasks":["① 학생 판단의 오류를 찾아 올바르게 수정하고, 두 자료의 근거를 이용하여 판단 기준을 서술하시오.","② ①에서 고친 판단 기준을 추가 상황에 적용하여 해당하는 개념 또는 방법을 쓰고 근거를 서술하시오."],"reasoning_chain":["A/B의 복수 단서 비교","학생 판단 오류 수정 및 기준 도출","도출 기준을 추가 상황에 전이"],"task2_uses_task1":true}}]}}
+'''
+
+def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
+    from openai import OpenAI
+    size=int(pool_size or (4 if need<=1 else 6)); bundles=_r59_source_bundles(db_path,domain,max_bundles=size)
+    if not bundles: return []
+    official=_r59_official_examples(db_path,2)
+    client=OpenAI(api_key=api_key,timeout=75,max_retries=1)
+    contracts=[]
+    # transport-resilient split: two small fixed calls at most; no Judge-driven regeneration.
+    chunks=[bundles[:3],bundles[3:6]] if len(bundles)>3 else [bundles]
+    for chunk in chunks:
+        if not chunk: continue
+        try:
+            rr=client.responses.create(model=model,input=_r59_prompt(domain,chunk,official),reasoning={'effort':'high'})
+            raw=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',rr.output_text.strip()))
+            arr=raw.get('contracts') or []
+        except Exception:
+            arr=[]
+        for c in arr:
+            try: bi=int(c.get('bundle_id',-1))
+            except: bi=-1
+            if bi<0 or bi>=len(chunk): continue
+            aa=chunk[bi]['anchors'][:3]; allowed={int(x['id']):x for x in aa}
+            ids=[]
+            for z in c.get('cited_anchor_ids') or []:
+                try: z=int(z)
+                except: continue
+                if z in allowed: ids.append(z)
+            ids=list(dict.fromkeys(ids))
+            if len(ids)<2: continue
+            c=copy.deepcopy(c); c['domain']=domain; c['cited_anchor_ids']=ids
+            c['contract_type']=str(c.get('contract_type') or 'contrastive_error_transfer')
+            if c['contract_type'] not in R59_ALLOWED_TYPES: c['contract_type']='contrastive_error_transfer'
+            # Force answers from cited anchors; AI may not invent/change them.
+            c['exact_answers']=[_clean(allowed[z]['answer']) for z in ids[:2]]
+            c['status']='R59_RAW'; c['schema_version']=R59_SCHEMA_VERSION
+            ok,diag=validate_r59_contract(db_path,domain,c); c['validation']=diag
+            if ok:
+                c['status']='R59_PYTHON_VALIDATED'; c['contract_id']=f"R59-{domain}-{c['contract_type']}-"+'-'.join(map(str,ids[:2]))
+                contracts.append(c)
+    # distinct contract ids/types first
+    out=[]; seen=set()
+    for c in contracts:
+        k=(c.get('contract_type'),tuple(c.get('cited_anchor_ids') or []))
+        if k in seen: continue
+        seen.add(k); out.append(c)
+    return out[:size]
+
+# Final R59 coverage override: only historical Judge PASS + R59 real Judge PASS.
+def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
+    base=historical_verified_types(db_path,domains,formula_domains); rows={}; total=0
+    for d in domains:
+        hist=sorted(set(base.get(d,[]) or [])); verified=[]
+        for x in contracts or []:
+            if x.get('domain')!=d or x.get('status')!='R59_AI_VERIFIED' or x.get('contract_type') not in R59_ALLOWED_TYPES: continue
+            ok,_=validate_r59_contract(db_path,d,x)
+            if ok: verified.append(x)
+        ctypes=sorted(set(str(x.get('contract_type')) for x in verified))
+        count=min(2,len(set(hist+['contract:'+t for t in ctypes]))); total+=count
+        rows[d]={'historical_ai_verified_types':hist,'r59_ai_verified_contract_types':ctypes,'verified_slots':count,'target_met':count>=2,'missing':max(0,2-count)}
+    return {'domains':rows,'verified_slots':total,'target':2*len(domains),'all_domains_two':total>=2*len(domains),
+            'missing_domains':[d for d,v in rows.items() if not v['target_met']],
+            'note':'R59: historical Judge PASS + actual-exam-transfer R59 real Judge PASS only.'}
+
+# R59 relation-first selector override. The selector chooses the reasoning relation before the writer sees a bundle.
+def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
+    from openai import OpenAI
+    anchors=_anchor_rows(db_path,domain,limit=32)
+    if len(anchors)<4: return []
+    items=[{'id':a['id'],'answer':a['answer'],'evidence':_clean(a['evidence'])[:700],'source_name':a['source_name'],'page_no':a['page_no']} for a in anchors]
+    prompt=f'''대한민국 중등 기술 임용 4점 출제용 관계 선별기다. 문항을 쓰지 말고 관계만 고른다.
+영역:{domain}
+후보 anchor:{json.dumps(items,ensure_ascii=False)}
+
+최대 {wanted}개 관계를 선택하라. 각 관계는 반드시 같은 source 안에서 2~3개 anchor로 구성한다.
+PASS 가능한 관계는 다음뿐이다: 서로 다른 개념/방법을 조건에 따라 선택하는 대비, 한 규칙을 잘못 적용한 오류를 다른 조건에 전이해 수정할 수 있는 관계, 동일 체계 안의 단계/원인-결과가 뒤 판단에 실제로 쓰이는 관계.
+REJECT: 같은 페이지일 뿐인 항목, 단순 정의 2개, 상하위 목록, 독립 개념 병렬, 명칭 두 개 암기, 단어만 비슷한 항목.
+특히 두 answer가 각각 자료 한 줄만 읽고 바로 맞혀지는 관계는 고르지 마라.
+JSON만 출력:{{"relations":[{{"anchor_ids":[1,2],"relation_type":"contrast|conditional_choice|error_transfer|dependent_sequence","master_relation":"구체적 관계 한 문장","why_inferential":"왜 최소 2개 단서를 결합해야 하는지"}}]}}'''
+    try:
+        client=OpenAI(api_key=api_key,timeout=75,max_retries=1)
+        rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
+        obj=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',rr.output_text.strip()))
+        rels=obj.get('relations') or []
+    except Exception:
+        return []
+    amap={int(a['id']):a for a in anchors}; out=[]; seen=set()
+    for r in rels:
+        ids=[]
+        for z in r.get('anchor_ids') or []:
+            try: z=int(z)
+            except: continue
+            if z in amap: ids.append(z)
+        ids=list(dict.fromkeys(ids))
+        if not 2<=len(ids)<=3: continue
+        aa=[amap[z] for z in ids]
+        if len({x['source_name'] for x in aa})!=1: continue
+        if len({_norm(x['answer']) for x in aa[:2]})<2: continue
+        key=tuple(sorted(ids))
+        if key in seen: continue
+        seen.add(key); out.append({'score':99,'anchors':aa,'selector_relation':r})
+        if len(out)>=wanted: break
+    return out
+
+# Override pool synthesis: relation selector -> actual-exam guided writer -> Python hard gate. No low-quality deterministic fallback.
+def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
+    from openai import OpenAI
+    size=int(pool_size or (4 if need<=1 else 6))
+    bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size)
+    if not bundles: return []
+    official=_r59_official_examples(db_path,2)
+    client=OpenAI(api_key=api_key,timeout=75,max_retries=1); contracts=[]
+    # Small fixed writer calls. Transport retry is bounded and never Judge-driven.
+    chunks=[bundles[i:i+2] for i in range(0,len(bundles),2)]
+    for chunk in chunks:
+        payload=[]
+        for i,b in enumerate(chunk):
+            payload.append({'bundle_id':i,'selector_relation':b.get('selector_relation',{}),
+                            'anchors':[{'id':x['id'],'topic':x.get('topic',''),'answer':x['answer'],'evidence':_clean(x['evidence'])[:850],'page_no':x['page_no']} for x in b['anchors']]})
+        prompt=_r59_prompt(domain,chunk,official).replace('서브노트 근거 bundle: '+json.dumps([{'bundle_id':i,'anchors':[{'id':x['id'],'topic':x['topic'],'answer':x['answer'],'evidence':_clean(x['evidence'])[:850],'page_no':x['page_no']} for x in b['anchors'][:3]]} for i,b in enumerate(chunk)],ensure_ascii=False),
+                                                   '서브노트 근거 bundle 및 선별관계: '+json.dumps(payload,ensure_ascii=False))
+        try:
+            rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
+            raw=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',rr.output_text.strip())); arr=raw.get('contracts') or []
+        except Exception:
+            arr=[]
+        for c in arr:
+            try: bi=int(c.get('bundle_id',-1))
+            except: bi=-1
+            if bi<0 or bi>=len(chunk): continue
+            aa=chunk[bi]['anchors']; allowed={int(x['id']):x for x in aa}
+            ids=[]
+            for z in c.get('cited_anchor_ids') or []:
+                try: z=int(z)
+                except: continue
+                if z in allowed: ids.append(z)
+            ids=list(dict.fromkeys(ids))
+            if len(ids)<2: continue
+            c=copy.deepcopy(c); c['domain']=domain; c['cited_anchor_ids']=ids[:3]
+            c['contract_type']=str(c.get('contract_type') or 'contrastive_error_transfer')
+            if c['contract_type'] not in R59_ALLOWED_TYPES: c['contract_type']='contrastive_error_transfer'
+            c['exact_answers']=[_clean(allowed[z]['answer']) for z in ids[:2]]
+            c['selector_relation']=copy.deepcopy(chunk[bi].get('selector_relation',{}))
+            c['status']='R59_RAW'; c['schema_version']=R59_SCHEMA_VERSION
+            ok,diag=validate_r59_contract(db_path,domain,c); c['validation']=diag
+            if ok:
+                c['status']='R59_PYTHON_VALIDATED'; c['contract_id']=f"R59-{domain}-{c['contract_type']}-"+'-'.join(map(str,ids[:2])); contracts.append(c)
+    out=[]; seen=set()
+    for c in contracts:
+        k=(c.get('contract_type'),tuple(c.get('cited_anchor_ids') or []))
+        if k in seen: continue
+        seen.add(k); out.append(c)
+    return out[:size]
