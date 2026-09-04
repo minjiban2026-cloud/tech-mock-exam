@@ -13,7 +13,7 @@ def _strip_json(text):
 
 def _client(api_key):
     from openai import OpenAI
-    return OpenAI(api_key=api_key, timeout=20, max_retries=0)
+    return OpenAI(api_key=api_key, timeout=60, max_retries=1)
 
 def _ask_json(api_key, model, prompt, effort="medium"):
     r=_client(api_key).responses.create(model=model,input=prompt,reasoning={"effort":effort})

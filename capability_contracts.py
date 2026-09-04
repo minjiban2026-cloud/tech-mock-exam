@@ -969,3 +969,210 @@ def select_hybrid_validation_contracts(db_path, contracts, domains, formula_doma
 
 def contract_to_question(contract):
     return r57_contract_to_question(contract)
+
+# ================= R58: narrow-bundle resilient synthesis =================
+SCHEMA_VERSION='R58-NARROW-BUNDLE-V1'
+R58_ALLOWED_TYPES={'exam_relation_application','exam_contrastive_transfer','exam_constraint_diagnosis'}
+
+def _r58_good_anchor(a):
+    ans=_clean(a.get('answer')); ev=_clean(a.get('evidence')); topic=_clean(a.get('topic'))
+    if not ans or not ev or len(_norm(ev))<20: return False
+    if len(ans)>45 or len(_norm(ans))<2: return False
+    bad={'목적','단위','메인','사람','관련지식','힘','(예','(참고','(PA','360','400'}
+    if ans in bad: return False
+    # Avoid obviously broken OCR fragments / heading-only anchors.
+    if ans.startswith(('(','·','▶','■','□','-')): return False
+    if any(0xE000 <= ord(ch) <= 0xF8FF for ch in ev): return False
+    return True
+
+def _r58_rel_score(a,b):
+    sa=_r57_words((a.get('topic') or '')+' '+(a.get('evidence') or ''))
+    sb=_r57_words((b.get('topic') or '')+' '+(b.get('evidence') or ''))
+    shared=len(sa&sb)
+    same=1 if a.get('source_name')==b.get('source_name') else 0
+    pd=abs(int(a.get('page_no') or 0)-int(b.get('page_no') or 0))
+    near=max(0,4-pd) if same else 0
+    rich=min(4,(len(_norm(a.get('evidence')))+len(_norm(b.get('evidence'))))//120)
+    return shared*3+near*2+same*2+rich
+
+def _r58_anchor_rows(db_path,domain,limit=220):
+    con=sqlite3.connect(db_path); con.row_factory=sqlite3.Row
+    rows=[]
+    for r in con.execute('select id,domain,topic,answer,evidence,source_name,page_no,confidence from anchors where domain=? order by confidence desc,id',(domain,)).fetchall():
+        a={k:r[k] for k in r.keys()}; a['id']=int(a['id']); a['page_no']=int(a.get('page_no') or 0)
+        if _r58_good_anchor(a): rows.append(a)
+        if len(rows)>=limit: break
+    con.close(); return rows
+
+def build_r58_bundles(db_path,domain,max_bundles=6):
+    rows=_r58_anchor_rows(db_path,domain,220)
+    pairs=[]
+    for i,a in enumerate(rows):
+        for b in rows[i+1:i+45]:
+            if a.get('source_name')!=b.get('source_name'): continue
+            if abs(a['page_no']-b['page_no'])>4: continue
+            if _norm(a.get('answer'))==_norm(b.get('answer')): continue
+            sc=_r58_rel_score(a,b)
+            if sc<5: continue
+            # Find a third supporting anchor near this pair when available.
+            third=None; best=-1
+            for c in rows:
+                if c['id'] in (a['id'],b['id']) or c.get('source_name')!=a.get('source_name'): continue
+                if max(abs(c['page_no']-a['page_no']),abs(c['page_no']-b['page_no']))>4: continue
+                cs=_r58_rel_score(a,c)+_r58_rel_score(b,c)
+                if cs>best: best=cs; third=c
+            bundle=[a,b]+([third] if third and best>=8 else [])
+            pairs.append((sc+max(0,best//2),bundle))
+    pairs.sort(key=lambda x:(-x[0],x[1][0]['page_no'],x[1][0]['id']))
+    out=[]; used=set()
+    for score,b in pairs:
+        ids=tuple(sorted(x['id'] for x in b))
+        if ids in used: continue
+        # Keep answer pairs diverse and avoid page monopolization.
+        used.add(ids)
+        out.append({'score':score,'anchors':b})
+        if len(out)>=max_bundles: break
+    return out
+
+def _r58_mask_answer(text,answers):
+    s=_clean(text)
+    for ans in sorted([_clean(x) for x in answers if _clean(x)], key=len, reverse=True):
+        if len(ans)>=2: s=re.sub(re.escape(ans),'○○',s,flags=re.I)
+    return s
+
+def _r58_fallback_contract(domain,bundle,typ):
+    a=bundle['anchors']; answers=[_clean(a[0]['answer']),_clean(a[1]['answer'])]
+    # Deterministic fallback: grounded excerpts with the answer names masked. It is intentionally
+    # conservative; the Judge can veto it, but writer timeout no longer means pool_constructed=0.
+    blocks=[]
+    for idx,x in enumerate(a[:3]):
+        ev=_r58_mask_answer(x.get('evidence',''),answers)
+        if len(_norm(ev))<15: continue
+        blocks.append({'visible_text':f"자료 {idx+1}: {ev[:360]}", 'anchor_ids':[x['id']]})
+    if len(blocks)<2: return None
+    tasks=[
+      '① (가)와 (나)의 조건 및 관계를 함께 고려하여 두 자료에 해당하는 핵심 개념 또는 방법을 구분하여 쓰시오.',
+      '② ①에서 구분한 판단 기준을 (다)가 있으면 그 자료에, 없으면 두 자료의 차이에 적용하여 선택 근거를 한 문장으로 서술하시오.'
+    ]
+    return {'contract_type':typ,'pattern_id':'P_MIX4','topic':_clean(a[0].get('topic')),
+            'cited_anchor_ids':[x['id'] for x in a], 'exact_answers':answers,
+            'material_blocks':blocks,'conditions':[],'tasks':tasks,
+            'reasoning_chain':['두 자료의 조건을 비교한다','서로 다른 근거를 결합해 ①을 구분한다','①의 판단 기준을 ②에 적용한다'],
+            'task2_uses_task1':True,'dependency_note':'②는 ①에서 도출한 두 개념 또는 방법의 구분 기준을 다시 적용해야 하므로 ①의 판단 없이 독립적으로 완성할 수 없다.'}
+
+def validate_r58_contract(db_path,domain,c):
+    errs=[]
+    typ=str(c.get('contract_type') or '')
+    if typ not in R58_ALLOWED_TYPES: errs.append('R58_BAD_TYPE')
+    ids=[]
+    for x in c.get('cited_anchor_ids') or []:
+        try: ids.append(int(x))
+        except: pass
+    ids=list(dict.fromkeys(ids))
+    if len(ids)<2 or len(ids)>4: errs.append('R58_NEED_2_TO_4_ANCHORS')
+    answers=[_clean(x) for x in c.get('exact_answers') or [] if _clean(x)]
+    if len(answers)!=2 or len({_norm(x) for x in answers})!=2: errs.append('R58_NEED_2_ANSWERS')
+    blocks=list(c.get('material_blocks') or [])
+    visible='\n'.join(_clean(b.get('visible_text')) for b in blocks)
+    tasks=[_clean(x) for x in c.get('tasks') or [] if _clean(x)]
+    if len(blocks)<2: errs.append('R58_NEED_2_BLOCKS')
+    if len(_norm(visible))<45: errs.append('R58_MATERIAL_TOO_SHORT')
+    if len(tasks)!=2: errs.append('R58_NEED_2_TASKS')
+    if len(tasks)==2 and not any(k in tasks[1] for k in ('①','판단 기준','앞의','구분한')): errs.append('R58_TASK2_NOT_DEPENDENT')
+    nv=_norm(visible+' '+' '.join(tasks))
+    for ans in answers:
+        if len(_norm(ans))>=2 and _norm(ans) in nv: errs.append('R58_DIRECT_ANSWER_LEAK:'+ans[:30])
+    con=sqlite3.connect(db_path); con.row_factory=sqlite3.Row; anchors=[]
+    if ids:
+        q='select id,domain,topic,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(ids)))
+        anchors=[dict(r) for r in con.execute(q,tuple(ids)).fetchall()]
+    con.close(); amap={int(a['id']):a for a in anchors}
+    if len(amap)!=len(ids): errs.append('R58_ANCHOR_NOT_FOUND')
+    if any(a.get('domain')!=domain for a in anchors): errs.append('R58_CROSS_DOMAIN')
+    whole=_norm(' '.join(_clean(a.get('answer'))+' '+_clean(a.get('evidence')) for a in anchors))
+    for ans in answers:
+        if _norm(ans) not in whole: errs.append('R58_ANSWER_NOT_GROUNDED')
+    if len({a.get('source_name') for a in anchors})>1: errs.append('R58_MULTI_SOURCE')
+    # Every visible block must cite an anchor and share actual source vocabulary with it.
+    cited=set()
+    for i,b in enumerate(blocks):
+        aids=[]
+        for z in b.get('anchor_ids') or []:
+            try: aids.append(int(z))
+            except: pass
+        if not aids: errs.append(f'R58_BLOCK_{i}_NO_ANCHOR'); continue
+        cited.update(aids)
+        src=' '.join(_clean(amap[x].get('evidence')) for x in aids if x in amap)
+        if len(_r57_words(src)&_r57_words(b.get('visible_text','')))<3: errs.append(f'R58_BLOCK_{i}_WEAK_GROUNDING')
+    if len(cited)<2: errs.append('R58_SINGLE_ANCHOR_PUBLIC_MATERIAL')
+    chain=[_clean(x) for x in c.get('reasoning_chain') or [] if _clean(x)]
+    if len(chain)<3: errs.append('R58_REASONING_LT3')
+    if c.get('task2_uses_task1') is not True: errs.append('R58_DEPENDENCY_FALSE')
+    return (not errs,{'errors':errs,'anchors':anchors})
+
+def r58_contract_to_question(c):
+    if c.get('status') not in ('R58_PYTHON_VALIDATED','R58_AI_VERIFIED'): return None
+    blocks=list(c.get('material_blocks') or []); labels=['(가)','(나)','(다)','(라)']
+    passage='\n\n'.join(f"{labels[i]} {_clean(b.get('visible_text'))}" for i,b in enumerate(blocks[:4]))
+    answers=[_clean(x) for x in c.get('exact_answers') or []][:2]
+    anchors=(c.get('validation') or {}).get('anchors') or []
+    ctx='\n\n'.join(f"[{a.get('source_name','')} p.{a.get('page_no',0)} / anchor {a.get('id')}]\n정답/개념: {_clean(a.get('answer'))}\n근거: {_clean(a.get('evidence'))}" for a in anchors)
+    q={'domain':c.get('domain'),'topic':c.get('topic'),'points':4,'pattern_id':'T4_R58','capability_id':'contract:'+str(c.get('contract_type')),
+       'question_type':'자료해석/판단/적용','material_form':'복수 근거 자료','intro':'다음 <자료>를 읽고 <작성 방법>에 따라 순서대로 서술하시오.',
+       'passage':passage,'conditions':c.get('conditions') or [],'tasks':c.get('tasks') or [],'answer':answers,'solution':c.get('reasoning_chain') or [],
+       'subpoints':[2,2],'evidence':[_clean(a.get('evidence')) for a in anchors],'source_context_override':ctx,'contract_id':c.get('contract_id'),'contract_type':c.get('contract_type')}
+    return q
+
+def synthesize_r58_pool(api_key,model,db_path,domain,need,pool_size=None):
+    from openai import OpenAI
+    pool_size=int(pool_size or (3 if need<=1 else 5)); bundles=build_r58_bundles(db_path,domain,max_bundles=max(pool_size,4))
+    style=_r57_style_examples(db_path,domain,limit=1)
+    if not bundles: return []
+    # Narrow payload: only selected bundles, never the 160-anchor packet that caused R57 timeouts.
+    payload=[]
+    types=list(R58_ALLOWED_TYPES)
+    for i,b in enumerate(bundles[:pool_size]):
+        aa=b['anchors']; payload.append({'bundle_id':i,'suggested_type':types[i%len(types)],'anchors':[{'id':x['id'],'topic':x['topic'],'answer':x['answer'],'evidence':_clean(x['evidence'])[:700],'page_no':x['page_no']} for x in aa]})
+    prompt=f'''중등 기술 임용 4점 문항을 설계한다. 새 기술 사실은 절대 만들지 않는다. 아래 bundle 안의 사실만 사용한다.\n영역:{domain}\n실제 기출 구조 참고:{json.dumps(style,ensure_ascii=False)[:2600]}\n고정 bundle:{json.dumps(payload,ensure_ascii=False)}\n\n각 bundle마다 정확히 1개 후보를 작성한다. answer는 bundle의 anchor answer 중 서로 다른 2개를 그대로 선택한다. 학생 자료와 task에는 answer 문자열을 절대 쓰지 않는다. 자료는 서로 다른 anchor 근거를 합쳐야 ①을 풀 수 있게 하고, ②는 반드시 ①에서 만든 판단 기준을 적용해야 한다. 단순 정의 맞히기/자료 한 줄 복사/독립 소문항은 금지한다. 기술적 문장은 source evidence를 짧게 바꾸어 쓰되 새로운 사례·수치·인과를 추가하지 않는다.\nJSON만 출력:{{"contracts":[{{"bundle_id":0,"contract_type":"exam_relation_application|exam_contrastive_transfer|exam_constraint_diagnosis","topic":"...","cited_anchor_ids":[1,2,3],"exact_answers":["정답1","정답2"],"material_blocks":[{{"visible_text":"2~4문장","anchor_ids":[1,2]}},{{"visible_text":"2~4문장","anchor_ids":[2,3]}}],"conditions":[],"tasks":["① ...","② ①에서 구분한 판단 기준을 적용하여 ..."],"reasoning_chain":["복수 근거 비교","① 판단","① 기준을 ②에 적용"],"task2_uses_task1":true,"dependency_note":"구체적 이유"}}]}}'''
+    rows=[]
+    try:
+        client=OpenAI(api_key=api_key,timeout=55,max_retries=0)
+        r=client.responses.create(model=model,input=prompt,reasoning={'effort':'medium'})
+        obj=json.loads(_strip_json(r.output_text)); generated=obj.get('contracts',[]) if isinstance(obj,dict) else []
+    except Exception:
+        generated=[]
+    byid={i:b for i,b in enumerate(bundles[:pool_size])}
+    # Validate AI candidates first.
+    for x in generated:
+        try: bid=int(x.get('bundle_id'))
+        except: continue
+        if bid not in byid: continue
+        x=dict(x); x.pop('bundle_id',None); x['domain']=domain
+        ok,detail=validate_r58_contract(db_path,domain,x)
+        if not ok: continue
+        x['status']='R58_PYTHON_VALIDATED'; x['validation']=detail; x['contract_id']=_fp({'v':'R58','d':domain,'t':x.get('contract_type'),'ids':x.get('cited_anchor_ids'),'a':x.get('exact_answers'),'m':x.get('material_blocks')}); rows.append(x)
+    # Deterministic fallback ensures writer timeout/format failure never produces a zero pool.
+    existing_keys={(tuple(x.get('cited_anchor_ids') or []),tuple(x.get('exact_answers') or [])) for x in rows}
+    for i,b in enumerate(bundles[:pool_size]):
+        if len(rows)>=pool_size: break
+        fb=_r58_fallback_contract(domain,b,types[i%len(types)])
+        if not fb: continue
+        key=(tuple(fb.get('cited_anchor_ids') or []),tuple(fb.get('exact_answers') or []))
+        if key in existing_keys: continue
+        ok,detail=validate_r58_contract(db_path,domain,fb)
+        if not ok: continue
+        fb['domain']=domain; fb['status']='R58_PYTHON_VALIDATED'; fb['validation']=detail; fb['contract_id']=_fp({'v':'R58F','d':domain,'ids':fb.get('cited_anchor_ids'),'a':fb.get('exact_answers')}); rows.append(fb); existing_keys.add(key)
+    return rows[:pool_size]
+
+def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
+    base=historical_verified_types(db_path,domains,formula_domains); rows={}; total=0
+    for d in domains:
+        hist=sorted(set(base.get(d,[]) or [])); verified=[]
+        for x in contracts or []:
+            if x.get('domain')!=d or x.get('status')!='R58_AI_VERIFIED' or x.get('contract_type') not in R58_ALLOWED_TYPES: continue
+            ok,_=validate_r58_contract(db_path,d,x)
+            if ok: verified.append(x)
+        ctypes=sorted(set(str(x.get('contract_type')) for x in verified)); count=min(2,len(set(hist+['contract:'+t for t in ctypes]))); total+=count
+        rows[d]={'historical_ai_verified_types':hist,'r58_ai_verified_contract_types':ctypes,'verified_slots':count,'target_met':count>=2,'missing':max(0,2-count)}
+    return {'domains':rows,'verified_slots':total,'target':2*len(domains),'all_domains_two':total>=2*len(domains),'missing_domains':[d for d,v in rows.items() if not v['target_met']],'note':'R58: historical Judge PASS + R58 real Judge PASS only.'}
+

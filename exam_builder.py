@@ -86,6 +86,7 @@ def _t2_joint_pair_quality(core_anchor,core_pair,contrast_anchor,contrast_pair):
     return {"ok":True,"reason":"joint_axis_pass","slot1_axis":round(s1,3),"slot2_axis":round(s2,3),"series":series}
 
 DOMAINS=["기술교육론","발명","제조기술","건설기술","생명기술","전기·전자","통신기술","재료역학","수송기술"]
+DEFAULT_DOMAINS=DOMAINS
 FORMULA_DOMAINS={"재료역학","수송기술","통신기술"}
 
 
@@ -4690,3 +4691,46 @@ def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_
     return {'mode':'R57_NO_REJUDGE_REPORT','builder_api_version':BUILDER_API_VERSION,'candidate_inventory':inv,
             'reviews':rows,'summary':{'historical_verified':historical_count,'new_pass':len(rows),
                                      'final_ai_verified':inv.get('verified_slots',0),'coverage_ready':bool(inv.get('all_domains_two'))}}
+
+# ================= R58 resilient narrow-bundle one-click certification =================
+BUILDER_API_VERSION = "RESILIENT-NARROW-R58-20260904"
+
+def certify_r58_missing_slots(db_path, contracts, domains=None, api_key="", model="gpt-5.6-luna", judge_model=None, seed=None):
+    from capability_contracts import combined_coverage_inventory, synthesize_r58_pool, r58_contract_to_question, validate_r58_contract, R58_ALLOWED_TYPES
+    if domains is None: domains=list(DEFAULT_DOMAINS)
+    existing=list(contracts or []); formula_domains=FORMULA_DOMAINS; jm=judge_model or model; style=official_style_profile(db_path)
+    before=combined_coverage_inventory(db_path,existing,domains,formula_domains); logs=[]; reviews=[]; accepted=[]
+    for d in domains:
+        dinfo=combined_coverage_inventory(db_path,existing,domains,formula_domains)['domains'][d]; need=int(dinfo.get('missing',0))
+        if need<=0:
+            logs.append({'domain':d,'need_before':0,'pool_constructed':0,'judge_tested':0,'judge_pass':0,'accepted':0,'skipped':'already_verified'}); continue
+        pool=synthesize_r58_pool(api_key,model,db_path,d,need,pool_size=(4 if need==1 else 6))
+        tested=passed=kept=0; seen={x.get('contract_type') for x in existing if x.get('domain')==d and x.get('status')=='R58_AI_VERIFIED'}
+        for c in pool:
+            typ=str(c.get('contract_type') or '')
+            if typ in seen: continue
+            ok,_=validate_r58_contract(db_path,d,c)
+            if not ok: continue
+            q=r58_contract_to_question(c)
+            if not q: continue
+            tested+=1
+            try: rv=judge_question(api_key,jm,q,q.get('source_context_override',''),style)
+            except Exception as ex: rv={'pass':False,'reason':'Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+            sig=_coverage_failure_signals(rv,q)
+            reviews.append({'domain':d,'contract_type':typ,'topic':c.get('topic'),'pass':rv.get('pass'),'reason':rv.get('reason',''),'scores':rv.get('scores',{}),'fatal_flags':rv.get('fatal_flags',[]),'failure_signals':sig})
+            if rv.get('pass') is True:
+                passed+=1; cc=copy.deepcopy(c); cc['status']='R58_AI_VERIFIED'; cc['ai_quality']=copy.deepcopy(rv); cc['judge_model']=jm
+                # Generic merge by contract id, preserving old archive rows.
+                ids={x.get('contract_id') for x in existing};
+                if cc.get('contract_id') not in ids: existing.append(cc)
+                accepted.append(cc); seen.add(typ); kept+=1
+                if combined_coverage_inventory(db_path,existing,domains,formula_domains)['domains'][d]['missing']<=0: break
+        logs.append({'domain':d,'need_before':need,'pool_constructed':len(pool),'python_validated':len(pool),'judge_tested':tested,'judge_pass':passed,'accepted':kept,'missing_after':combined_coverage_inventory(db_path,existing,domains,formula_domains)['domains'][d]['missing'],'accepted_types':[x.get('contract_type') for x in accepted if x.get('domain')==d]})
+    after=combined_coverage_inventory(db_path,existing,domains,formula_domains); fc={}
+    for r in reviews:
+        if r.get('pass') is False:
+            for z in r.get('failure_signals',[]): fc[z]=fc.get(z,0)+1
+    return {'mode':'R58_ONECLICK_CERTIFICATION','builder_api_version':BUILDER_API_VERSION,'contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
+
+# Compatibility alias used by the current UI; it now executes R58.
+certify_r57_missing_slots = certify_r58_missing_slots
