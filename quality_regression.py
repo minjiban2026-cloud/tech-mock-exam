@@ -166,27 +166,25 @@ def run_release_regression(db_path,domains,seeds=50):
     grounding=run_grounding_regressions()
     t4=audit_t4_operation_capabilities(db_path,domains)
     plans=audit_sample_plans(db_path,domains,seeds=seeds)
-    from reasoning_capabilities import coverage_inventory, validation_inventory
-    try:
-        import exam_builder as eb
-        coverage=coverage_inventory(db_path,domains,getattr(eb,"FORMULA_DOMAINS",set()))
-        validation=validation_inventory(db_path,domains,getattr(eb,"FORMULA_DOMAINS",set()))
-        # Actually construct all 18 without Judge. This is the API-free gate.
-        suite=eb.make_capability_validation_suite(db_path,domains=domains,api_key="",ai_quality_enabled=False,seed=4901)
-        constructed=len(suite.get("questions",[]) or [])
-        suite_construct={"pass":constructed==len(domains)*2,"constructed":constructed,"target":len(domains)*2,
-                         "selected_targets":validation.get("targets",[])}
-    except Exception as ex:
-        coverage={"all_domains_two_targets":False,"error":str(ex)}
-        validation={"all_domains_two_targets":False,"error":str(ex)}
-        suite_construct={"pass":False,"error":str(ex)}
-    coverage_ready=bool(coverage.get("all_domains_two_targets"))
+    from reasoning_capabilities import r50_validation_inventory, generate_r50_experimental_question, CAP_ORDERED_INSERT
+    import exam_builder as eb, random
+    certified=r50_validation_inventory(db_path,domains,getattr(eb,"FORMULA_DOMAINS",set()))
+    experimental={}
+    for d in domains:
+        q=generate_r50_experimental_question(db_path,d,CAP_ORDERED_INSERT,random.Random(5001))
+        experimental[d]={"ordered_missing_step_insertion_constructed":bool(q)}
+    # R50 separates code health from final quality readiness. Missing 18/18 is not
+    # a regression failure; it is an explicit coverage state and must not be hidden.
+    code_pass=bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass"))
     return {
-      "pass":bool(hist.get("pass") and grounding.get("pass") and t4.get("pass") and plans.get("pass") and suite_construct.get("pass")),
-      "coverage_ready":coverage_ready,
+      "pass":code_pass,
+      "coverage_ready":bool(certified.get("all_domains_two_targets")),
       "historical":hist,"grounding":grounding,"t4_operation_capabilities":t4,"sample_plan_coverage":plans,
-      "certified_coverage":coverage,"reasoning_validation_candidates":validation,"capability18_construction":suite_construct,
-      "note":"R49: API-free gate는 새 semantic operation을 포함한 18개 문항의 실제 구성 가능성을 검사한다. 최종 coverage에는 Judge PASS만 산입한다."
+      "certified_coverage":certified,"experimental_construction":experimental,
+      "capability18_construction":{"pass":False,"blocked":True,
+        "certified":certified.get("certified_target_total",0),"target":len(domains)*2,
+        "reason":"R50은 R49에서 0-pass인 semantic 구조를 폐기했으므로 18 Judge를 재실행하지 않는다."},
+      "note":"R50: 회귀검사 PASS는 코드/grounding/기존 operation의 정상성을 뜻한다. 최종 coverage_ready는 실제 Judge 인증 18/18과 별도이다."
     }
 
 

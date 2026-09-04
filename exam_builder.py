@@ -1,10 +1,10 @@
 import copy
-BUILDER_API_VERSION = "EXECUTABLE-SEMANTIC-SUITE-R49-20260903"
+BUILDER_API_VERSION = "FAILURE-EVIDENCE-R50-20260904"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
 from formula_templates import generate_formula_question
-from reasoning_capabilities import generate_reasoning_question, coverage_inventory, validation_inventory, generate_semantic_question, CAP_DIRECTIONAL, CAP_CAUSAL
+from reasoning_capabilities import (generate_reasoning_question, coverage_inventory, validation_inventory, generate_semantic_question, CAP_DIRECTIONAL, CAP_CAUSAL, r50_validation_inventory, generate_r50_experimental_question, CAP_ORDERED_INSERT)
 from retrieval import related_bundle,bundle_context,official_style_profile,candidate_cluster
 from ai_wrapper import rewrite_bundle,safe_bundle_question
 from validators import validate_formula_question,validate_grounded_question,too_similar,validate_exam,fingerprint,t2_clause_quality,source_evidence_grounded
@@ -4232,14 +4232,14 @@ def make_capability_validation_suite(db_path,domains=None,api_key="",model="gpt-
     """
     if domains is None:
         domains=list(DEFAULT_DOMAINS)
-    inv=validation_inventory(db_path,domains,FORMULA_DOMAINS)
+    inv=r50_validation_inventory(db_path,domains,FORMULA_DOMAINS)
     targets=list(inv.get('targets',[]) or [])
     expected=len(domains)*2
     if not inv.get('all_domains_two_targets') or len(targets)!=expected:
         gaps=[d for d,v in (inv.get('domains',{}) or {}).items() if not v.get('target_met')]
         raise RuntimeError(
-            f"R49 전수검증 시작 차단: Python 실행 가능한 새 구조 후보가 {len(targets)}/{expected}입니다. "
-            f"부족 영역: {', '.join(gaps)}."
+            f"R50 전수검증 시작 차단: 실제 Judge PASS로 인증된 capability가 {len(targets)}/{expected}입니다. "
+            f"부족 영역: {', '.join(gaps)}. R49에서 0-pass였던 directional/cause 구조는 자동 폐기되어 다시 API를 쓰지 않습니다."
         )
 
     rng=random.Random(460000 + (0 if seed is None else int(seed)))

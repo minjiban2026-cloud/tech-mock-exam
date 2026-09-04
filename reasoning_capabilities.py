@@ -372,3 +372,72 @@ def validation_inventory(db_path,domains,formula_domains=None):
         for typ in chosen: targets.append({'domain':d,'capability_id':typ,'coverage_key':d+'::'+typ,'status':'VALIDATION_CANDIDATE'})
     return {'domains':rows,'targets':targets,'target_total':len(domains)*2,'constructed_target_total':len(targets),'all_domains_two_targets':all(v['target_met'] for v in rows.values()),
             'note':'R49: full-suite validation pool. Retired paired/swap are excluded; semantic operations are executable but not certified until Judge PASS.'}
+
+# R50: failure-class correction from the R49 full-suite evidence.
+# directional_rule_application = 0/9 and cause_intervention_prediction = 0/4.
+# They remain discoverable for diagnostics only and can never enter a validation target.
+CAP_ORDERED_INSERT='ordered_missing_step_insertion'
+
+
+def generate_ordered_insertion_question(spec,rng=None):
+    rng=rng or random.Random(); items=list(spec.get('items',[])[:4])
+    if len(items)<4: return None
+    missing=rng.choice([1,2])
+    kept=[(i,x) for i,x in enumerate(items) if i!=missing]
+    labels=['ㄱ','ㄴ','ㄷ']
+    passage='다음은 하나의 절차에서 한 단계가 누락된 학생의 기록이다.\n'+'\n'.join(f'{labels[k]}. {x}' for k,(_,x) in enumerate(kept))
+    before='처음' if missing==0 else f'{missing}번째 단계 다음'
+    after='마지막' if missing==3 else f'{missing+2}번째 단계 이전'
+    q={'domain':spec['domain'],'topic':'원자료 절차 누락 단계 복원','points':4,'verifier':'python_source_capability',
+       'pattern_id':'T4_CAP22','capability_id':CAP_ORDERED_INSERT,'question_type':'과정/복원','material_form':'절차자료',
+       'intro':'다음 절차 기록을 분석하시오.','passage':passage,
+       'conditions':['원자료의 절차적 선후관계를 기준으로 판단한다.','학생 기록에서는 한 단계만 누락되었고 나머지 단계의 상대적 순서는 유지되었다.'],
+       'tasks':['누락된 단계의 내용을 쓰시오.','그 단계가 들어갈 위치를 앞뒤 단계와의 관계가 드러나도록 쓰시오.'],
+       'answer':[items[missing],f'{before}, {after}'],
+       'solution':[f'원자료의 {missing+1}번째 단계는 {items[missing]}이다.',f'원자료 전체 순서에서 {before}이며 {after}이다.'],
+       'subpoints':[2,2],'sources':_source_meta(spec),'source_context_override':'\n'.join(items),
+       'source_basis':'동일 원자료에 명시된 4단계 이상의 절차 순서에서 한 단계 누락을 복원',
+       'derived_answer_flags':[True,True]}
+    q['fingerprint']=_fp({k:q[k] for k in ['domain','capability_id','passage','answer']}); return q
+
+
+def r50_validation_inventory(db_path,domains,formula_domains=None):
+    """Only architectures with positive full-suite evidence are promoted.
+    R49 zero-pass semantic architectures are retired. Ordered insertion is a NEW
+    experimental architecture and is exposed only where the same strict natural
+    sequence detector can construct it; it is not certified until Judge evidence.
+    """
+    formula_domains=set(formula_domains or [])
+    rows={}; targets=[]
+    # R49 actual full-suite positive evidence: ordered swap passed in these two domains.
+    observed_ordered_pass={'기술교육론','발명'}
+    for d in domains:
+        old=discover_capabilities(db_path,d); seq=old.get(CAP_ORDERED,[])
+        certified=[]; experimental=[]
+        if d in formula_domains:
+            certified.append('deterministic_formula_operation')
+        if d in observed_ordered_pass and seq:
+            certified.append(CAP_ORDERED)
+        if seq:
+            # new architecture; never silently counted as certified
+            experimental.append(CAP_ORDERED_INSERT)
+        rows[d]={'certified_types':certified,'experimental_types':experimental,
+                 'retired_types':[CAP_DIRECTIONAL,CAP_CAUSAL,CAP_CONTRAST,CAP_CONDITION],
+                 'certified_count':len(certified),'target_met':len(certified)>=2,
+                 'candidate_counts':{CAP_ORDERED:len(seq),CAP_ORDERED_INSERT:len(seq)}}
+        for typ in certified:
+            targets.append({'domain':d,'capability_id':typ,'coverage_key':d+'::'+typ,'status':'AI_VERIFIED'})
+    return {'domains':rows,'targets':targets,'target_total':len(domains)*2,
+            'certified_target_total':len(targets),'all_domains_two_targets':all(v['target_met'] for v in rows.values()),
+            'retired_failure_evidence':{CAP_DIRECTIONAL:'R49 0/9 PASS',CAP_CAUSAL:'R49 0/4 PASS',CAP_CONTRAST:'R46 0/7 PASS',CAP_CONDITION:'R46 0/1 PASS'},
+            'note':'R50: 0-pass 구조는 전수검증 후보에서 제거. 실제 PASS한 구조만 certified. 새 ordered insertion은 별도 실험 대상으로만 유지.'}
+
+
+def generate_r50_experimental_question(db_path,domain,capability_id,rng=None,avoid_fingerprints=None):
+    if capability_id!=CAP_ORDERED_INSERT: return None
+    rng=rng or random.Random(); avoid=set(avoid_fingerprints or [])
+    specs=list(discover_capabilities(db_path,domain).get(CAP_ORDERED,[])); rng.shuffle(specs)
+    for spec in specs:
+        q=generate_ordered_insertion_question(spec,rng)
+        if q and q.get('fingerprint') not in avoid: return q
+    return None
