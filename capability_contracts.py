@@ -2,7 +2,7 @@ import json, os, re, sqlite3, hashlib
 from pathlib import Path
 
 CONTRACT_FILE='capability_contracts.json'
-SCHEMA_VERSION='R53-HYBRID-COVERAGE-V1'
+SCHEMA_VERSION='R54-CONTRAST-GAP-V1'
 ALLOWED_TYPES={
     'scenario_constraint_application',
     'error_repair_transfer',
@@ -455,3 +455,106 @@ def select_hybrid_validation_contracts(db_path, contracts, domains, formula_doma
     return {'selected':selected,'gaps':gaps,'ready':not gaps,
             'historical_verified_count':sum(min(2,len(set(base.get(d,[]) or []))) for d in domains),
             'new_contract_count':len(selected)}
+
+# ---------------- R54 contrast-set gap mining ----------------
+SCHEMA_VERSION='R54-CONTRAST-GAP-V1'
+
+def _title_tokens(s):
+    return set(re.findall(r'[가-힣A-Za-z]{2,}', _clean(s)))
+
+def _char_bigrams(s):
+    n=_norm(s)
+    return {n[i:i+2] for i in range(max(0,len(n)-1)) if len(n[i:i+2])==2}
+
+def _contrast_packet(db_path, domain, limit=120):
+    """Build explicit contrast/choice sets from the DB. Unlike R53, same-source/page neighbors
+    may be paired even with low token overlap when their titles/evidence show parallel structure.
+    """
+    anchors=_anchor_rows(db_path,domain,limit)
+    cards=[]
+    for i,a in enumerate(anchors[:90]):
+        for b in anchors[i+1:90]:
+            if a['id']==b['id']: continue
+            same_src=a['source_name']==b['source_name']
+            pgap=abs(int(a['page_no'])-int(b['page_no'])) if same_src else 99
+            ta=_title_tokens(a['answer']+' '+a.get('evidence',''))
+            tb=_title_tokens(b['answer']+' '+b.get('evidence',''))
+            overlap=len(ta&tb)
+            ba=_char_bigrams(a['answer']); bb=_char_bigrams(b['answer'])
+            bsim=(len(ba&bb)/max(1,len(ba|bb))) if ba and bb else 0.0
+            parallel=0
+            ea=_clean(a['evidence']); eb=_clean(b['evidence'])
+            for cue in ('경우','사용','방법','단계','종류','목적','조건','공법','시험','법칙','모멘트','치수','오차','측량','가공'):
+                if cue in ea and cue in eb: parallel+=1
+            if not same_src or pgap>2: continue
+            if overlap<1 and bsim<0.18 and parallel<1: continue
+            score=float(a.get('reasoning_affordance',0))+float(b.get('reasoning_affordance',0))
+            score += min(overlap,5)*0.9 + bsim*5 + parallel*1.4 + (2.0 if pgap==0 else 1.0)
+            cards.append((score,{
+                'anchor_ids':[a['id'],b['id']], 'answers':[a['answer'],b['answer']],
+                'evidence':[a['evidence'],b['evidence']], 'source_name':a['source_name'],
+                'pages':[a['page_no'],b['page_no']], 'token_overlap':overlap,
+                'title_bigram_similarity':round(bsim,3), 'parallel_cues':parallel
+            }))
+    cards.sort(key=lambda z:-z[0])
+    # add 3-anchor local groups, useful for mapping/selection sets
+    triples=[]
+    bypage={}
+    for a in anchors[:90]:
+        bypage.setdefault((a['source_name'],a['page_no']),[]).append(a)
+    for (src,p),rs in bypage.items():
+        if len(rs)>=3:
+            rs=sorted(rs,key=lambda x:-float(x.get('reasoning_affordance',0)))[:5]
+            triples.append({'anchor_ids':[x['id'] for x in rs[:3]],'answers':[x['answer'] for x in rs[:3]],
+                            'evidence':[x['evidence'] for x in rs[:3]],'source_name':src,'page':p})
+    return {'domain':domain,'anchors':anchors[:70],'contrast_pairs':[x for _,x in cards[:36]],'local_mapping_sets':triples[:18]}
+
+def mine_r54_gap_contracts(api_key, model, db_path, domain, existing, domains, formula_domains=None):
+    inv=combined_coverage_inventory(db_path,existing,domains,formula_domains)
+    need=int((inv.get('domains',{}).get(domain,{}) or {}).get('missing',0) or 0)
+    if need<=0: return []
+    from openai import OpenAI
+    packet=_contrast_packet(db_path,domain)
+    row=(inv.get('domains',{}).get(domain,{}) or {})
+    base=list(row.get('historical_ai_verified_types',[]) or [])
+    existing_domain=[x for x in (existing or []) if x.get('domain')==domain and x.get('status') in ('PYTHON_VALIDATED','AI_VERIFIED')]
+    existing_types=sorted(set(str(x.get('contract_type')) for x in existing_domain if x.get('contract_type')))
+    client=OpenAI(api_key=api_key,timeout=90,max_retries=1)
+    prompt=f'''너는 대한민국 중등 기술 임용 4점 문항용 출제 관계 계약 채굴기다.
+영역: {domain}
+필요한 새 서로 다른 capability 수: {need}
+기존 실제 Judge PASS 구조: {base}
+기존 contract 유형: {existing_types}
+
+DB에서 Python이 만든 contrast packet:
+{json.dumps(packet,ensure_ascii=False)}
+
+R54의 목적은 정의/특징을 문제로 바꾸는 것이 아니라, 같은 source 안의 서로 다른 조건·방법·기준을 비교하여 "조건 판별→방법/범주 선택→부적합 대안 배제 또는 후속 적용"이 가능한 계약만 찾는 것이다.
+절대 규칙:
+1. cited_anchor_ids는 contrast_pairs 또는 local_mapping_sets 안에서 실제로 함께 제공된 anchor 조합을 우선 사용한다.
+2. source 밖의 사례 조건, 수치, 인과를 만들지 않는다.
+3. public_material에는 exact_answers의 개념명/방법명을 그대로 쓰지 않는다.
+4. 단순 개념명 맞히기, 정의 복사, 증가/감소 재진술, 대책 복사 금지.
+5. task1은 사례 조건을 source 기준과 대조해 판단해야 하고, task2는 반드시 task1 결과를 이용하여 다른 대안을 배제하거나 후속 선택을 해야 한다.
+6. 우선 유형은 constraint_choice_justification, comparative_case_discrimination, structured_mapping_application, error_repair_transfer이다. 기존 유형과 중복하지 않는다.
+7. exact_answers 2개 이상은 cited anchor의 answer/evidence에 직접 문자열 근거가 있어야 한다.
+8. public_material은 30자 이상이고 source 문장을 통째로 복사하지 않는다.
+9. 억지로 만들지 말고 적합한 관계가 없으면 0개 반환한다.
+10. task_plan[1]에는 앞 판단/첫 판단/그 결과/이를 이용하여 중 하나를 넣는다.
+JSON 하나만 출력:
+{{"contracts":[{{"contract_type":"...","topic":"...","cited_anchor_ids":[1,2],"exact_answers":["...","..."],"reasoning_chain":["...","..."],"public_material_plan":"...","public_material":"...","task_plan":["...","앞 판단을 이용하여 ..."],"why_not_rote":"..."}}]}}'''
+    r=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
+    obj=json.loads(_strip_json(r.output_text)); rows=obj.get('contracts',[]) if isinstance(obj,dict) else []
+    valid=[]; blocked=set(existing_types)
+    allowed_preferred={'constraint_choice_justification','comparative_case_discrimination','structured_mapping_application','error_repair_transfer'}
+    for x in rows:
+        typ=str(x.get('contract_type') or '')
+        if typ in blocked or typ not in allowed_preferred: continue
+        ok,detail=validate_contract(db_path,domain,x)
+        if not ok: continue
+        cid=_fp({'domain':domain,'type':typ,'anchors':x.get('cited_anchor_ids'),'answers':x.get('exact_answers')})
+        x=dict(x); x['domain']=domain; x['status']='PYTHON_VALIDATED'; x['validation']=detail
+        x['contract_id']=cid; x['mining_mode']='R54_CONTRAST_GAP'
+        valid.append(x); blocked.add(typ)
+        if len(valid)>=need: break
+    return valid

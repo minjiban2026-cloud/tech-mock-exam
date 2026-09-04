@@ -1,13 +1,26 @@
-# R50 failure-evidence correction
+# QUALITY RECHECK FINAL
 
-R49 full-suite evidence is treated as architecture evidence, not as another prompt-tuning round.
+이번 버전은 문제 질 기준을 낮추지 않고 생성 안정성을 보강한 재검증 버전입니다.
 
-- `directional_rule_application`: RETIRED (0/9 PASS)
-- `cause_intervention_prediction`: RETIRED (0/4 PASS)
-- `paired_concept_discrimination`: RETIRED (R46 0/7)
-- `condition_outcome_swap`: RETIRED (R46 0/1)
-- `deterministic_formula_operation`: CERTIFIED in 통신/재료/수송
-- `ordered_sequence_repair`: CERTIFIED only where R49 actually passed (기술교육론/발명)
-- `ordered_missing_step_insertion`: new EXPERIMENTAL operation, never counted as certified before Judge evidence
+## 추가 보강
+- 4점 개념형: 같은 출처, 페이지 간격 2쪽 이내의 근거만 결합하도록 응집도 검사 추가
+- 4점 채점구조: 1+1+2 우선, 충분한 동일맥락 앵커가 있을 때 1+1+1+1 허용
+- 한 채점구조에서 후보가 부족하면 같은 배점의 다른 검증된 구조로 자동 재탐색
+- 실패한 후보 때문에 뒤 문항의 좋은 앵커가 불필요하게 소모되지 않도록 로컬 제외 방식으로 수정
+- 여러 영역을 선택한 종합시험에서는 직접 앵커가 상대적으로 적은 '발명'을 한 섹션에 중복 배정하지 않음
+- A/B 편성 실패 시 품질 기준을 낮추는 대신 결정론적으로 청사진만 재시도하는 안전 재시도 로직 추가
 
-R50 intentionally blocks another 18-call Judge run. API-free regression PASS is separated from final coverage readiness.
+## 교차검증
+AI OFF 보수모드에서 seed 20260830~20260929, 총 100개 A/B 세트를 생성하여 검사:
+- 성공: 100/100
+- A: 12문항 / 40점
+- B: 11문항 / 40점
+- 모든 4점 문항: 최소 3개 채점요소
+- 모든 4점 문항: 복잡도 기준 통과
+- 4점 개념형: 동일 출처 + 페이지 간격 2쪽 이내
+- 4점 계산형: 서로 다른 3개 정답요소
+- 부분점수 합계와 배점 일치
+- 이전에 실패했던 20260834, 20260855, 20260873, 20260884도 모두 성공
+
+주의: AI OFF 교차검증은 구조/근거/계산/편성 안정성 검증입니다.
+Terra의 실제 자연어 품질은 생성된 실물 시험지를 추가로 확인하는 것이 최종 단계입니다.

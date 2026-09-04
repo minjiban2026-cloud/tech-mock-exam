@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "HYBRID-CONTRACT-R53-20260904"
+BUILDER_API_VERSION = "CONTRAST-GAP-R54-20260904"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -4508,7 +4508,7 @@ def make_contract_validation_suite(db_path, contracts, domains=None, api_key="",
             'summary':{'constructed':len(questions),'judge_tested':tested,'pass':passed,'reject':rejected,'all_pass':passed==18 and tested==18},
             'final_ab_coverage_ready':bool(passed==18 and tested==18)}
 
-BUILDER_API_VERSION = "HYBRID-CONTRACT-R53-20260904"
+BUILDER_API_VERSION = "CONTRAST-GAP-R54-20260904"
 
 # R53: hybrid evidence suite. Reuse historical Judge PASS evidence and Judge only new contracts.
 def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_key="", model="gpt-5.6-luna",
@@ -4526,18 +4526,18 @@ def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_
     inv=combined_coverage_inventory(db_path,contracts,domains,formula_domains)
     if not inv.get('all_domains_two'):
         gaps=[d for d,v in inv.get('domains',{}).items() if not v.get('target_met')]
-        raise RuntimeError('R53 hybrid 전수검증 시작 차단: 기존 Judge PASS + 서로 다른 contract 후보가 18/18이 아닙니다. 부족 영역: '+', '.join(gaps))
+        raise RuntimeError('R54 hybrid 전수검증 시작 차단: 기존 Judge PASS + 서로 다른 contract 후보가 18/18이 아닙니다. 부족 영역: '+', '.join(gaps))
     sel=select_hybrid_validation_contracts(db_path,contracts,domains,formula_domains)
     if not sel.get('ready'):
-        raise RuntimeError('R53 hybrid contract 선택 실패: '+str(sel.get('gaps')))
+        raise RuntimeError('R54 hybrid contract 선택 실패: '+str(sel.get('gaps')))
 
     selected=list(sel.get('selected',[]))
     questions=[]; construction=[]
     for idx,c in enumerate(selected,1):
         q=contract_to_question(c)
         if not q:
-            raise RuntimeError('R53 contract 문항 구성 실패: '+str(c.get('contract_id','')))
-        q['number']=idx; q['section']='R53_NEW_CONTRACTS'; q['coverage_key']=f"{q.get('domain')}::{c.get('contract_id')}"
+            raise RuntimeError('R54 contract 문항 구성 실패: '+str(c.get('contract_id','')))
+        q['number']=idx; q['section']='R54_NEW_CONTRACTS'; q['coverage_key']=f"{q.get('domain')}::{c.get('contract_id')}"
         questions.append(q)
         construction.append({'number':idx,'domain':q.get('domain'),'contract_id':c.get('contract_id'),
                              'contract_type':c.get('contract_type'),'constructed':True})
@@ -4550,7 +4550,7 @@ def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_
             try:
                 rv=judge_question(api_key,jm,q,"",style)
             except Exception as ex:
-                rv={'pass':False,'reason':'R53 contract Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+                rv={'pass':False,'reason':'R54 contract Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
         else:
             rv={'pass':None,'reason':'AI Judge 미실행','fatal_flags':[],'scores':{}}
         signals=_coverage_failure_signals(rv,q) if rv.get('pass') is not None else []
@@ -4588,7 +4588,7 @@ def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_
         row['final_verified_slots']=min(2,int(row.get('historical_verified',0))+int(row.get('new_pass',0)))
         row['target_met']=row['final_verified_slots']>=2
 
-    return {'mode':'R53_HYBRID_EVIDENCE_SUITE','builder_api_version':'HYBRID-CONTRACT-R53-20260904',
+    return {'mode':'R54_HYBRID_EVIDENCE_SUITE','builder_api_version':'CONTRAST-GAP-R54-20260904',
             'candidate_inventory':inv,'historical_verified':historical,'construction':construction,
             'questions':questions,'reviews':reviews,'failure_class_counts':by_signal,'contract_type_summary':by_type,
             'domain_summary':by_domain,
