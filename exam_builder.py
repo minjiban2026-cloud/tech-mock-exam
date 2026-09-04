@@ -4438,7 +4438,7 @@ def make_contract_validation_suite(db_path, contracts, domains=None, api_key="",
     inv=contract_inventory(contracts,domains)
     if not inv.get('all_domains_two'):
         gaps=[d for d,v in inv.get('domains',{}).items() if not v.get('target_met')]
-        raise RuntimeError(f"R51 contract 전수검증 시작 차단: PYTHON_VALIDATED 계약이 18/18이 아닙니다. 부족 영역: {', '.join(gaps)}")
+        raise RuntimeError(f"R52 contract 전수검증 시작 차단: PYTHON_VALIDATED 계약이 18/18이 아닙니다. 부족 영역: {', '.join(gaps)}")
     selected=[]
     for d in domains:
         ds=[x for x in contracts if x.get('domain')==d and x.get('status') in ('PYTHON_VALIDATED','AI_VERIFIED')]
@@ -4460,14 +4460,14 @@ def make_contract_validation_suite(db_path, contracts, domains=None, api_key="",
                 if ok: chosen.append(x)
                 if len(chosen)==2: break
         if len(chosen)<2:
-            raise RuntimeError(f"R51 contract 구성 실패: {d}에서 유효 계약 2개를 선택하지 못했습니다.")
+            raise RuntimeError(f"R52 contract 구성 실패: {d}에서 유효 계약 2개를 선택하지 못했습니다.")
         selected.extend(chosen[:2])
 
     questions=[]; construction=[]
     for idx,c in enumerate(selected,1):
         q=contract_to_question(c)
         if not q:
-            raise RuntimeError(f"R51 contract 문항 구성 실패: {c.get('contract_id','')}")
+            raise RuntimeError(f"R52 contract 문항 구성 실패: {c.get('contract_id','')}")
         q['number']=idx; q['section']='CONTRACT18'; q['coverage_key']=f"{q.get('domain')}::{c.get('contract_id')}"
         questions.append(q)
         construction.append({'number':idx,'domain':q.get('domain'),'contract_id':c.get('contract_id'),'contract_type':c.get('contract_type'),'constructed':True})
@@ -4480,7 +4480,7 @@ def make_contract_validation_suite(db_path, contracts, domains=None, api_key="",
             try:
                 rv=judge_question(api_key,jm,q,"",style)
             except Exception as ex:
-                rv={'pass':False,'reason':'R51 contract Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+                rv={'pass':False,'reason':'R52 contract Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
         else:
             rv={'pass':None,'reason':'AI Judge 미실행','fatal_flags':[],'scores':{}}
         signals=_coverage_failure_signals(rv,q) if rv.get('pass') is not None else []
@@ -4502,10 +4502,10 @@ def make_contract_validation_suite(db_path, contracts, domains=None, api_key="",
         elif r.get('pass') is False:
             by_type[t]['reject']+=1; by_domain[d]['reject']+=1
         for sig in r.get('failure_signals',[]): by_signal[sig]=by_signal.get(sig,0)+1
-    return {'version':'R51-CONTRACT-SUITE','inventory':inv,'construction':construction,'questions':questions,'reviews':reviews,
+    return {'version':'R52-CONTRACT-SUITE','inventory':inv,'construction':construction,'questions':questions,'reviews':reviews,
             'failure_class_counts':dict(sorted(by_signal.items(),key=lambda kv:(-kv[1],kv[0]))),
             'contract_type_summary':by_type,'domain_summary':by_domain,
             'summary':{'constructed':len(questions),'judge_tested':tested,'pass':passed,'reject':rejected,'all_pass':passed==18 and tested==18},
             'final_ab_coverage_ready':bool(passed==18 and tested==18)}
 
-BUILDER_API_VERSION = "SOURCE-CONTRACT-MINING-R51-20260904"
+BUILDER_API_VERSION = "SOURCE-CONTRACT-SUPPLEMENT-R52-20260904"

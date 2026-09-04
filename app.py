@@ -32,7 +32,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · SOURCE-CONTRACT-MINING-R51-20260904")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SOURCE-CONTRACT-SUPPLEMENT-R52-20260904")
 
 def secret(name, default=""):
     try:
@@ -300,13 +300,13 @@ with tabs[2]:
     )
 
     try:
-        from capability_contracts import mine_domain_contracts, merge_contracts, contract_inventory
+        from capability_contracts import mine_domain_contracts, mine_missing_contracts, merge_contracts, contract_inventory
     except Exception as _ce:
-        mine_domain_contracts=merge_contracts=contract_inventory=None
-        st.error("R51 capability_contracts 로드 실패: "+str(_ce))
+        mine_domain_contracts=mine_missing_contracts=merge_contracts=contract_inventory=None
+        st.error("R52 capability_contracts 로드 실패: "+str(_ce))
 
-    st.markdown("##### ⛏️ R51 출제 관계 계약 채굴")
-    st.caption("영역당 AI 호출 1회로 최대 2개 계약을 찾습니다. 채굴 결과는 즉시 Python grounding/answer-leak 검사를 통과해야 세션에 저장됩니다. Judge는 이 단계에서 호출하지 않습니다.")
+    st.markdown("##### ⛏️ R52 출제 관계 계약 채굴")
+    st.caption("초기 채굴 결과는 그대로 보존합니다. R52는 부족한 영역만 대상으로 reasoning-affordance가 높은 원문을 다시 검색하고, 영역당 최대 1회의 보충 채굴로 부족 슬롯만 채웁니다. Judge는 아직 호출하지 않습니다.")
     if st.button("9영역 reasoning contract 채굴 (영역당 1회)", use_container_width=True, disabled=(mine_domain_contracts is None)):
         if not (use_ai and key):
             st.error("contract 채굴에는 OPENAI_API_KEY가 필요합니다.")
@@ -324,10 +324,38 @@ with tabs[2]:
             st.session_state["R51_CONTRACTS"]=existing
             st.session_state["R51_MINING_LOG"]=mining_log
     if "R51_MINING_LOG" in st.session_state:
-        with st.expander("R51 contract 채굴 결과", expanded=True):
+        with st.expander("R51/R52 contract 채굴 결과", expanded=True):
             st.json(st.session_state["R51_MINING_LOG"])
+
+    _pre_contracts=list(st.session_state.get("R51_CONTRACTS",[]))
+    _pre_inv=contract_inventory(_pre_contracts,domains) if contract_inventory else {"all_domains_two":False,"domains":{}}
+    _missing=[d for d,v in (_pre_inv.get("domains") or {}).items() if not v.get("target_met")]
+    if _missing:
+        st.caption("부족 영역: "+", ".join(f"{d}(-{(_pre_inv.get('domains') or {}).get(d,{}).get('missing',0)})" for d in _missing))
+    if st.button("R52 부족 슬롯만 보충 채굴", use_container_width=True, disabled=(mine_missing_contracts is None or not _missing)):
+        if not (use_ai and key):
+            st.error("보충 contract 채굴에는 OPENAI_API_KEY가 필요합니다.")
+        else:
+            existing=list(st.session_state.get("R51_CONTRACTS",[]))
+            supplement_log=[]
+            with st.spinner("부족 영역만 구조적 원문을 재검색하고 영역당 최대 1회 보충 채굴 중..."):
+                for _d in _missing:
+                    before=len([x for x in existing if x.get('domain')==_d and x.get('status') in ('PYTHON_VALIDATED','AI_VERIFIED')])
+                    try:
+                        newc=mine_missing_contracts(key,model,DB,_d,existing,target=2)
+                        existing=merge_contracts(existing,newc)
+                        after=len([x for x in existing if x.get('domain')==_d and x.get('status') in ('PYTHON_VALIDATED','AI_VERIFIED')])
+                        supplement_log.append({"domain":_d,"before":before,"added":len(newc),"after":after,"contract_types":[x.get("contract_type") for x in newc]})
+                    except Exception as _ex:
+                        supplement_log.append({"domain":_d,"before":before,"added":0,"error":str(_ex)})
+            st.session_state["R51_CONTRACTS"]=existing
+            st.session_state["R52_SUPPLEMENT_LOG"]=supplement_log
+    if "R52_SUPPLEMENT_LOG" in st.session_state:
+        with st.expander("R52 부족 슬롯 보충 결과", expanded=True):
+            st.json(st.session_state["R52_SUPPLEMENT_LOG"])
+
     _r51_contracts=list(st.session_state.get("R51_CONTRACTS",[]))
-    _uploaded_contracts=st.file_uploader("R51 contract JSON 불러오기", type=["json"], key="R51_CONTRACT_UPLOAD")
+    _uploaded_contracts=st.file_uploader("R52 contract JSON 불러오기", type=["json"], key="R52_CONTRACT_UPLOAD")
     if _uploaded_contracts is not None:
         try:
             _obj=json.loads(_uploaded_contracts.getvalue().decode("utf-8"))
@@ -335,22 +363,22 @@ with tabs[2]:
             if _rows:
                 st.session_state["R51_CONTRACTS"]=_rows
                 _r51_contracts=list(_rows)
-                st.success(f"R51 contract {len(_rows)}개를 불러왔습니다.")
+                st.success(f"R52 contract {len(_rows)}개를 불러왔습니다.")
         except Exception as _ex:
             st.error("contract JSON 불러오기 실패: "+str(_ex))
     if _r51_contracts:
-        st.download_button("R51 contract JSON 저장", data=json.dumps({"schema_version":"R51-CONTRACT-V1","contracts":_r51_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
+        st.download_button("R52 contract JSON 저장", data=json.dumps({"schema_version":"R52-CONTRACT-V2","contracts":_r51_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
     if contract_inventory:
         _r51_inv=contract_inventory(_r51_contracts,domains)
-        st.caption(f"R51 Python-validated contract coverage: {_r51_inv.get('validated_slots',0)}/{_r51_inv.get('target',18)}")
-        with st.expander("R51 contract inventory", expanded=False):
+        st.caption(f"R52 Python-validated contract coverage: {_r51_inv.get('validated_slots',0)}/{_r51_inv.get('target',18)}")
+        with st.expander("R52 contract inventory", expanded=False):
             st.json(_r51_inv)
     else:
         _r51_inv={"all_domains_two":False}
 
-    if st.button("R51 18 contract Judge 전수검증", type="primary", use_container_width=True, disabled=(make_contract_validation_suite is None)):
+    if st.button("R52 18 contract Judge 전수검증", type="primary", use_container_width=True, disabled=(make_contract_validation_suite is None)):
         if not (use_ai_judge and key):
-            st.error("R51 contract 전수검증에는 AI Judge와 API 키가 필요합니다.")
+            st.error("R52 contract 전수검증에는 AI Judge와 API 키가 필요합니다.")
         elif not _r51_inv.get("all_domains_two"):
             st.error("PYTHON_VALIDATED contract가 아직 18/18이 아닙니다. 채굴 결과의 부족 영역을 먼저 확인하세요.")
         else:
@@ -363,7 +391,7 @@ with tabs[2]:
     if "R51_CONTRACT_SUITE" in st.session_state:
         _suite=st.session_state["R51_CONTRACT_SUITE"]
         _sm=_suite.get("summary",{})
-        st.markdown("### 🧪 R51 contract 18개 전수검증 결과")
+        st.markdown("### 🧪 R52 contract 18개 전수검증 결과")
         st.caption(f"구성 {_sm.get('constructed',0)}/18 · Judge {_sm.get('judge_tested',0)}/18 · PASS {_sm.get('pass',0)} · REJECT {_sm.get('reject',0)}")
         with st.expander("failure class / 영역 / contract 유형 집계", expanded=True):
             st.json({"failure_class_counts":_suite.get("failure_class_counts",{}),"domain_summary":_suite.get("domain_summary",{}),"contract_type_summary":_suite.get("contract_type_summary",{})})
