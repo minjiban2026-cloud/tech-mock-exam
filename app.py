@@ -8,6 +8,7 @@ import exam_builder as exam_builder_module
 make_ab = exam_builder_module.make_ab
 make_quality_sample = getattr(exam_builder_module, "make_quality_sample", None)
 make_capability_validation_suite = getattr(exam_builder_module, "make_capability_validation_suite", None)
+make_contract_validation_suite = getattr(exam_builder_module, "make_contract_validation_suite", None)
 try:
     from quality_regression import run_release_regression
     from reasoning_capabilities import coverage_inventory, validation_inventory
@@ -31,7 +32,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · EXECUTABLE-SEMANTIC-R49-20260903")
+st.caption("배포 버전: FINAL-STABLE-20260831 · SOURCE-CONTRACT-MINING-R51-20260904")
 
 def secret(name, default=""):
     try:
@@ -294,9 +295,80 @@ with tabs[2]:
             "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
-        "R49는 기존 0-pass 구조를 되살리지 않고, 새 semantic operation을 Python 실행 가능한 18개 검증 후보로 구성합니다. 최종 coverage에는 여전히 실제 Judge PASS만 산입합니다. 9영역×2=18개 후보를 한 번에 전수 생성하고, "
-        "각 문항을 Judge 1회만 심사한 뒤 전체 failure class를 집계합니다. REJECT 문항은 같은 실행에서 교체·재시도하지 않습니다."
+        "R51은 R49의 0-pass directional/cause 구조를 다시 쓰지 않습니다. 정규식으로 관계를 억지 추출하지 않고, "
+        "서브노트에서 출제 가능한 2단계 reasoning contract를 영역별 1회 채굴한 뒤 Python grounding 검사를 통과한 계약만 18개 전수 Judge 후보로 사용합니다."
     )
+
+    try:
+        from capability_contracts import mine_domain_contracts, merge_contracts, contract_inventory
+    except Exception as _ce:
+        mine_domain_contracts=merge_contracts=contract_inventory=None
+        st.error("R51 capability_contracts 로드 실패: "+str(_ce))
+
+    st.markdown("##### ⛏️ R51 출제 관계 계약 채굴")
+    st.caption("영역당 AI 호출 1회로 최대 2개 계약을 찾습니다. 채굴 결과는 즉시 Python grounding/answer-leak 검사를 통과해야 세션에 저장됩니다. Judge는 이 단계에서 호출하지 않습니다.")
+    if st.button("9영역 reasoning contract 채굴 (영역당 1회)", use_container_width=True, disabled=(mine_domain_contracts is None)):
+        if not (use_ai and key):
+            st.error("contract 채굴에는 OPENAI_API_KEY가 필요합니다.")
+        else:
+            existing=list(st.session_state.get("R51_CONTRACTS",[]))
+            mining_log=[]
+            with st.spinner("9영역 원자료에서 reasoning contract를 채굴하고 Python 검증 중..."):
+                for _d in domains:
+                    try:
+                        newc=mine_domain_contracts(key,model,DB,_d,wanted=2)
+                        existing=merge_contracts(existing,newc)
+                        mining_log.append({"domain":_d,"python_validated":len(newc),"contract_types":[x.get("contract_type") for x in newc]})
+                    except Exception as _ex:
+                        mining_log.append({"domain":_d,"python_validated":0,"error":str(_ex)})
+            st.session_state["R51_CONTRACTS"]=existing
+            st.session_state["R51_MINING_LOG"]=mining_log
+    if "R51_MINING_LOG" in st.session_state:
+        with st.expander("R51 contract 채굴 결과", expanded=True):
+            st.json(st.session_state["R51_MINING_LOG"])
+    _r51_contracts=list(st.session_state.get("R51_CONTRACTS",[]))
+    _uploaded_contracts=st.file_uploader("R51 contract JSON 불러오기", type=["json"], key="R51_CONTRACT_UPLOAD")
+    if _uploaded_contracts is not None:
+        try:
+            _obj=json.loads(_uploaded_contracts.getvalue().decode("utf-8"))
+            _rows=_obj.get("contracts",[]) if isinstance(_obj,dict) else []
+            if _rows:
+                st.session_state["R51_CONTRACTS"]=_rows
+                _r51_contracts=list(_rows)
+                st.success(f"R51 contract {len(_rows)}개를 불러왔습니다.")
+        except Exception as _ex:
+            st.error("contract JSON 불러오기 실패: "+str(_ex))
+    if _r51_contracts:
+        st.download_button("R51 contract JSON 저장", data=json.dumps({"schema_version":"R51-CONTRACT-V1","contracts":_r51_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
+    if contract_inventory:
+        _r51_inv=contract_inventory(_r51_contracts,domains)
+        st.caption(f"R51 Python-validated contract coverage: {_r51_inv.get('validated_slots',0)}/{_r51_inv.get('target',18)}")
+        with st.expander("R51 contract inventory", expanded=False):
+            st.json(_r51_inv)
+    else:
+        _r51_inv={"all_domains_two":False}
+
+    if st.button("R51 18 contract Judge 전수검증", type="primary", use_container_width=True, disabled=(make_contract_validation_suite is None)):
+        if not (use_ai_judge and key):
+            st.error("R51 contract 전수검증에는 AI Judge와 API 키가 필요합니다.")
+        elif not _r51_inv.get("all_domains_two"):
+            st.error("PYTHON_VALIDATED contract가 아직 18/18이 아닙니다. 채굴 결과의 부족 영역을 먼저 확인하세요.")
+        else:
+            with st.spinner("18개 contract 문항을 각각 Judge 1회씩 전수검증 중..."):
+                try:
+                    _suite=make_contract_validation_suite(DB,_r51_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed),ai_quality_enabled=True)
+                    st.session_state["R51_CONTRACT_SUITE"]=_suite
+                except Exception as _ex:
+                    st.error(str(_ex))
+    if "R51_CONTRACT_SUITE" in st.session_state:
+        _suite=st.session_state["R51_CONTRACT_SUITE"]
+        _sm=_suite.get("summary",{})
+        st.markdown("### 🧪 R51 contract 18개 전수검증 결과")
+        st.caption(f"구성 {_sm.get('constructed',0)}/18 · Judge {_sm.get('judge_tested',0)}/18 · PASS {_sm.get('pass',0)} · REJECT {_sm.get('reject',0)}")
+        with st.expander("failure class / 영역 / contract 유형 집계", expanded=True):
+            st.json({"failure_class_counts":_suite.get("failure_class_counts",{}),"domain_summary":_suite.get("domain_summary",{}),"contract_type_summary":_suite.get("contract_type_summary",{})})
+        with st.expander("18개 Judge 원본", expanded=False):
+            st.json(_suite.get("reviews",[]))
 
     try:
         _cov_inv=coverage_inventory(DB,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())) if coverage_inventory else {"targets":[],"target_total":18,"all_domains_two_targets":False,"error":"coverage_inventory unavailable"}

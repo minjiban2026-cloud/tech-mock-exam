@@ -4425,3 +4425,87 @@ def make_ab(db_path,a_count=12,a_points=40,b_count=11,b_points=40,domains=None,
     )
     err.generation_diagnostics=ab_diagnostics[-30:]
     raise err
+
+# R51: one-time mined source reasoning contracts replace failed lexical semantic architectures.
+def make_contract_validation_suite(db_path, contracts, domains=None, api_key="", model="gpt-5.6-luna",
+                                   judge_model=None, seed=None, ai_quality_enabled=True):
+    """Judge exactly two Python-validated mined contracts per domain, once each.
+    No REJECT-driven replacement/retry occurs inside this suite.
+    """
+    from capability_contracts import contract_inventory, contract_to_question, validate_contract
+    if domains is None:
+        domains=list(DEFAULT_DOMAINS)
+    inv=contract_inventory(contracts,domains)
+    if not inv.get('all_domains_two'):
+        gaps=[d for d,v in inv.get('domains',{}).items() if not v.get('target_met')]
+        raise RuntimeError(f"R51 contract 전수검증 시작 차단: PYTHON_VALIDATED 계약이 18/18이 아닙니다. 부족 영역: {', '.join(gaps)}")
+    selected=[]
+    for d in domains:
+        ds=[x for x in contracts if x.get('domain')==d and x.get('status') in ('PYTHON_VALIDATED','AI_VERIFIED')]
+        # keep two structurally distinct contracts when possible
+        ds=sorted(ds,key=lambda x:(str(x.get('contract_type','')),str(x.get('contract_id',''))))
+        chosen=[]; seen=set()
+        for x in ds:
+            typ=str(x.get('contract_type',''))
+            if typ in seen and len({str(y.get('contract_type','')) for y in ds})>=2:
+                continue
+            ok,_=validate_contract(db_path,d,x)
+            if ok:
+                chosen.append(x); seen.add(typ)
+            if len(chosen)==2: break
+        if len(chosen)<2:
+            for x in ds:
+                if x in chosen: continue
+                ok,_=validate_contract(db_path,d,x)
+                if ok: chosen.append(x)
+                if len(chosen)==2: break
+        if len(chosen)<2:
+            raise RuntimeError(f"R51 contract 구성 실패: {d}에서 유효 계약 2개를 선택하지 못했습니다.")
+        selected.extend(chosen[:2])
+
+    questions=[]; construction=[]
+    for idx,c in enumerate(selected,1):
+        q=contract_to_question(c)
+        if not q:
+            raise RuntimeError(f"R51 contract 문항 구성 실패: {c.get('contract_id','')}")
+        q['number']=idx; q['section']='CONTRACT18'; q['coverage_key']=f"{q.get('domain')}::{c.get('contract_id')}"
+        questions.append(q)
+        construction.append({'number':idx,'domain':q.get('domain'),'contract_id':c.get('contract_id'),'contract_type':c.get('contract_type'),'constructed':True})
+
+    style=official_style_profile(db_path)
+    jm=judge_model or model
+    reviews=[]
+    for q in questions:
+        if ai_quality_enabled and api_key:
+            try:
+                rv=judge_question(api_key,jm,q,"",style)
+            except Exception as ex:
+                rv={'pass':False,'reason':'R51 contract Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+        else:
+            rv={'pass':None,'reason':'AI Judge 미실행','fatal_flags':[],'scores':{}}
+        signals=_coverage_failure_signals(rv,q) if rv.get('pass') is not None else []
+        q['contract_suite_ai_quality']=copy.deepcopy(rv)
+        reviews.append({'number':q.get('number'),'coverage_key':q.get('coverage_key'),'domain':q.get('domain'),
+                        'contract_id':q.get('contract_id'),'contract_type':q.get('contract_type'),'pattern_id':q.get('pattern_id'),
+                        'topic':q.get('topic'),'pass':rv.get('pass'),'reason':rv.get('reason',''),'fatal_flags':rv.get('fatal_flags',[]),
+                        'scores':rv.get('scores',{}),'failure_signals':signals})
+    tested=sum(1 for r in reviews if r.get('pass') is not None)
+    passed=sum(1 for r in reviews if r.get('pass') is True)
+    rejected=sum(1 for r in reviews if r.get('pass') is False)
+    by_type={}; by_domain={}; by_signal={}
+    for r in reviews:
+        t=r.get('contract_type'); d=r.get('domain')
+        by_type.setdefault(t,{'tested':0,'pass':0,'reject':0}); by_type[t]['tested']+=1
+        by_domain.setdefault(d,{'tested':0,'pass':0,'reject':0}); by_domain[d]['tested']+=1
+        if r.get('pass') is True:
+            by_type[t]['pass']+=1; by_domain[d]['pass']+=1
+        elif r.get('pass') is False:
+            by_type[t]['reject']+=1; by_domain[d]['reject']+=1
+        for sig in r.get('failure_signals',[]): by_signal[sig]=by_signal.get(sig,0)+1
+    return {'version':'R51-CONTRACT-SUITE','inventory':inv,'construction':construction,'questions':questions,'reviews':reviews,
+            'failure_class_counts':dict(sorted(by_signal.items(),key=lambda kv:(-kv[1],kv[0]))),
+            'contract_type_summary':by_type,'domain_summary':by_domain,
+            'summary':{'constructed':len(questions),'judge_tested':tested,'pass':passed,'reject':rejected,'all_pass':passed==18 and tested==18},
+            'final_ab_coverage_ready':bool(passed==18 and tested==18)}
+
+BUILDER_API_VERSION = "SOURCE-CONTRACT-MINING-R51-20260904"
