@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "FAILURE-EVIDENCE-R50-20260904"
+BUILDER_API_VERSION = "HYBRID-CONTRACT-R53-20260904"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -4508,4 +4508,90 @@ def make_contract_validation_suite(db_path, contracts, domains=None, api_key="",
             'summary':{'constructed':len(questions),'judge_tested':tested,'pass':passed,'reject':rejected,'all_pass':passed==18 and tested==18},
             'final_ab_coverage_ready':bool(passed==18 and tested==18)}
 
-BUILDER_API_VERSION = "SOURCE-CONTRACT-SUPPLEMENT-R52-20260904"
+BUILDER_API_VERSION = "HYBRID-CONTRACT-R53-20260904"
+
+# R53: hybrid evidence suite. Reuse historical Judge PASS evidence and Judge only new contracts.
+def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_key="", model="gpt-5.6-luna",
+                                          judge_model=None, seed=None, ai_quality_enabled=True):
+    """Validate only the new contract slots needed to complement historical AI_VERIFIED capabilities.
+
+    Historical PASSes are evidence, not candidates, so they are not re-Judged. New contracts are each
+    judged exactly once; rejection never triggers retry/replacement.
+    """
+    from capability_contracts import (combined_coverage_inventory, select_hybrid_validation_contracts,
+                                      contract_to_question, historical_verified_types)
+    if domains is None:
+        domains=list(DEFAULT_DOMAINS)
+    formula_domains=getattr(__import__(__name__),'FORMULA_DOMAINS',FORMULA_DOMAINS)
+    inv=combined_coverage_inventory(db_path,contracts,domains,formula_domains)
+    if not inv.get('all_domains_two'):
+        gaps=[d for d,v in inv.get('domains',{}).items() if not v.get('target_met')]
+        raise RuntimeError('R53 hybrid 전수검증 시작 차단: 기존 Judge PASS + 서로 다른 contract 후보가 18/18이 아닙니다. 부족 영역: '+', '.join(gaps))
+    sel=select_hybrid_validation_contracts(db_path,contracts,domains,formula_domains)
+    if not sel.get('ready'):
+        raise RuntimeError('R53 hybrid contract 선택 실패: '+str(sel.get('gaps')))
+
+    selected=list(sel.get('selected',[]))
+    questions=[]; construction=[]
+    for idx,c in enumerate(selected,1):
+        q=contract_to_question(c)
+        if not q:
+            raise RuntimeError('R53 contract 문항 구성 실패: '+str(c.get('contract_id','')))
+        q['number']=idx; q['section']='R53_NEW_CONTRACTS'; q['coverage_key']=f"{q.get('domain')}::{c.get('contract_id')}"
+        questions.append(q)
+        construction.append({'number':idx,'domain':q.get('domain'),'contract_id':c.get('contract_id'),
+                             'contract_type':c.get('contract_type'),'constructed':True})
+
+    style=official_style_profile(db_path)
+    jm=judge_model or model
+    reviews=[]
+    for q in questions:
+        if ai_quality_enabled and api_key:
+            try:
+                rv=judge_question(api_key,jm,q,"",style)
+            except Exception as ex:
+                rv={'pass':False,'reason':'R53 contract Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+        else:
+            rv={'pass':None,'reason':'AI Judge 미실행','fatal_flags':[],'scores':{}}
+        signals=_coverage_failure_signals(rv,q) if rv.get('pass') is not None else []
+        reviews.append({'number':q.get('number'),'coverage_key':q.get('coverage_key'),'domain':q.get('domain'),
+                        'contract_id':q.get('contract_id'),'contract_type':q.get('contract_type'),'pattern_id':q.get('pattern_id'),
+                        'topic':q.get('topic'),'pass':rv.get('pass'),'reason':rv.get('reason',''),'fatal_flags':rv.get('fatal_flags',[]),
+                        'scores':rv.get('scores',{}),'failure_signals':signals})
+
+    base=historical_verified_types(db_path,domains,formula_domains)
+    historical=[]
+    for d in domains:
+        for typ in base.get(d,[]):
+            historical.append({'domain':d,'capability_id':typ,'pass':True,'evidence':'HISTORICAL_AI_VERIFIED','judge_reused':False})
+
+    passed=sum(1 for r in reviews if r.get('pass') is True)
+    rejected=sum(1 for r in reviews if r.get('pass') is False)
+    tested=sum(1 for r in reviews if r.get('pass') is not None)
+    historical_count=len(historical)
+    final_verified=historical_count+passed
+    by_signal={}; by_type={}; by_domain={d:{'historical_verified':len(base.get(d,[])),'new_tested':0,'new_pass':0,'new_reject':0} for d in domains}
+    for r in reviews:
+        d=r.get('domain'); t=r.get('contract_type')
+        by_type.setdefault(t,{'tested':0,'pass':0,'reject':0,'signals':{}})
+        by_type[t]['tested']+=1
+        if r.get('pass') is True: by_type[t]['pass']+=1
+        elif r.get('pass') is False: by_type[t]['reject']+=1
+        by_domain.setdefault(d,{'historical_verified':0,'new_tested':0,'new_pass':0,'new_reject':0})
+        by_domain[d]['new_tested']+=1
+        if r.get('pass') is True: by_domain[d]['new_pass']+=1
+        elif r.get('pass') is False: by_domain[d]['new_reject']+=1
+        for sig in r.get('failure_signals',[]):
+            by_signal[sig]=by_signal.get(sig,0)+1
+            by_type[t]['signals'][sig]=by_type[t]['signals'].get(sig,0)+1
+    for d,row in by_domain.items():
+        row['final_verified_slots']=min(2,int(row.get('historical_verified',0))+int(row.get('new_pass',0)))
+        row['target_met']=row['final_verified_slots']>=2
+
+    return {'mode':'R53_HYBRID_EVIDENCE_SUITE','builder_api_version':'HYBRID-CONTRACT-R53-20260904',
+            'candidate_inventory':inv,'historical_verified':historical,'construction':construction,
+            'questions':questions,'reviews':reviews,'failure_class_counts':by_signal,'contract_type_summary':by_type,
+            'domain_summary':by_domain,
+            'summary':{'coverage_slots':18,'historical_verified':historical_count,'new_constructed':len(questions),
+                       'judge_tested':tested,'new_pass':passed,'new_reject':rejected,'final_ai_verified':final_verified,
+                       'coverage_ready':all(x.get('target_met') for x in by_domain.values())}}

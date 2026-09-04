@@ -2,7 +2,7 @@ import json, os, re, sqlite3, hashlib
 from pathlib import Path
 
 CONTRACT_FILE='capability_contracts.json'
-SCHEMA_VERSION='R52-CONTRACT-V2'
+SCHEMA_VERSION='R53-HYBRID-COVERAGE-V1'
 ALLOWED_TYPES={
     'scenario_constraint_application',
     'error_repair_transfer',
@@ -319,3 +319,139 @@ def contract_to_question(contract):
     }
     q['fingerprint']=_fp({k:q.get(k) for k in ('domain','contract_id','passage','answer')})
     return q
+
+# ---------------- R53 hybrid coverage: historical AI_VERIFIED + mined contracts ----------------
+def historical_verified_types(db_path, domains, formula_domains=None):
+    """Return only capability architectures with actual prior Judge PASS evidence."""
+    from reasoning_capabilities import r50_validation_inventory
+    inv=r50_validation_inventory(db_path,domains,formula_domains or set())
+    return {d:list((inv.get('domains',{}).get(d,{}) or {}).get('certified_types',[]) or []) for d in domains}
+
+
+def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
+    """Count DISTINCT capability architectures per domain.
+    Repeated contracts of the same type count as one capability type.
+    """
+    base=historical_verified_types(db_path,domains,formula_domains)
+    rows={}; total=0
+    for d in domains:
+        base_types=[]
+        for x in base.get(d,[]):
+            if x and x not in base_types: base_types.append(x)
+        contract_rows=[x for x in (contracts or []) if x.get('domain')==d and x.get('status') in ('PYTHON_VALIDATED','AI_VERIFIED')]
+        contract_types=[]
+        for x in contract_rows:
+            t=str(x.get('contract_type') or '').strip()
+            if t and t not in contract_types: contract_types.append(t)
+        combined=list(base_types)
+        for t in contract_types:
+            label='contract:'+t
+            if label not in combined: combined.append(label)
+        count=min(2,len(combined))
+        rows[d]={
+            'historical_ai_verified_types':base_types,
+            'python_validated_contract_types':contract_types,
+            'distinct_candidate_types':combined,
+            'candidate_count':count,
+            'target_met':count>=2,
+            'missing':max(0,2-count),
+        }
+        total+=count
+    return {'domains':rows,'candidate_slots':total,'target':len(domains)*2,
+            'all_domains_two':all(v['target_met'] for v in rows.values()),
+            'missing_domains':[d for d,v in rows.items() if not v['target_met']],
+            'note':'R53: 기존 실제 Judge PASS capability + 서로 다른 PYTHON_VALIDATED contract 유형을 합산. 동일 contract_type 반복은 1개로 계산.'}
+
+
+def _pair_packet(db_path, domain, limit=84):
+    """Diversified anchors plus structurally promising anchor pairs for final missing slots."""
+    anchors=_anchor_rows(db_path,domain,limit)
+    pairs=[]
+    def toks(x):
+        return set(re.findall(r'[가-힣A-Za-z]{2,}',_clean(x)))
+    for i,a in enumerate(anchors[:50]):
+        for b in anchors[i+1:50]:
+            if a['id']==b['id']: continue
+            ta=toks(a['answer']+' '+a['evidence']); tb=toks(b['answer']+' '+b['evidence'])
+            overlap=len(ta&tb)
+            same_page=(a['source_name']==b['source_name'] and abs(int(a['page_no'])-int(b['page_no']))<=1)
+            # zero-overlap neighbours are often unrelated list items on the same PDF page; never pair them.
+            if overlap<1: continue
+            sc=float(a.get('reasoning_affordance',0))+float(b.get('reasoning_affordance',0))+min(overlap,5)*1.0+(1.5 if same_page else 0)
+            pairs.append((sc,{'anchor_ids':[a['id'],b['id']], 'answers':[a['answer'],b['answer']],
+                              'evidence':[a['evidence'],b['evidence']], 'same_or_adjacent_page':same_page,'keyword_overlap':overlap}))
+    pairs.sort(key=lambda z:-z[0])
+    return {'domain':domain,'anchors':anchors,'anchor_pairs':[x for _,x in pairs[:24]]}
+
+
+def mine_final_missing_contracts(api_key, model, db_path, domain, existing, domains, formula_domains=None):
+    """One supplement call only when HYBRID coverage has a real missing slot."""
+    inv=combined_coverage_inventory(db_path,existing,domains,formula_domains)
+    need=int((inv.get('domains',{}).get(domain,{}) or {}).get('missing',0) or 0)
+    if need<=0: return []
+    from openai import OpenAI
+    packet=_pair_packet(db_path,domain,limit=96)
+    base=list((inv.get('domains',{}).get(domain,{}) or {}).get('historical_ai_verified_types',[]) or [])
+    existing_domain=[x for x in (existing or []) if x.get('domain')==domain and x.get('status') in ('PYTHON_VALIDATED','AI_VERIFIED')]
+    existing_types=sorted(set(str(x.get('contract_type')) for x in existing_domain if x.get('contract_type')))
+    client=OpenAI(api_key=api_key,timeout=90,max_retries=1)
+    prompt=f'''너는 대한민국 중등 기술 임용시험의 4점 문항용 "출제 가능 관계 계약"을 채굴한다.
+영역: {domain}
+이번에 필요한 서로 다른 새 capability 유형 수: {need}
+이미 실제 Judge PASS로 인증된 구조(중복 금지): {base}
+이미 Python 검증된 contract 유형(중복 금지): {existing_types}
+
+원문 packet:
+{json.dumps(packet,ensure_ascii=False)}
+
+이번 호출의 목적은 부족한 최종 슬롯만 채우는 것이다. 억지로 만들지 말고 source가 충분할 때만 반환한다.
+절대 규칙:
+1. anchor 밖의 사실/수치/인과/사례를 만들지 않는다.
+2. exact_answers와 source evidence는 hidden ground truth다. public_material에 정답어/정답문장을 그대로 노출하지 않는다.
+3. 단순 정의/특징 나열/증가감소 재진술/대책 베끼기 금지.
+4. task2는 task1의 판단 결과를 실제 입력으로 사용해야 한다.
+5. 이미 인증된 구조 및 이미 존재하는 contract_type과 다른 사고 연산을 우선한다.
+6. anchor_pairs는 실제로 같은 판단기준/방법선택/대응관계를 구성할 때만 결합한다.
+7. 가능한 유형은 {sorted(ALLOWED_TYPES)} 중 하나만 사용한다.
+8. exact_answers 2개 이상은 cited_anchor_ids의 answer/evidence에 직접 문자열 근거가 있어야 한다.
+9. public_material은 30자 이상이며 source를 통째로 복사하지 않는다.
+10. task_plan[1]에는 앞 판단/첫 판단/그 결과/이를 이용하여 중 하나를 반드시 포함한다.
+11. 서로 다른 capability 유형을 못 찾으면 0개를 반환한다.
+
+JSON 하나만 출력:
+{{"contracts":[{{"contract_type":"...","topic":"...","cited_anchor_ids":[1,2],"exact_answers":["...","..."],"reasoning_chain":["...","..."],"public_material_plan":"...","public_material":"...","task_plan":["...","앞 판단을 이용하여 ..."],"why_not_rote":"..."}}]}}'''
+    r=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
+    obj=json.loads(_strip_json(r.output_text)); rows=obj.get('contracts',[]) if isinstance(obj,dict) else []
+    valid=[]; blocked_types=set(existing_types)
+    for x in rows:
+        typ=str(x.get('contract_type') or '')
+        if typ in blocked_types: continue
+        ok,detail=validate_contract(db_path,domain,x)
+        if not ok: continue
+        cid=_fp({'domain':domain,'type':typ,'anchors':x.get('cited_anchor_ids'),'answers':x.get('exact_answers')})
+        x=dict(x); x['domain']=domain; x['status']='PYTHON_VALIDATED'; x['validation']=detail; x['contract_id']=cid; x['mining_mode']='R53_FINAL_GAP'
+        valid.append(x); blocked_types.add(typ)
+        if len(valid)>=need: break
+    return valid
+
+
+def select_hybrid_validation_contracts(db_path, contracts, domains, formula_domains=None):
+    """Select only new contracts needed to complement historical verified capability types."""
+    base=historical_verified_types(db_path,domains,formula_domains)
+    selected=[]; gaps=[]
+    for d in domains:
+        need=max(0,2-len(set(base.get(d,[]) or [])))
+        ds=[]
+        for x in contracts or []:
+            if x.get('domain')!=d or x.get('status') not in ('PYTHON_VALIDATED','AI_VERIFIED'): continue
+            ok,_=validate_contract(db_path,d,x)
+            if ok: ds.append(x)
+        by_type={}
+        for x in sorted(ds,key=lambda z:(str(z.get('contract_type','')),str(z.get('contract_id','')))):
+            by_type.setdefault(str(x.get('contract_type','')),x)
+        chosen=list(by_type.values())[:need]
+        if len(chosen)<need: gaps.append({'domain':d,'need':need,'found':len(chosen)})
+        selected.extend(chosen)
+    return {'selected':selected,'gaps':gaps,'ready':not gaps,
+            'historical_verified_count':sum(min(2,len(set(base.get(d,[]) or []))) for d in domains),
+            'new_contract_count':len(selected)}
