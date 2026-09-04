@@ -307,28 +307,8 @@ with tabs[2]:
         st.error("R54 capability_contracts 로드 실패: "+str(_ce))
 
     st.markdown("##### ⛏️ R54 hybrid contract 보강")
-    st.caption("기존 R51/R52 계약은 JSON으로 보존합니다. R54에서는 현재 hybrid coverage에서 실제로 부족한 영역만 contrast-set으로 보충합니다. 구버전 전체 채굴 버튼은 비활성화했습니다.")
-    if False and st.button("9영역 reasoning contract 채굴 (구버전 비활성)", use_container_width=True):
-        if not (use_ai and key):
-            st.error("contract 채굴에는 OPENAI_API_KEY가 필요합니다.")
-        else:
-            existing=list(st.session_state.get("R51_CONTRACTS",[]))
-            mining_log=[]
-            with st.spinner("9영역 원자료에서 reasoning contract를 채굴하고 Python 검증 중..."):
-                for _d in domains:
-                    try:
-                        newc=mine_domain_contracts(key,model,DB,_d,wanted=2)
-                        existing=merge_contracts(existing,newc)
-                        mining_log.append({"domain":_d,"python_validated":len(newc),"contract_types":[x.get("contract_type") for x in newc]})
-                    except Exception as _ex:
-                        mining_log.append({"domain":_d,"python_validated":0,"error":str(_ex)})
-            st.session_state["R51_CONTRACTS"]=existing
-            st.session_state["R51_MINING_LOG"]=mining_log
-    if "R51_MINING_LOG" in st.session_state:
-        with st.expander("기존 contract 채굴 결과", expanded=True):
-            st.json(st.session_state["R51_MINING_LOG"])
-
-    _pre_contracts=list(st.session_state.get("R51_CONTRACTS",[]))
+    st.caption("저장된 contract를 보존한 채 현재 hybrid coverage에서 실제로 부족한 영역만 contrast-set으로 보충합니다.")
+    _pre_contracts=list(st.session_state.get("R54_CONTRACTS",[]))
     _pre_inv=contract_inventory(_pre_contracts,domains) if contract_inventory else {"all_domains_two":False,"domains":{}}
     _missing=[d for d,v in (_pre_inv.get("domains") or {}).items() if not v.get("target_met")]
     if _missing:
@@ -339,32 +319,32 @@ with tabs[2]:
             _obj=json.loads(_uploaded_contracts.getvalue().decode("utf-8"))
             _rows=_obj.get("contracts",[]) if isinstance(_obj,dict) else []
             if _rows:
-                st.session_state["R51_CONTRACTS"]=_rows
-                _r51_contracts=list(_rows)
+                st.session_state["R54_CONTRACTS"]=_rows
                 st.success(f"R54 contract {len(_rows)}개를 불러왔습니다.")
         except Exception as _ex:
             st.error("contract JSON 불러오기 실패: "+str(_ex))
-    if _r51_contracts:
-        st.download_button("R54 contract JSON 저장", data=json.dumps({"schema_version":"R54-CONTRAST-GAP-V1","contracts":_r51_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
+    _r54_contracts=list(st.session_state.get("R54_CONTRACTS",[]))
+    if _r54_contracts:
+        st.download_button("R54 contract JSON 저장", data=json.dumps({"schema_version":"R54-CONTRAST-GAP-V1","contracts":_r54_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
     if combined_coverage_inventory:
-        _hybrid_inv=combined_coverage_inventory(DB,_r51_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set()))
+        _hybrid_inv=combined_coverage_inventory(DB,_r54_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set()))
         st.caption(f"R54 실제 hybrid 후보 coverage: {_hybrid_inv.get('candidate_slots',0)}/{_hybrid_inv.get('target',18)} · 기존 Judge PASS 5개 포함 · 같은 contract_type 중복은 1개로 계산")
         with st.expander("R54 hybrid coverage inventory", expanded=True):
             st.json(_hybrid_inv)
     else:
         _hybrid_inv={"all_domains_two":False,"domains":{}}
 
-    _r53_missing=[d for d,v in (_hybrid_inv.get("domains") or {}).items() if not v.get("target_met")]
-    if _r53_missing:
-        st.warning("R54 실제 부족 영역: "+", ".join(f"{d}(-{(_hybrid_inv.get('domains') or {}).get(d,{}).get('missing',0)})" for d in _r53_missing))
-    if st.button("R54 부족 영역 contrast-set 보충 채굴", use_container_width=True, disabled=(mine_r54_gap_contracts is None or not _r53_missing)):
+    _r54_missing=[d for d,v in (_hybrid_inv.get("domains") or {}).items() if not v.get("target_met")]
+    if _r54_missing:
+        st.warning("R54 실제 부족 영역: "+", ".join(f"{d}(-{(_hybrid_inv.get('domains') or {}).get(d,{}).get('missing',0)})" for d in _r54_missing))
+    if st.button("R54 부족 영역 contrast-set 보충 채굴", use_container_width=True, disabled=(mine_r54_gap_contracts is None or not _r54_missing)):
         if not (use_ai and key):
             st.error("R54 보충 채굴에는 OPENAI_API_KEY가 필요합니다.")
         else:
-            existing=list(st.session_state.get("R51_CONTRACTS",[]))
+            existing=list(st.session_state.get("R54_CONTRACTS",[]))
             r53_log=[]
             with st.spinner("기존 계약을 보존하고 실제 부족 영역만 contrast-set 기반으로 보충 채굴 중..."):
-                for _d in _r53_missing:
+                for _d in _r54_missing:
                     before=combined_coverage_inventory(DB,existing,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())).get('candidate_slots',0)
                     try:
                         newc=mine_r54_gap_contracts(key,model,DB,_d,existing,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set()))
@@ -373,18 +353,16 @@ with tabs[2]:
                         r53_log.append({"domain":_d,"before_total":before,"added":len(newc),"after_total":after,"contract_types":[x.get("contract_type") for x in newc]})
                     except Exception as _ex:
                         r53_log.append({"domain":_d,"before_total":before,"added":0,"error":str(_ex)})
-            st.session_state["R51_CONTRACTS"]=existing
+            st.session_state["R54_CONTRACTS"]=existing
             st.session_state["R54_SUPPLEMENT_LOG"]=r53_log
             st.rerun()
     if "R54_SUPPLEMENT_LOG" in st.session_state:
         with st.expander("R54 contrast-set 보충 결과", expanded=True):
             st.json(st.session_state["R54_SUPPLEMENT_LOG"])
 
-    _r51_contracts=list(st.session_state.get("R51_CONTRACTS",[]))
-    if _r51_contracts:
-        st.download_button("R54 contract JSON 저장", data=json.dumps({"schema_version":"R54-CONTRAST-GAP-V1","contracts":_r51_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
+    _r54_contracts=list(st.session_state.get("R54_CONTRACTS",[]))
     if combined_coverage_inventory:
-        _hybrid_inv=combined_coverage_inventory(DB,_r51_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set()))
+        _hybrid_inv=combined_coverage_inventory(DB,_r54_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set()))
 
     if st.button("R54 신규 contract만 Judge 전수검증", type="primary", use_container_width=True, disabled=(make_hybrid_contract_validation_suite is None)):
         if not (use_ai_judge and key):
@@ -394,7 +372,7 @@ with tabs[2]:
         else:
             with st.spinner("기존 PASS 5개는 재심사하지 않고 신규 contract만 각각 Judge 1회 전수검증 중..."):
                 try:
-                    _suite=make_hybrid_contract_validation_suite(DB,_r51_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed),ai_quality_enabled=True)
+                    _suite=make_hybrid_contract_validation_suite(DB,_r54_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed),ai_quality_enabled=True)
                     st.session_state["R54_HYBRID_SUITE"]=_suite
                 except Exception as _ex:
                     st.error(str(_ex))
@@ -407,16 +385,6 @@ with tabs[2]:
             st.json({"failure_class_counts":_hs.get("failure_class_counts",{}),"domain_summary":_hs.get("domain_summary",{}),"contract_type_summary":_hs.get("contract_type_summary",{})})
         with st.expander("R54 신규 Judge 원본", expanded=False):
             st.json(_hs.get("reviews",[]))
-
-    if "R51_CONTRACT_SUITE" in st.session_state:
-        _suite=st.session_state["R51_CONTRACT_SUITE"]
-        _sm=_suite.get("summary",{})
-        st.markdown("### 🧪 이전 contract 전수검증 결과")
-        st.caption(f"구성 {_sm.get('constructed',0)}/18 · Judge {_sm.get('judge_tested',0)}/18 · PASS {_sm.get('pass',0)} · REJECT {_sm.get('reject',0)}")
-        with st.expander("failure class / 영역 / contract 유형 집계", expanded=True):
-            st.json({"failure_class_counts":_suite.get("failure_class_counts",{}),"domain_summary":_suite.get("domain_summary",{}),"contract_type_summary":_suite.get("contract_type_summary",{})})
-        with st.expander("18개 Judge 원본", expanded=False):
-            st.json(_suite.get("reviews",[]))
 
     try:
         _cov_inv=coverage_inventory(DB,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())) if coverage_inventory else {"targets":[],"target_total":18,"all_domains_two_targets":False,"error":"coverage_inventory unavailable"}
