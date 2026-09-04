@@ -4537,7 +4537,7 @@ def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_
         q=contract_to_question(c)
         if not q:
             raise RuntimeError('R55 contract 문항 구성 실패: '+str(c.get('contract_id','')))
-        q['number']=idx; q['section']='R54_NEW_CONTRACTS'; q['coverage_key']=f"{q.get('domain')}::{c.get('contract_id')}"
+        q['number']=idx; q['section']='R55_NEW_CONTRACTS'; q['coverage_key']=f"{q.get('domain')}::{c.get('contract_id')}"
         questions.append(q)
         construction.append({'number':idx,'domain':q.get('domain'),'contract_id':c.get('contract_id'),
                              'contract_type':c.get('contract_type'),'constructed':True})
@@ -4588,7 +4588,7 @@ def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_
         row['final_verified_slots']=min(2,int(row.get('historical_verified',0))+int(row.get('new_pass',0)))
         row['target_met']=row['final_verified_slots']>=2
 
-    return {'mode':'R54_HYBRID_EVIDENCE_SUITE','builder_api_version':'CONTRAST-GAP-R54-20260904',
+    return {'mode':'R55_HYBRID_EVIDENCE_SUITE','builder_api_version':BUILDER_API_VERSION,
             'candidate_inventory':inv,'historical_verified':historical,'construction':construction,
             'questions':questions,'reviews':reviews,'failure_class_counts':by_signal,'contract_type_summary':by_type,
             'domain_summary':by_domain,

@@ -2,7 +2,7 @@ import json, os, re, sqlite3, hashlib
 from pathlib import Path
 
 CONTRACT_FILE='capability_contracts.json'
-SCHEMA_VERSION='R54-CONTRAST-GAP-V1'
+SCHEMA_VERSION='R55-RERUN-SAFE-V1'
 ALLOWED_TYPES={
     'scenario_constraint_application',
     'error_repair_transfer',
@@ -360,7 +360,7 @@ def combined_coverage_inventory(db_path, contracts, domains, formula_domains=Non
     return {'domains':rows,'candidate_slots':total,'target':len(domains)*2,
             'all_domains_two':all(v['target_met'] for v in rows.values()),
             'missing_domains':[d for d,v in rows.items() if not v['target_met']],
-            'note':'R53: 기존 실제 Judge PASS capability + 서로 다른 PYTHON_VALIDATED contract 유형을 합산. 동일 contract_type 반복은 1개로 계산.'}
+            'note':'R55: 기존 실제 Judge PASS capability + 서로 다른 PYTHON_VALIDATED contract 유형을 합산. 동일 contract_type 반복은 1개로 계산.'}
 
 
 def _pair_packet(db_path, domain, limit=84):
@@ -457,7 +457,7 @@ def select_hybrid_validation_contracts(db_path, contracts, domains, formula_doma
             'new_contract_count':len(selected)}
 
 # ---------------- R54 contrast-set gap mining ----------------
-SCHEMA_VERSION='R54-CONTRAST-GAP-V1'
+SCHEMA_VERSION='R55-RERUN-SAFE-V1'
 
 def _title_tokens(s):
     return set(re.findall(r'[가-힣A-Za-z]{2,}', _clean(s)))

@@ -1,4 +1,4 @@
-import os, json, sqlite3, copy
+import os, json, sqlite3, copy, hashlib
 from pathlib import Path
 from datetime import datetime
 
@@ -296,7 +296,7 @@ with tabs[2]:
             "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
-        "R51은 R49의 0-pass directional/cause 구조를 다시 쓰지 않습니다. 정규식으로 관계를 억지 추출하지 않고, "
+        "R55는 R49의 0-pass directional/cause 구조를 최종 후보로 다시 쓰지 않습니다. 정규식으로 관계를 억지 추출하지 않고, "
         "서브노트에서 출제 가능한 2단계 reasoning contract를 영역별 1회 채굴한 뒤 Python grounding 검사를 통과한 계약만 18개 전수 Judge 후보로 사용합니다."
     )
 
@@ -304,7 +304,7 @@ with tabs[2]:
         from capability_contracts import mine_domain_contracts, mine_missing_contracts, merge_contracts, contract_inventory, combined_coverage_inventory, mine_r54_gap_contracts
     except Exception as _ce:
         mine_domain_contracts=mine_missing_contracts=merge_contracts=contract_inventory=combined_coverage_inventory=mine_r54_gap_contracts=None
-        st.error("R54 capability_contracts 로드 실패: "+str(_ce))
+        st.error("R55 capability_contracts 로드 실패: "+str(_ce))
 
     st.markdown("##### ⛏️ R55 hybrid contract 보강")
     st.caption("저장된 contract를 보존한 채 현재 hybrid coverage에서 실제로 부족한 영역만 contrast-set으로 보충합니다.")
