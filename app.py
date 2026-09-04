@@ -10,6 +10,7 @@ make_quality_sample = getattr(exam_builder_module, "make_quality_sample", None)
 make_capability_validation_suite = getattr(exam_builder_module, "make_capability_validation_suite", None)
 make_contract_validation_suite = getattr(exam_builder_module, "make_contract_validation_suite", None)
 make_hybrid_contract_validation_suite = getattr(exam_builder_module, "make_hybrid_contract_validation_suite", None)
+certify_r57_missing_slots = getattr(exam_builder_module, "certify_r57_missing_slots", None)
 try:
     from quality_regression import run_release_regression
     from reasoning_capabilities import coverage_inventory, validation_inventory
@@ -33,7 +34,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · RERUN-SAFE-HYBRID-R55-20260904")
+st.caption("배포 버전: FINAL-STABLE-20260831 · ONECLICK-JUDGED-R57-20260904")
 
 def secret(name, default=""):
     try:
@@ -296,104 +297,64 @@ with tabs[2]:
             "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
-        "R55는 R49의 0-pass directional/cause 구조를 최종 후보로 다시 쓰지 않습니다. 정규식으로 관계를 억지 추출하지 않고, "
-        "서브노트에서 출제 가능한 2단계 reasoning contract를 영역별 1회 채굴한 뒤 Python grounding 검사를 통과한 계약만 18개 전수 Judge 후보로 사용합니다."
+        "R57은 R55 0/13 실패와 R56의 Judge source_context 누락을 함께 수정합니다. Python 후보 수가 아니라 실제 Judge PASS만 18/18 coverage에 반영합니다."
     )
 
     try:
-        from capability_contracts import mine_domain_contracts, mine_missing_contracts, merge_contracts, contract_inventory, combined_coverage_inventory, mine_r54_gap_contracts
+        from capability_contracts import merge_contracts, combined_coverage_inventory
     except Exception as _ce:
-        mine_domain_contracts=mine_missing_contracts=merge_contracts=contract_inventory=combined_coverage_inventory=mine_r54_gap_contracts=None
-        st.error("R55 capability_contracts 로드 실패: "+str(_ce))
+        merge_contracts=combined_coverage_inventory=None
+        st.error("R57 capability_contracts 로드 실패: "+str(_ce))
 
-    st.markdown("##### ⛏️ R55 hybrid contract 보강")
-    st.caption("저장된 contract를 보존한 채 현재 hybrid coverage에서 실제로 부족한 영역만 contrast-set으로 보충합니다.")
-    _pre_contracts=list(st.session_state.get("R54_CONTRACTS",[]))
-    _pre_inv=contract_inventory(_pre_contracts,domains) if contract_inventory else {"all_domains_two":False,"domains":{}}
-    _missing=[d for d,v in (_pre_inv.get("domains") or {}).items() if not v.get("target_met")]
-    if _missing:
-        st.caption("부족 영역: "+", ".join(f"{d}(-{(_pre_inv.get('domains') or {}).get(d,{}).get('missing',0)})" for d in _missing))
-    _uploaded_contracts=st.file_uploader("R55 contract JSON 불러오기", type=["json"], key="R55_CONTRACT_UPLOAD")
+    st.markdown("##### ✅ R57 한 번에 부족 슬롯 생성 + Judge 인증")
+    st.caption("한 번의 버튼으로 각 부족 영역의 고정 후보 풀을 먼저 생성하고, Python hard gate를 통과한 후보만 실제 Judge에 1회씩 보냅니다. PASS한 유형만 coverage에 저장됩니다. Judge REJECT를 본 뒤 새 문항을 다시 쓰는 적응형 재시도는 하지 않습니다.")
+    _uploaded_contracts=st.file_uploader("R57 contract JSON 불러오기", type=["json"], key="R57_CONTRACT_UPLOAD")
     if _uploaded_contracts is not None:
         try:
-            _raw=_uploaded_contracts.getvalue()
-            _upload_sha=hashlib.sha256(_raw).hexdigest()
-            # Streamlit reruns keep the uploader populated. Import the same file only once;
-            # otherwise a supplement-mining rerun would overwrite newly mined session contracts
-            # with the older uploaded snapshot.
-            if st.session_state.get("R55_IMPORTED_CONTRACT_SHA") != _upload_sha:
-                _obj=json.loads(_raw.decode("utf-8"))
-                _rows=_obj.get("contracts",[]) if isinstance(_obj,dict) else []
-                if _rows:
-                    st.session_state["R54_CONTRACTS"]=_rows
-                    st.session_state["R55_IMPORTED_CONTRACT_SHA"]=_upload_sha
-                    st.success(f"contract {len(_rows)}개를 1회 불러왔습니다. 같은 파일은 rerun 때 다시 덮어쓰지 않습니다.")
+            _raw=_uploaded_contracts.getvalue(); _upload_sha=hashlib.sha256(_raw).hexdigest()
+            if st.session_state.get("R57_IMPORTED_CONTRACT_SHA") != _upload_sha:
+                _obj=json.loads(_raw.decode("utf-8")); _rows=_obj.get("contracts",[]) if isinstance(_obj,dict) else []
+                st.session_state["R57_CONTRACTS"]=list(_rows or [])
+                st.session_state["R57_IMPORTED_CONTRACT_SHA"]=_upload_sha
+                st.success(f"contract {len(_rows or [])}개를 1회 불러왔습니다. R51~R56 구형 계약은 보존되더라도 R57 verified coverage에는 계산하지 않습니다.")
         except Exception as _ex:
             st.error("contract JSON 불러오기 실패: "+str(_ex))
-    _r54_contracts=list(st.session_state.get("R54_CONTRACTS",[]))
-    if _r54_contracts:
-        st.download_button("R55 contract JSON 저장", data=json.dumps({"schema_version":"R55-RERUN-SAFE-V1","contracts":_r54_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
-    if combined_coverage_inventory:
-        _hybrid_inv=combined_coverage_inventory(DB,_r54_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set()))
-        st.caption(f"R55 실제 hybrid 후보 coverage: {_hybrid_inv.get('candidate_slots',0)}/{_hybrid_inv.get('target',18)} · 기존 Judge PASS 5개 포함 · 같은 contract_type 중복은 1개로 계산")
-        with st.expander("R55 hybrid coverage inventory", expanded=True):
-            st.json(_hybrid_inv)
-    else:
-        _hybrid_inv={"all_domains_two":False,"domains":{}}
-
-    _r54_missing=[d for d,v in (_hybrid_inv.get("domains") or {}).items() if not v.get("target_met")]
-    if _r54_missing:
-        st.warning("R55 실제 부족 영역: "+", ".join(f"{d}(-{(_hybrid_inv.get('domains') or {}).get(d,{}).get('missing',0)})" for d in _r54_missing))
-    if st.button("R55 부족 영역 contrast-set 보충 채굴", use_container_width=True, disabled=(mine_r54_gap_contracts is None or not _r54_missing)):
-        if not (use_ai and key):
-            st.error("R55 보충 채굴에는 OPENAI_API_KEY가 필요합니다.")
+    if "R57_CONTRACTS" not in st.session_state:
+        # Preserve old session artifacts only as archive data; they are not counted until R57 Judge PASS.
+        st.session_state["R57_CONTRACTS"]=list(st.session_state.get("R56_CONTRACTS",st.session_state.get("R54_CONTRACTS",[])))
+    _contracts=list(st.session_state.get("R57_CONTRACTS",[]))
+    if _contracts:
+        st.download_button("R57 contract JSON 저장", data=json.dumps({"schema_version":"R57-ONECLICK-JUDGED-V1","contracts":_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
+    _r57_inv=combined_coverage_inventory(DB,_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())) if combined_coverage_inventory else {"all_domains_two":False,"domains":{},"verified_slots":0,"target":18}
+    st.caption(f"R57 실제 AI_VERIFIED coverage: {_r57_inv.get('verified_slots',0)}/{_r57_inv.get('target',18)} · Python 통과만으로는 점수를 올리지 않습니다.")
+    with st.expander("R57 verified coverage inventory", expanded=True): st.json(_r57_inv)
+    _missing=[d for d,v in (_r57_inv.get("domains") or {}).items() if not v.get("target_met")]
+    if _missing:
+        st.warning("현재 실제 부족 영역: "+", ".join(f"{d}(-{(_r57_inv.get('domains') or {}).get(d,{}).get('missing',0)})" for d in _missing))
+    if st.button("R57 부족 슬롯 한 번에 생성 + Judge 인증", type="primary", use_container_width=True, disabled=(certify_r57_missing_slots is None or not _missing)):
+        if not (use_ai and use_ai_judge and key):
+            st.error("R57 원클릭 인증에는 AI Writer, AI Judge, OPENAI_API_KEY가 모두 필요합니다.")
         else:
-            existing=list(st.session_state.get("R54_CONTRACTS",[]))
-            r53_log=[]
-            with st.spinner("기존 계약을 보존하고 실제 부족 영역만 contrast-set 기반으로 보충 채굴 중..."):
-                for _d in _r54_missing:
-                    before=combined_coverage_inventory(DB,existing,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())).get('candidate_slots',0)
-                    try:
-                        newc=mine_r54_gap_contracts(key,model,DB,_d,existing,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set()))
-                        existing=merge_contracts(existing,newc)
-                        after=combined_coverage_inventory(DB,existing,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())).get('candidate_slots',0)
-                        r53_log.append({"domain":_d,"before_total":before,"added":len(newc),"after_total":after,"contract_types":[x.get("contract_type") for x in newc]})
-                    except Exception as _ex:
-                        r53_log.append({"domain":_d,"before_total":before,"added":0,"error":str(_ex)})
-            st.session_state["R54_CONTRACTS"]=existing
-            st.session_state["R54_SUPPLEMENT_LOG"]=r53_log
-            st.rerun()
-    if "R54_SUPPLEMENT_LOG" in st.session_state:
-        with st.expander("R55 contrast-set 보충 결과", expanded=True):
-            st.json(st.session_state["R54_SUPPLEMENT_LOG"])
-
-    _r54_contracts=list(st.session_state.get("R54_CONTRACTS",[]))
-    if combined_coverage_inventory:
-        _hybrid_inv=combined_coverage_inventory(DB,_r54_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set()))
-
-    if st.button("R55 신규 contract만 Judge 전수검증", type="primary", use_container_width=True, disabled=(make_hybrid_contract_validation_suite is None)):
-        if not (use_ai_judge and key):
-            st.error("R55 전수검증에는 AI Judge와 API 키가 필요합니다.")
-        elif not _hybrid_inv.get("all_domains_two"):
-            st.error("기존 Judge PASS + 서로 다른 PYTHON_VALIDATED contract를 합친 후보 coverage가 아직 18/18이 아닙니다. 실제 부족 영역만 먼저 보충하세요.")
-        else:
-            with st.spinner("기존 PASS 5개는 재심사하지 않고 신규 contract만 각각 Judge 1회 전수검증 중..."):
+            with st.spinner("실제 기출 구조 참조 → 고정 후보 풀 생성 → Python hard gate → source context 포함 Judge 인증 중..."):
                 try:
-                    _suite=make_hybrid_contract_validation_suite(DB,_r54_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed),ai_quality_enabled=True)
-                    st.session_state["R54_HYBRID_SUITE"]=_suite
+                    _run=certify_r57_missing_slots(DB,_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed))
+                    st.session_state["R57_CONTRACTS"]=_run.get("contracts",_contracts)
+                    st.session_state["R57_CERT_RUN"]=_run
+                    st.rerun()
                 except Exception as _ex:
-                    st.error(str(_ex))
-    if "R54_HYBRID_SUITE" in st.session_state:
-        _hs=st.session_state["R54_HYBRID_SUITE"]
-        _sm=_hs.get("summary",{})
-        st.markdown("### 🧪 R55 hybrid 전체 coverage 검증 결과")
-        st.caption(f"기존 PASS {_sm.get('historical_verified',0)} · 신규 Judge {_sm.get('judge_tested',0)} · 신규 PASS {_sm.get('new_pass',0)} · 신규 REJECT {_sm.get('new_reject',0)} · 최종 AI_VERIFIED {_sm.get('final_ai_verified',0)}/18")
-        with st.expander("R55 failure class / 영역 / contract 유형", expanded=True):
-            st.json({"failure_class_counts":_hs.get("failure_class_counts",{}),"domain_summary":_hs.get("domain_summary",{}),"contract_type_summary":_hs.get("contract_type_summary",{})})
-        with st.expander("R55 신규 Judge 원본", expanded=False):
-            st.json(_hs.get("reviews",[]))
-
-    st.info("R55 최종 검증 경로는 위 hybrid inventory와 'R55 신규 contract만 Judge 전수검증' 하나만 사용합니다. R49 directional/cause 후보표와 구형 18 capability 전수검증은 폐기되었습니다.")
+                    st.error("R57 원클릭 인증 실패: "+str(_ex))
+    if "R57_CERT_RUN" in st.session_state:
+        _rr=st.session_state["R57_CERT_RUN"]; _sm=_rr.get("summary",{})
+        st.markdown("### 🧪 R57 원클릭 인증 결과")
+        st.caption(f"시작 {_sm.get('before_verified',0)}/18 → 현재 {_sm.get('after_verified',0)}/18 · Judge {_sm.get('judge_tested',0)}회 · PASS {_sm.get('judge_pass',0)} · REJECT {_sm.get('judge_reject',0)}")
+        with st.expander("영역별 생성/검증 로그", expanded=True): st.json(_rr.get("domain_logs",[]))
+        with st.expander("Judge 실패 유형", expanded=True): st.json(_rr.get("failure_class_counts",{}))
+        with st.expander("Judge 원본 결과", expanded=False): st.json(_rr.get("reviews",[]))
+        if _sm.get("coverage_ready"):
+            st.success("R57 실제 AI_VERIFIED 18/18 달성. 이제 최종 A/B 생성으로 넘어갈 수 있습니다.")
+        else:
+            st.warning("이번 고정 후보 풀 안에서 통과하지 못한 슬롯이 남았습니다. 아래 로그가 원인 진단용으로 보존됩니다.")
+    st.info("R57 핵심 수정: Judge에 빈 source_context를 넘기지 않습니다. 각 문항의 실제 anchor 원문과 evidence를 함께 전달하며, R51~R56 Python-only 후보는 최종 coverage에 다시 들어오지 않습니다.")
 
     st.divider()
     st.caption("아래 SAMPLE6은 개별 확인용 보조 기능입니다. 18 capability 최종 coverage 판정에는 사용하지 않습니다.")

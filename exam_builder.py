@@ -1,5 +1,5 @@
 import copy
-BUILDER_API_VERSION = "RERUN-SAFE-HYBRID-R55-20260904"
+BUILDER_API_VERSION = "ONECLICK-JUDGED-R57-20260904"
 
 import random, math, re, sqlite3, itertools
 from difflib import SequenceMatcher
@@ -4508,7 +4508,7 @@ def make_contract_validation_suite(db_path, contracts, domains=None, api_key="",
             'summary':{'constructed':len(questions),'judge_tested':tested,'pass':passed,'reject':rejected,'all_pass':passed==18 and tested==18},
             'final_ab_coverage_ready':bool(passed==18 and tested==18)}
 
-BUILDER_API_VERSION = "RERUN-SAFE-HYBRID-R55-20260904"
+BUILDER_API_VERSION = "ONECLICK-JUDGED-R57-20260904"
 
 # R53: hybrid evidence suite. Reuse historical Judge PASS evidence and Judge only new contracts.
 def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_key="", model="gpt-5.6-luna",
@@ -4526,18 +4526,18 @@ def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_
     inv=combined_coverage_inventory(db_path,contracts,domains,formula_domains)
     if not inv.get('all_domains_two'):
         gaps=[d for d,v in inv.get('domains',{}).items() if not v.get('target_met')]
-        raise RuntimeError('R55 hybrid 전수검증 시작 차단: 기존 Judge PASS + 서로 다른 contract 후보가 18/18이 아닙니다. 부족 영역: '+', '.join(gaps))
+        raise RuntimeError('R56 strict hybrid 전수검증 시작 차단: 기존 Judge PASS + 서로 다른 contract 후보가 18/18이 아닙니다. 부족 영역: '+', '.join(gaps))
     sel=select_hybrid_validation_contracts(db_path,contracts,domains,formula_domains)
     if not sel.get('ready'):
-        raise RuntimeError('R55 hybrid contract 선택 실패: '+str(sel.get('gaps')))
+        raise RuntimeError('R56 strict contract 선택 실패: '+str(sel.get('gaps')))
 
     selected=list(sel.get('selected',[]))
     questions=[]; construction=[]
     for idx,c in enumerate(selected,1):
         q=contract_to_question(c)
         if not q:
-            raise RuntimeError('R55 contract 문항 구성 실패: '+str(c.get('contract_id','')))
-        q['number']=idx; q['section']='R55_NEW_CONTRACTS'; q['coverage_key']=f"{q.get('domain')}::{c.get('contract_id')}"
+            raise RuntimeError('R56 contract 문항 구성 실패: '+str(c.get('contract_id','')))
+        q['number']=idx; q['section']='R56_NEW_CONTRACTS'; q['coverage_key']=f"{q.get('domain')}::{c.get('contract_id')}"
         questions.append(q)
         construction.append({'number':idx,'domain':q.get('domain'),'contract_id':c.get('contract_id'),
                              'contract_type':c.get('contract_type'),'constructed':True})
@@ -4550,7 +4550,7 @@ def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_
             try:
                 rv=judge_question(api_key,jm,q,"",style)
             except Exception as ex:
-                rv={'pass':False,'reason':'R55 contract Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+                rv={'pass':False,'reason':'R56 contract Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
         else:
             rv={'pass':None,'reason':'AI Judge 미실행','fatal_flags':[],'scores':{}}
         signals=_coverage_failure_signals(rv,q) if rv.get('pass') is not None else []
@@ -4588,10 +4588,105 @@ def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_
         row['final_verified_slots']=min(2,int(row.get('historical_verified',0))+int(row.get('new_pass',0)))
         row['target_met']=row['final_verified_slots']>=2
 
-    return {'mode':'R55_HYBRID_EVIDENCE_SUITE','builder_api_version':BUILDER_API_VERSION,
+    return {'mode':'R56_FAILURE_INFORMED_SUITE','builder_api_version':BUILDER_API_VERSION,
             'candidate_inventory':inv,'historical_verified':historical,'construction':construction,
             'questions':questions,'reviews':reviews,'failure_class_counts':by_signal,'contract_type_summary':by_type,
             'domain_summary':by_domain,
             'summary':{'coverage_slots':18,'historical_verified':historical_count,'new_constructed':len(questions),
                        'judge_tested':tested,'new_pass':passed,'new_reject':rejected,'final_ai_verified':final_verified,
                        'coverage_ready':all(x.get('target_met') for x in by_domain.values())}}
+
+# ================= R57 one-click synthesis + Judge certification =================
+BUILDER_API_VERSION = "ONECLICK-JUDGED-R57-20260904"
+
+def certify_r57_missing_slots(db_path, contracts, domains=None, api_key="", model="gpt-5.6-luna",
+                              judge_model=None, seed=None):
+    """One user action: fixed-pool synthesis -> strict Python gate -> Judge once/candidate -> keep PASS only.
+
+    Candidate pools are generated before any Judge result is observed. A rejected candidate never
+    triggers adaptive rewriting. This preserves clean evidence while avoiding another 0/13 final-suite waste.
+    """
+    from capability_contracts import (combined_coverage_inventory, synthesize_r57_pool,
+                                      r57_contract_to_question, validate_r57_contract, merge_contracts)
+    if domains is None: domains=list(DEFAULT_DOMAINS)
+    formula_domains=getattr(__import__(__name__),'FORMULA_DOMAINS',FORMULA_DOMAINS)
+    existing=list(contracts or [])
+    before=combined_coverage_inventory(db_path,existing,domains,formula_domains)
+    style=official_style_profile(db_path)
+    jm=judge_model or model
+    domain_logs=[]; judge_reviews=[]; accepted=[]
+
+    for d in domains:
+        dinfo=(combined_coverage_inventory(db_path,existing,domains,formula_domains).get('domains',{}).get(d,{}) or {})
+        need=int(dinfo.get('missing',0) or 0)
+        if need<=0:
+            domain_logs.append({'domain':d,'need_before':0,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'skipped':'already_verified'})
+            continue
+        try:
+            pool=synthesize_r57_pool(api_key,model,db_path,d,existing,need)
+        except Exception as ex:
+            domain_logs.append({'domain':d,'need_before':need,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'error':'writer:'+str(ex)})
+            continue
+        tested=passed=kept=0; seen_types={x.get('contract_type') for x in existing if x.get('domain')==d and x.get('status')=='R57_AI_VERIFIED'}
+        for c in pool:
+            ok,detail=validate_r57_contract(db_path,d,c)
+            if not ok: continue
+            typ=str(c.get('contract_type') or '')
+            if typ in seen_types: continue
+            q=r57_contract_to_question(c)
+            if not q: continue
+            tested+=1
+            try:
+                # Critical R57 fix: the external Judge receives the exact anchor context and evidence.
+                rv=judge_question(api_key,jm,q,q.get('source_context_override',''),style)
+            except Exception as ex:
+                rv={'pass':False,'reason':'R57 Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+            signals=_coverage_failure_signals(rv,q) if rv.get('pass') is not None else []
+            judge_reviews.append({'domain':d,'contract_id':c.get('contract_id'),'contract_type':typ,'topic':c.get('topic'),
+                                  'pass':rv.get('pass'),'reason':rv.get('reason',''),'scores':rv.get('scores',{}),
+                                  'fatal_flags':rv.get('fatal_flags',[]),'failure_signals':signals,
+                                  'source_context_chars':len(q.get('source_context_override','')),'evidence_count':len(q.get('evidence',[]) or [])})
+            if rv.get('pass') is True:
+                passed+=1
+                cc=copy.deepcopy(c); cc['status']='R57_AI_VERIFIED'; cc['ai_quality']=copy.deepcopy(rv); cc['judge_model']=jm
+                existing=merge_contracts(existing,[cc]); accepted.append(cc); seen_types.add(typ); kept+=1
+                cur=combined_coverage_inventory(db_path,existing,domains,formula_domains).get('domains',{}).get(d,{})
+                if int(cur.get('missing',0) or 0)<=0: break
+        after_d=combined_coverage_inventory(db_path,existing,domains,formula_domains).get('domains',{}).get(d,{})
+        domain_logs.append({'domain':d,'need_before':need,'pool_constructed':len(pool),'python_validated':len(pool),
+                            'judge_tested':tested,'judge_pass':passed,'accepted':kept,'missing_after':int(after_d.get('missing',0) or 0),
+                            'accepted_types':[x.get('contract_type') for x in accepted if x.get('domain')==d]})
+
+    after=combined_coverage_inventory(db_path,existing,domains,formula_domains)
+    failure_counts={}
+    for r in judge_reviews:
+        if r.get('pass') is False:
+            for sig in r.get('failure_signals',[]): failure_counts[sig]=failure_counts.get(sig,0)+1
+    return {'mode':'R57_ONECLICK_CERTIFICATION','builder_api_version':BUILDER_API_VERSION,
+            'contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,
+            'domain_logs':domain_logs,'reviews':judge_reviews,'failure_class_counts':failure_counts,
+            'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),
+                       'target':after.get('target',18),'judge_tested':len(judge_reviews),
+                       'judge_pass':sum(1 for r in judge_reviews if r.get('pass') is True),
+                       'judge_reject':sum(1 for r in judge_reviews if r.get('pass') is False),
+                       'coverage_ready':bool(after.get('all_domains_two'))}}
+
+def make_hybrid_contract_validation_suite(db_path, contracts, domains=None, api_key="", model="gpt-5.6-luna",
+                                          judge_model=None, seed=None, ai_quality_enabled=True):
+    """R57 compatibility report. New R57 contracts have already received their real Judge verdict.
+    This function does not spend API again and cannot double-judge accepted contracts.
+    """
+    from capability_contracts import combined_coverage_inventory, historical_verified_types
+    if domains is None: domains=list(DEFAULT_DOMAINS)
+    inv=combined_coverage_inventory(db_path,contracts,domains,FORMULA_DOMAINS)
+    base=historical_verified_types(db_path,domains,FORMULA_DOMAINS)
+    historical_count=sum(len(set(base.get(d,[]) or [])) for d in domains)
+    rows=[]
+    for c in contracts or []:
+        if c.get('status')!='R57_AI_VERIFIED': continue
+        rv=c.get('ai_quality') or {}
+        rows.append({'domain':c.get('domain'),'contract_id':c.get('contract_id'),'contract_type':c.get('contract_type'),
+                     'pass':True,'scores':rv.get('scores',{}),'fatal_flags':rv.get('fatal_flags',[]),'reason':rv.get('reason','')})
+    return {'mode':'R57_NO_REJUDGE_REPORT','builder_api_version':BUILDER_API_VERSION,'candidate_inventory':inv,
+            'reviews':rows,'summary':{'historical_verified':historical_count,'new_pass':len(rows),
+                                     'final_ai_verified':inv.get('verified_slots',0),'coverage_ready':bool(inv.get('all_domains_two'))}}

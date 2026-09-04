@@ -93,6 +93,16 @@ JSON만 출력:
     }
 
 def judge_question(api_key, model, question, source_context="", style_profile=""):
+    # R57 safety net: many legacy callers passed an empty source_context.
+    # Recover the exact per-question context/evidence here so every Judge path gets grounding evidence.
+    if not str(source_context or "").strip():
+        source_context=str(question.get("source_context_override","") or "").strip()
+    if not str(source_context or "").strip():
+        ev=question.get("evidence",[])
+        if isinstance(ev,(list,tuple)):
+            source_context="\n".join(str(x) for x in ev if str(x).strip())
+        elif ev:
+            source_context=str(ev)
     """
     R10: 문항당 AI 품질심사는 1회만 호출한다.
     DB/Python grounding validator가 사실·정답을 먼저 검증하고,

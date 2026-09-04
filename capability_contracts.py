@@ -558,3 +558,414 @@ JSON 하나만 출력:
         valid.append(x); blocked.add(typ)
         if len(valid)>=need: break
     return valid
+
+# ================= R56: failure-informed evidence-bound contracts =================
+SCHEMA_VERSION='R56-EVIDENCE-BOUND-V1'
+R56_ALLOWED_TYPES={
+    'multi_evidence_constraint_resolution',
+    'rule_composition_transfer',
+    'contrastive_diagnosis_transfer',
+}
+R56_RETIRED_ZERO_PASS_TYPES={
+    'scenario_constraint_application','structured_mapping_application','error_repair_transfer',
+    'comparative_case_discrimination','threshold_decision','constraint_choice_justification',
+    'ordered_sequence_application','relation_composition',
+}
+
+def _r56_char_overlap(a,b):
+    aa=_char_bigrams(a); bb=_char_bigrams(b)
+    return (len(aa & bb)/max(1,len(aa))) if aa else 0.0
+
+def validate_r56_contract(db_path, domain, contract):
+    """Strict pre-Judge gate based on the actual R55 0/13 failure profile.
+
+    Goal: reject shallow/public-material-heavy contracts before any Judge call.
+    Every student-visible clue must be bound to an exact source fragment and a 4-point
+    contract must combine >=3 evidence bindings from >=2 anchors into a >=3-step chain.
+    """
+    errs=[]
+    typ=str(contract.get('contract_type') or '')
+    if typ not in R56_ALLOWED_TYPES: errs.append('r56_unsupported_type')
+    ids=[int(x) for x in (contract.get('cited_anchor_ids') or []) if str(x).isdigit()]
+    if len(set(ids))<2 or len(set(ids))>4: errs.append('r56_need_2_to_4_distinct_anchors')
+    answers=[_clean(x) for x in (contract.get('exact_answers') or []) if _clean(x)]
+    if len(answers)!=2 or len({_norm(x) for x in answers})!=2: errs.append('r56_need_two_distinct_answers')
+    chain=[_clean(x) for x in (contract.get('reasoning_chain') or []) if _clean(x)]
+    if len(chain)<3: errs.append('r56_reasoning_chain_lt3')
+    bindings=list(contract.get('source_bindings') or [])
+    if len(bindings)<3: errs.append('r56_need_at_least_3_source_bindings')
+    roles={str(b.get('role') or '') for b in bindings}
+    if not {'criterion','case_a','case_b'}.issubset(roles): errs.append('r56_missing_required_roles')
+    if contract.get('task2_uses_task1') is not True: errs.append('r56_task_dependency_not_explicit')
+    if str(contract.get('answer_kind') or '') not in {'용어','방법','단계','수치','관계','원리'}: errs.append('r56_bad_answer_kind')
+    if len(_clean(contract.get('why_not_rote')))<20: errs.append('r56_why_not_rote_too_thin')
+
+    anchors=[]
+    if ids:
+        con=sqlite3.connect(db_path)
+        q='select id,domain,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(set(ids))))
+        for r in con.execute(q,tuple(sorted(set(ids)))).fetchall():
+            anchors.append({'id':int(r[0]),'domain':str(r[1]),'answer':_clean(r[2]),'evidence':_clean(r[3]),'source_name':str(r[4] or ''),'page_no':int(r[5] or 0)})
+        con.close()
+    amap={a['id']:a for a in anchors}
+    if len(amap)!=len(set(ids)): errs.append('r56_anchor_not_found')
+    if any(a['domain']!=domain for a in anchors): errs.append('r56_cross_domain_anchor')
+    whole=' '.join(a['answer']+' '+a['evidence'] for a in anchors)
+    nwhole=_norm(whole)
+    for ans in answers:
+        if len(_norm(ans))<2 or _norm(ans) not in nwhole: errs.append('r56_answer_not_grounded:'+ans[:24])
+
+    visible_parts=[]; bound_anchor_ids=set(); fragments=set()
+    for i,b in enumerate(bindings):
+        try: aid=int(b.get('anchor_id'))
+        except Exception:
+            errs.append(f'r56_binding_{i}_bad_anchor'); continue
+        frag=_clean(b.get('source_fragment')); vis=_clean(b.get('visible_clue')); role=str(b.get('role') or '')
+        if aid not in amap: errs.append(f'r56_binding_{i}_anchor_not_cited'); continue
+        src=amap[aid]['answer']+' '+amap[aid]['evidence']
+        if len(_norm(frag))<18 or _norm(frag) not in _norm(src): errs.append(f'r56_binding_{i}_fragment_not_exact_source')
+        if len(_norm(vis))<15: errs.append(f'r56_binding_{i}_visible_too_short')
+        ov=_r56_char_overlap(vis,frag)
+        # Too little overlap usually means invented facts; too much is source-copy/answer-sheet material.
+        if ov<0.22: errs.append(f'r56_binding_{i}_visible_weakly_grounded')
+        if ov>0.88 and len(_norm(frag))>28: errs.append(f'r56_binding_{i}_near_verbatim')
+        for ans in answers:
+            na=_norm(ans)
+            if len(na)>=3 and na in _norm(vis): errs.append(f'r56_binding_{i}_answer_leak')
+        visible_parts.append(vis); bound_anchor_ids.add(aid); fragments.add(_norm(frag))
+    if len(bound_anchor_ids)<2: errs.append('r56_bindings_use_lt2_anchors')
+    if len(fragments)<3: errs.append('r56_need_3_distinct_source_fragments')
+
+    public=' '.join(visible_parts)
+    if len(_norm(public))<100: errs.append('r56_public_evidence_too_short')
+    # Require genuinely different clues, not three copies of one sentence.
+    for i in range(len(visible_parts)):
+        for j in range(i+1,len(visible_parts)):
+            if _r56_char_overlap(visible_parts[i],visible_parts[j])>0.82:
+                errs.append('r56_duplicate_visible_clues'); break
+
+    return (not errs, {'errors':errs,'anchors':anchors,'binding_count':len(bindings),
+                       'bound_anchor_count':len(bound_anchor_ids),'public_chars':len(_norm(public))})
+
+def _r56_contract_digest(existing,domain):
+    out=[]
+    for x in existing or []:
+        if x.get('domain')==domain and x.get('status')=='R56_PYTHON_VALIDATED':
+            out.append({'type':x.get('contract_type'),'anchors':x.get('cited_anchor_ids'),'answers':x.get('exact_answers')})
+    return out
+
+def mine_r56_gap_contracts(api_key, model, db_path, domain, existing, domains, formula_domains=None):
+    """Mine only missing R56 slots. One call/domain; no Judge-feedback retry."""
+    inv=combined_coverage_inventory(db_path,existing,domains,formula_domains)
+    need=int((inv.get('domains',{}).get(domain,{}) or {}).get('missing',0) or 0)
+    if need<=0: return []
+    from openai import OpenAI
+    packet=_contrast_packet(db_path,domain,limit=140)
+    client=OpenAI(api_key=api_key,timeout=90,max_retries=1)
+    prompt=f'''너는 대한민국 중등 기술 임용시험 4점 문항의 "근거 결속형 reasoning contract" 분석기다.
+영역: {domain}
+필요한 새 구조 수: {need}
+
+R55에서 아래 구조들은 실제 Judge 결과 모두 0 PASS였으므로 절대 사용하지 않는다:
+{sorted(R56_RETIRED_ZERO_PASS_TYPES)}
+실패 특징: difficulty_fit 13/13, exam_realism 13/13, inferential_distance 13/13, task_distinctness 12/13 미달.
+따라서 단순 개념회상/자료에서 정답찾기/자료 재진술은 금지한다.
+
+이미 확보한 R56 계약:
+{json.dumps(_r56_contract_digest(existing,domain),ensure_ascii=False)}
+
+서브노트 packet:
+{json.dumps(packet,ensure_ascii=False)}
+
+허용 구조는 딱 3개다.
+- multi_evidence_constraint_resolution: 서로 다른 3개 이상 근거를 종합해 첫 판단을 내리고, 그 판단 기준을 두 번째 사례에 적용한다.
+- rule_composition_transfer: 서로 다른 두 source 관계를 실제 A→B→C 연쇄로 결합하고, 완성한 연쇄를 새 자료에 적용한다.
+- contrastive_diagnosis_transfer: 두 방법/범주의 결정적 구별 기준을 복수 근거에서 도출하고, 그 기준으로 제3 사례의 오류/선택을 판정한다.
+
+각 contract의 source_bindings는 학생에게 보여줄 모든 핵심 단서를 원문에 결속한다.
+source_bindings 각 항목:
+- anchor_id: cited_anchor_ids 중 하나
+- source_fragment: 해당 anchor의 answer/evidence에 "정확히 포함되는" 18자 이상 원문 조각
+- visible_clue: source_fragment의 의미를 유지하되 정답어를 제거하고 일부 순서/표현만 바꾼 학생용 단서(새 기술사실 추가 금지)
+- role: criterion, case_a, case_b 중 하나
+
+절대 조건:
+1. 서로 다른 anchor 최소 2개, source_binding 최소 3개.
+2. criterion/case_a/case_b role이 모두 있어야 한다.
+3. exact_answers는 정확히 2개이며 모두 source에 직접 존재해야 한다. exact_answers[0]은 사례 A의 결과, exact_answers[1]은 사례 B의 결과다.
+4. visible_clue에 exact_answers를 직접 쓰지 않는다.
+5. reasoning_chain은 최소 3단계: 근거 결합 → 1차 판단 → 그 판단 기준의 2차 적용.
+6. task2_uses_task1=true.
+7. source 밖 사례/수치/인과를 만들지 않는다.
+8. 1번만 읽고 바로 답이 보이는 계약은 반환하지 않는다. 최소 2개 단서를 결합하지 않으면 1차 답을 결정할 수 없어야 한다.
+9. 2차 답은 1차 판단 기준을 사용하지 않으면 풀 수 없어야 한다.
+10. 충분한 구조가 없으면 억지로 채우지 말고 적게 반환한다.
+
+JSON 하나만 출력:
+{{"contracts":[{{
+ "contract_type":"multi_evidence_constraint_resolution",
+ "topic":"...",
+ "cited_anchor_ids":[1,2,3],
+ "exact_answers":["정답1","정답2"],
+ "answer_kind":"용어|방법|단계|수치|관계|원리 중 하나",
+ "source_bindings":[
+   {{"anchor_id":1,"source_fragment":"원문 그대로","visible_clue":"정답어를 숨긴 학생용 단서","role":"criterion"}},
+   {{"anchor_id":2,"source_fragment":"원문 그대로","visible_clue":"학생용 단서","role":"case_a"}},
+   {{"anchor_id":3,"source_fragment":"원문 그대로","visible_clue":"학생용 단서","role":"case_b"}}
+ ],
+ "reasoning_chain":["근거 결합","1차 판단","1차 판단 기준의 2차 적용"],
+ "task2_uses_task1":true,
+ "why_not_rote":"두 개 이상의 독립 단서를 결합해야만 1차 판단이 가능하고 그 결과가 2차 판단의 기준이 되는 이유"
+}}]}}'''
+    r=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
+    obj=json.loads(_strip_json(r.output_text)); rows=obj.get('contracts',[]) if isinstance(obj,dict) else []
+    existing_types={x.get('contract_type') for x in existing or [] if x.get('domain')==domain and x.get('status')=='R56_PYTHON_VALIDATED'}
+    valid=[]
+    for x in rows:
+        typ=str(x.get('contract_type') or '')
+        if typ in existing_types: continue
+        ok,detail=validate_r56_contract(db_path,domain,x)
+        if not ok: continue
+        cid=_fp({'v':'R56','domain':domain,'type':typ,'anchors':x.get('cited_anchor_ids'),'answers':x.get('exact_answers'),'bindings':x.get('source_bindings')})
+        x=dict(x); x['domain']=domain; x['status']='R56_PYTHON_VALIDATED'; x['validation']=detail; x['contract_id']=cid; x['mining_mode']='R56_EVIDENCE_BOUND'
+        valid.append(x); existing_types.add(typ)
+        if len(valid)>=need: break
+    return valid
+
+def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
+    """R56 coverage: historical actual Judge PASS + only strict R56 validated types.
+    All R51-R55 0-pass contract architectures are ignored even if present in uploaded JSON.
+    """
+    base=historical_verified_types(db_path,domains,formula_domains)
+    rows={}; total=0
+    for d in domains:
+        hist=sorted(set(base.get(d,[]) or []))
+        valid=[]
+        for x in contracts or []:
+            if x.get('domain')!=d or x.get('status') not in ('R56_PYTHON_VALIDATED','R56_AI_VERIFIED'): continue
+            if x.get('contract_type') not in R56_ALLOWED_TYPES: continue
+            ok,_=validate_r56_contract(db_path,d,x)
+            if ok: valid.append(x)
+        ctypes=sorted(set(str(x.get('contract_type')) for x in valid))
+        distinct=hist+['contract:'+x for x in ctypes if ('contract:'+x) not in hist]
+        count=min(2,len(set(distinct))); total+=count
+        rows[d]={'historical_ai_verified_types':hist,'r56_python_validated_contract_types':ctypes,
+                 'distinct_candidate_types':distinct,'candidate_count':count,'target_met':count>=2,'missing':max(0,2-count)}
+    return {'domains':rows,'candidate_slots':total,'target':2*len(domains),'all_domains_two':total>=2*len(domains),
+            'missing_domains':[d for d,v in rows.items() if not v['target_met']],
+            'note':'R56: R55 신규 contract 0/13 실패를 반영해 구형 contract_type은 coverage에서 제외. 기존 실제 Judge PASS + R56 evidence-bound 계약만 계산.'}
+
+def select_hybrid_validation_contracts(db_path, contracts, domains, formula_domains=None):
+    base=historical_verified_types(db_path,domains,formula_domains)
+    selected=[]; gaps=[]
+    for d in domains:
+        need=max(0,2-len(set(base.get(d,[]) or [])))
+        ds=[]
+        for x in contracts or []:
+            if x.get('domain')!=d or x.get('status') not in ('R56_PYTHON_VALIDATED','R56_AI_VERIFIED'): continue
+            ok,_=validate_r56_contract(db_path,d,x)
+            if ok: ds.append(x)
+        by_type={}
+        for x in sorted(ds,key=lambda z:(str(z.get('contract_type','')),str(z.get('contract_id','')))):
+            by_type.setdefault(str(x.get('contract_type','')),x)
+        chosen=list(by_type.values())[:need]
+        if len(chosen)<need: gaps.append({'domain':d,'need':need,'found':len(chosen)})
+        selected.extend(chosen)
+    return {'selected':selected,'gaps':gaps,'ready':not gaps,
+            'historical_verified_count':sum(min(2,len(set(base.get(d,[]) or []))) for d in domains),
+            'new_contract_count':len(selected)}
+
+def contract_to_question(contract):
+    """R56 deterministic rendering: group source-bound clues by role; no free-form AI passage survives."""
+    if contract.get('status') not in ('R56_PYTHON_VALIDATED','R56_AI_VERIFIED'): return None
+    bindings=list(contract.get('source_bindings') or [])
+    if len(bindings)<3: return None
+    grouped={'criterion':[],'case_a':[],'case_b':[]}
+    for b in bindings:
+        role=str(b.get('role') or '')
+        if role in grouped: grouped[role].append(_clean(b.get('visible_clue')))
+    if not all(grouped.values()): return None
+    def _fmt(title,rows):
+        return title+'\n'+\
+            '\n'.join(f"- {x}" for x in rows if x)
+    passage='\n\n'.join([_fmt('[판단 기준 자료]',grouped['criterion']),_fmt('[사례 A]',grouped['case_a']),_fmt('[사례 B]',grouped['case_b'])])
+    answers=[_clean(x) for x in contract.get('exact_answers',[])][:2]
+    if len(answers)!=2: return None
+    kind=str(contract.get('answer_kind') or '용어')
+    typ=str(contract.get('contract_type'))
+    if typ=='rule_composition_transfer':
+        tasks=[f'판단 기준 자료와 사례 A의 관계를 순서대로 결합하여 사례 A에 해당하는 {kind}을(를) 쓰시오.', f'①에서 완성한 관계를 판단 기준으로 사용하여 사례 B에 해당하는 {kind}을(를) 쓰시오.']
+    elif typ=='contrastive_diagnosis_transfer':
+        tasks=[f'판단 기준 자료를 이용하여 사례 A의 결정적 구별 기준을 판단하고, 사례 A에 해당하는 {kind}을(를) 쓰시오.', f'①에서 사용한 구별 기준을 그대로 적용하여 사례 B에 해당하는 {kind}을(를) 쓰시오.']
+    else:
+        tasks=[f'판단 기준 자료의 조건을 사례 A와 종합하여 사례 A에 해당하는 {kind}을(를) 쓰시오.', f'①에서 사용한 판단 기준을 그대로 적용하여 사례 B에 해당하는 {kind}을(를) 쓰시오.']
+    q={'domain':contract.get('domain',''),'topic':contract.get('topic','근거 결속형 자료 적용'),'points':4,
+       'verifier':'r56_evidence_bound_contract','pattern_id':'T4_R56_EVIDENCE_CHAIN','capability_id':'contract:'+typ,
+       'question_type':'자료해석/추론','material_form':'복수 근거 자료','intro':'다음 자료를 분석하여 <작성 방법>에 따라 쓰시오.',
+       'passage':passage,'conditions':['①에서 판단 기준 자료와 사례 A를 연결하고, ②에서는 ①에서 사용한 동일한 판단 기준을 사례 B에 적용한다.'],
+       'tasks':tasks,'answer':answers,'solution':[str(x) for x in contract.get('reasoning_chain',[])[:3]],'subpoints':[2,2],
+       'sources':[{'source_name':a.get('source_name',''),'page_no':a.get('page_no',0)} for a in (contract.get('validation',{}).get('anchors') or [])],
+       'source_context_override':'\n'.join(a.get('evidence','') for a in (contract.get('validation',{}).get('anchors') or [])),
+       'source_basis':'R56 evidence-bound source fragments + strict Python pre-Judge validation',
+       'derived_answer_flags':[True,True],'contract_id':contract.get('contract_id'),'contract_type':typ}
+    q['fingerprint']=_fp({k:q.get(k) for k in ('domain','contract_id','passage','answer')})
+    return q
+
+# ================= R57: one-click pre-Judged exam-style synthesis =================
+SCHEMA_VERSION='R57-ONECLICK-JUDGED-V1'
+R57_ALLOWED_TYPES={'exam_mixed_evidence_chain','exam_error_diagnosis_transfer','exam_contrastive_application'}
+R57_RETIRED_TYPES=set(R56_RETIRED_ZERO_PASS_TYPES) | set(R56_ALLOWED_TYPES)
+
+def _r57_style_examples(db_path, domain, limit=3):
+    con=sqlite3.connect(db_path); rows=[]
+    q="select s.name,p.page_no,p.text from pages p join sources s on s.id=p.source_id where s.kind='past_exam' and s.name like ? and length(p.text)>=250 order by p.page_no limit ?"
+    for name,pno,text in con.execute(q,(f'%{domain}%',limit)).fetchall():
+        t=_clean(text)
+        if '[4점]' in t or '4점' in t: rows.append({'source_name':name,'page_no':pno,'text':t[:2200]})
+    if len(rows)<limit:
+        q2="select s.name,p.page_no,p.text from pages p join sources s on s.id=p.source_id where s.kind='official_exam' and length(p.text)>=350 and p.text like '%[4점]%' order by s.id desc,p.page_no limit 12"
+        for name,pno,text in con.execute(q2).fetchall():
+            t=_clean(text)
+            if not any(x['source_name']==name and x['page_no']==pno for x in rows): rows.append({'source_name':name,'page_no':pno,'text':t[:2200]})
+            if len(rows)>=limit: break
+    con.close(); return rows[:limit]
+
+def _r57_source_packet(db_path, domain, limit=150):
+    cp=_contrast_packet(db_path,domain,limit=min(120,limit))
+    return {'contrast_pairs':list(cp.get('contrast_pairs',[]))[:36], 'local_mapping_sets':list(cp.get('local_mapping_sets',[]))[:18], 'anchors':list(cp.get('anchors',[]))[:60]}
+
+def _r57_words(s):
+    return set(re.findall(r'[가-힣A-Za-z0-9]{2,}', _clean(s)))
+
+def validate_r57_contract(db_path, domain, c):
+    errs=[]; typ=str(c.get('contract_type') or ''); pattern=str(c.get('pattern_id') or '')
+    if typ not in R57_ALLOWED_TYPES: errs.append('R57_UNSUPPORTED_TYPE')
+    if pattern not in {'P_MIX4','P_ERR4','P_COMPARE4'}: errs.append('R57_BAD_EXAM_PATTERN')
+    ids=[]
+    for x in c.get('cited_anchor_ids') or []:
+        try: ids.append(int(x))
+        except Exception: pass
+    ids=list(dict.fromkeys(ids))
+    if len(ids)<2 or len(ids)>5: errs.append('R57_NEED_2_TO_5_ANCHORS')
+    answers=[_clean(x) for x in (c.get('exact_answers') or []) if _clean(x)]
+    if len(answers)!=2 or len({_norm(x) for x in answers})!=2: errs.append('R57_NEED_2_DISTINCT_ANSWERS')
+    tasks=[_clean(x) for x in (c.get('tasks') or []) if _clean(x)]
+    if len(tasks)!=2: errs.append('R57_NEED_2_TASKS')
+    elif not any(k in tasks[1] for k in ('①','앞의','위의 판단','판단 기준','결과를 이용','결과를 바탕')): errs.append('R57_TASK2_NOT_DEPENDENT')
+    if c.get('task2_uses_task1') is not True: errs.append('R57_TASK_DEPENDENCY_FLAG_FALSE')
+    if len(_clean(c.get('dependency_note')))<25: errs.append('R57_DEPENDENCY_NOTE_THIN')
+    blocks=list(c.get('material_blocks') or [])
+    if len(blocks)<2 or len(blocks)>4: errs.append('R57_MATERIAL_BLOCK_COUNT')
+    visible='\n'.join(_clean(b.get('visible_text')) for b in blocks); nv=_norm(visible)
+    if len(nv)<180: errs.append('R57_MATERIAL_TOO_SHORT')
+    if len(nv)>1400: errs.append('R57_MATERIAL_TOO_LONG')
+    if len(tasks)==2 and len(_norm(' '.join(tasks)))<45: errs.append('R57_TASKS_TOO_THIN')
+    for ans in answers:
+        na=_norm(ans)
+        if len(na)>=2 and (na in nv or any(na in _norm(t) for t in tasks)): errs.append('R57_DIRECT_ANSWER_LEAK:'+ans[:30])
+    anchors=[]
+    if ids:
+        con=sqlite3.connect(db_path); q='select id,domain,topic,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(ids)))
+        for r in con.execute(q,tuple(ids)).fetchall(): anchors.append({'id':int(r[0]),'domain':str(r[1]),'topic':_clean(r[2]),'answer':_clean(r[3]),'evidence':_clean(r[4]),'source_name':str(r[5] or ''),'page_no':int(r[6] or 0)})
+        con.close()
+    amap={a['id']:a for a in anchors}
+    if len(amap)!=len(ids): errs.append('R57_ANCHOR_NOT_FOUND')
+    if any(a['domain']!=domain for a in anchors): errs.append('R57_CROSS_DOMAIN_ANCHOR')
+    nwhole=_norm(' '.join(a['answer']+' '+a['evidence'] for a in anchors))
+    for ans in answers:
+        if _norm(ans) not in nwhole: errs.append('R57_ANSWER_NOT_GROUNDED:'+ans[:30])
+    source_names={a['source_name'] for a in anchors if a['source_name']}
+    if len(source_names)>2: errs.append('R57_TOO_MANY_SOURCE_DOCS')
+    topics=[_r57_words(a['topic']+' '+a['answer']) for a in anchors]
+    if len(topics)>=2:
+        shared=set()
+        for i in range(len(topics)):
+            for j in range(i+1,len(topics)): shared |= topics[i]&topics[j]
+        pages=[a['page_no'] for a in anchors]; near=(len(source_names)==1 and pages and max(pages)-min(pages)<=3)
+        if not shared and not near: errs.append('R57_WEAK_TOPIC_COHERENCE')
+    binding_total=0; used_anchor_ids=set(); support_for={0:set(),1:set()}
+    for bi,b in enumerate(blocks):
+        txt=_clean(b.get('visible_text')); binds=list(b.get('bindings') or [])
+        if not txt or len(_norm(txt))<50: errs.append(f'R57_BLOCK_{bi}_TOO_SHORT')
+        if not binds: errs.append(f'R57_BLOCK_{bi}_NO_BINDING')
+        for bd in binds:
+            try: aid=int(bd.get('anchor_id'))
+            except Exception: errs.append(f'R57_BLOCK_{bi}_BAD_ANCHOR'); continue
+            frag=_clean(bd.get('source_fragment'))
+            if aid not in amap: errs.append(f'R57_BLOCK_{bi}_UNCITED_ANCHOR'); continue
+            src=amap[aid]['answer']+' '+amap[aid]['evidence']
+            if len(_norm(frag))<18 or _norm(frag) not in _norm(src): errs.append(f'R57_BLOCK_{bi}_FRAGMENT_NOT_EXACT')
+            ov=_r56_char_overlap(txt,frag)
+            if ov<0.12: errs.append(f'R57_BLOCK_{bi}_WEAK_GROUNDING')
+            if ov>0.90 and len(_norm(frag))>35: errs.append(f'R57_BLOCK_{bi}_NEAR_VERBATIM')
+            binding_total+=1; used_anchor_ids.add(aid)
+            for ai in bd.get('supports_answers') or []:
+                try: ai=int(ai)
+                except Exception: continue
+                if ai in support_for: support_for[ai].add(aid)
+    if binding_total<3: errs.append('R57_NEED_3_BINDINGS')
+    if len(used_anchor_ids)<2: errs.append('R57_BINDINGS_LT2_ANCHORS')
+    if len(support_for[0])<2: errs.append('R57_TASK1_SINGLE_CLUE_LOOKUP')
+    if len(support_for[1])<1: errs.append('R57_TASK2_NO_SOURCE_SUPPORT')
+    chain=[_clean(x) for x in c.get('reasoning_chain') or [] if _clean(x)]
+    if len(chain)<3: errs.append('R57_REASONING_LT3')
+    elif not any(k in chain[-1] for k in ('①','첫 판단','판단 기준','앞의 결과','적용')): errs.append('R57_CHAIN_NO_TRANSFER')
+    return (not errs, {'errors':errs,'anchors':anchors,'binding_total':binding_total,'support_for_answer0':sorted(support_for[0]),'support_for_answer1':sorted(support_for[1]),'public_chars':len(nv),'source_names':sorted(source_names)})
+
+def r57_contract_to_question(c):
+    if c.get('status') not in ('R57_PYTHON_VALIDATED','R57_AI_VERIFIED'): return None
+    blocks=list(c.get('material_blocks') or []); labels=['(가)','(나)','(다)','(라)']
+    if len(blocks)<2: return None
+    passage='\n\n'.join(f"{labels[i]} {_clean(b.get('visible_text'))}" for i,b in enumerate(blocks))
+    answers=[_clean(x) for x in c.get('exact_answers',[])][:2]; tasks=[_clean(x) for x in c.get('tasks',[])][:2]
+    if len(answers)!=2 or len(tasks)!=2: return None
+    anchors=(c.get('validation') or {}).get('anchors') or []
+    evidence=[a.get('evidence','') for a in anchors if a.get('evidence')]
+    source_context='\n\n'.join(f"[{a.get('source_name','')} p.{a.get('page_no',0)} / anchor {a.get('id')}]\n정답/개념: {a.get('answer','')}\n근거: {a.get('evidence','')}" for a in anchors)
+    q={'domain':c.get('domain',''),'topic':c.get('topic',''),'points':4,'verifier':'r57_exam_style_source_bound','pattern_id':c.get('pattern_id','P_MIX4'),'capability_id':'contract:'+str(c.get('contract_type','')),'question_type':'자료해석/판단/적용','material_form':str(c.get('material_form') or '자료+조건'),'intro':'다음 <자료>를 읽고 <작성 방법>에 따라 순서대로 서술하시오.','passage':passage,'conditions':[_clean(x) for x in (c.get('conditions') or []) if _clean(x)],'tasks':tasks,'answer':answers,'solution':[_clean(x) for x in (c.get('reasoning_chain') or [])],'subpoints':[2,2],'evidence':evidence,'sources':[{'source_name':a.get('source_name',''),'page_no':a.get('page_no',0)} for a in anchors],'source_context_override':source_context,'source_basis':'R57 exact anchor fragments + actual past-exam structural reference','derived_answer_flags':[True,True],'contract_id':c.get('contract_id'),'contract_type':c.get('contract_type')}
+    q['fingerprint']=_fp({k:q.get(k) for k in ('domain','contract_id','passage','tasks','answer')}); return q
+
+def _r57_existing_verified(existing,domain):
+    return [x for x in existing or [] if x.get('domain')==domain and x.get('status')=='R57_AI_VERIFIED' and x.get('contract_type') in R57_ALLOWED_TYPES]
+
+def synthesize_r57_pool(api_key, model, db_path, domain, existing, need, pool_size=None):
+    from openai import OpenAI
+    pool_size=int(pool_size or (4 if need<=1 else 6)); style=_r57_style_examples(db_path,domain,limit=3); packet=_r57_source_packet(db_path,domain,limit=160)
+    existing_types=sorted({x.get('contract_type') for x in _r57_existing_verified(existing,domain)}); client=OpenAI(api_key=api_key,timeout=120,max_retries=1)
+    prompt=f'''너는 대한민국 중등 기술 임용 1차 4점 문항의 구조 설계자다.\n영역: {domain}\n목표: Judge 피드백을 보기 전에 서로 다른 완성 후보 {pool_size}개를 한 번에 설계한다.\n현재 필요한 PASS 슬롯: {need}\n이미 AI_VERIFIED된 새 유형: {existing_types}\n\n이전 실제 실패를 반드시 피한다:\n- R55 신규 contract 13/13 REJECT\n- difficulty_fit 13/13, exam_realism 13/13, inferential_distance 13/13 미달\n- task_distinctness 12/13 미달\n- DIRECT_ANSWER_LEAK, ROTE_ONLY, AMBIGUOUS, DECORATIVE_MATERIAL 반복\n따라서 자료에서 용어 찾아쓰기, 정의 복사, 독립 소문항 병렬 나열은 만들지 않는다.\n\n실제 기출 구조 예시(내용을 베끼지 말고 구조만 참고):\n{json.dumps(style,ensure_ascii=False)}\n\n정답/기술 사실의 유일한 근거인 서브노트 packet:\n{json.dumps(packet,ensure_ascii=False)}\n\n허용 구조:\n1) exam_mixed_evidence_chain / P_MIX4: 서로 다른 근거 2개 이상을 결합해 ①을 판단하고, ①의 판단기준을 ②의 새 자료에 적용.\n2) exam_error_diagnosis_transfer / P_ERR4: 오류의 결정적 원인을 복수 근거로 진단해 ①을 정하고, 그 기준을 다른 상황의 개선/판정에 적용.\n3) exam_contrastive_application / P_COMPARE4: 두 방법/범주의 결정적 차이를 복수 근거로 도출해 ①을 판단하고, 동일 기준으로 ②를 판별.\n\n절대 규칙:\n- 새 기술 사실·수치·인과·사례를 창작하지 않는다. 모든 기술적 내용은 bindings의 exact source_fragment로 뒷받침한다.\n- exact_answers는 정확히 2개이고 cited anchor의 answer/evidence에 실제 존재한다.\n- exact_answers 문자열을 material_blocks, tasks, conditions에 직접 노출하지 않는다.\n- ①의 답은 서로 다른 anchor 2개 이상을 결합해야 결정되게 한다. supports_answers에 0/1을 기록한다.\n- ②는 ① 결과 없이는 풀 수 없게 하고 task 문장에 ① 의존성을 명시한다.\n- material_blocks 2~4개, 각 visible_text는 2~5문장의 자연스러운 임용 자료로 작성하되 source 밖 사실 추가 금지.\n- cited anchors는 가급적 한 source 또는 인접 페이지의 같은 주제군으로 묶는다.\n- reasoning_chain 최소 3단계, 마지막은 ① 판단을 ②에 적용.\n- 충분하지 않으면 억지로 만들지 않는다.\n\nJSON 하나만 출력:\n{{"contracts":[{{"contract_type":"exam_mixed_evidence_chain","pattern_id":"P_MIX4","topic":"...","cited_anchor_ids":[1,2,3],"exact_answers":["정답1","정답2"],"material_form":"대화|표+설명|사례자료|조건자료","material_blocks":[{{"visible_text":"학생용 자료","bindings":[{{"anchor_id":1,"source_fragment":"원문에 정확히 포함되는 18자 이상 조각","supports_answers":[0]}}]}},{{"visible_text":"두 번째 자료","bindings":[{{"anchor_id":2,"source_fragment":"정확한 원문 조각","supports_answers":[0]}},{{"anchor_id":3,"source_fragment":"정확한 원문 조각","supports_answers":[1]}}]}}],"conditions":[],"tasks":["① 복수 자료를 종합하여 ...을 판단하고 쓰시오.","② ①에서 사용한 판단 기준을 적용하여 ...을 쓰시오."],"reasoning_chain":["서로 다른 두 근거 결합","① 판단 도출","①의 판단 기준을 ②에 적용"],"task2_uses_task1":true,"dependency_note":"②가 ①의 결과 없이는 독립적으로 풀리지 않는 구체적 이유"}}]}}'''
+    r=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'}); obj=json.loads(_strip_json(r.output_text)); rows=obj.get('contracts',[]) if isinstance(obj,dict) else []
+    out=[]; seen=set()
+    for x in rows[:pool_size*2]:
+        typ=str(x.get('contract_type') or ''); key=(typ,tuple(x.get('cited_anchor_ids') or []),tuple(x.get('exact_answers') or []))
+        if key in seen: continue
+        seen.add(key); ok,detail=validate_r57_contract(db_path,domain,x)
+        if not ok: continue
+        cid=_fp({'v':'R57','domain':domain,'type':typ,'anchors':x.get('cited_anchor_ids'),'answers':x.get('exact_answers'),'blocks':x.get('material_blocks')}); y=dict(x); y['domain']=domain; y['status']='R57_PYTHON_VALIDATED'; y['validation']=detail; y['contract_id']=cid; y['mining_mode']='R57_FIXED_POOL'; out.append(y)
+        if len(out)>=pool_size: break
+    return out
+
+def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
+    base=historical_verified_types(db_path,domains,formula_domains); rows={}; total=0
+    for d in domains:
+        hist=sorted(set(base.get(d,[]) or [])); verified=[]
+        for x in contracts or []:
+            if x.get('domain')!=d or x.get('status')!='R57_AI_VERIFIED' or x.get('contract_type') not in R57_ALLOWED_TYPES: continue
+            ok,_=validate_r57_contract(db_path,d,x)
+            if ok: verified.append(x)
+        ctypes=sorted(set(str(x.get('contract_type')) for x in verified)); distinct=hist+['contract:'+t for t in ctypes]; count=min(2,len(set(distinct))); total+=count
+        rows[d]={'historical_ai_verified_types':hist,'r57_ai_verified_contract_types':ctypes,'verified_slots':count,'target_met':count>=2,'missing':max(0,2-count)}
+    return {'domains':rows,'verified_slots':total,'target':2*len(domains),'all_domains_two':total>=2*len(domains),'missing_domains':[d for d,v in rows.items() if not v['target_met']],'note':'R57: Python 후보 수가 아니라 실제 Judge PASS만 coverage에 반영.'}
+
+def select_hybrid_validation_contracts(db_path, contracts, domains, formula_domains=None):
+    base=historical_verified_types(db_path,domains,formula_domains); selected=[]; gaps=[]
+    for d in domains:
+        need=max(0,2-len(set(base.get(d,[]) or []))); ds=[x for x in contracts or [] if x.get('domain')==d and x.get('status')=='R57_AI_VERIFIED' and x.get('contract_type') in R57_ALLOWED_TYPES]; by_type={}
+        for x in ds:
+            ok,_=validate_r57_contract(db_path,d,x)
+            if ok: by_type.setdefault(str(x.get('contract_type')),x)
+        chosen=list(by_type.values())[:need]; selected.extend(chosen)
+        if len(chosen)<need: gaps.append({'domain':d,'need':need,'found':len(chosen)})
+    return {'selected':selected,'gaps':gaps,'ready':not gaps}
+
+def contract_to_question(contract):
+    return r57_contract_to_question(contract)
