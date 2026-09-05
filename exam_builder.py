@@ -4736,8 +4736,8 @@ def certify_r58_missing_slots(db_path, contracts, domains=None, api_key="", mode
 certify_r57_missing_slots = certify_r58_missing_slots
 
 # ========================= R59 actual-exam transfer certification =========================
-def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',judge_model=None,domains=None):
-    from capability_contracts import synthesize_r59_pool,validate_r59_contract,r59_contract_to_question
+def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',judge_model=None,domains=None,seed=None):
+    from capability_contracts import combined_coverage_inventory, synthesize_r59_pool, validate_r59_contract, r59_contract_to_question
     if domains is None: domains=list(DEFAULT_DOMAINS)
     existing=list(contracts or []); jm=judge_model or model; style=official_style_profile(db_path)
     # Only historical certified + R59 AI verified count. Older Python-only contracts never count.
