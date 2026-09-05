@@ -1,3 +1,4 @@
+from certification_state import import_contract_upload
 import os, json, sqlite3, copy, hashlib
 from pathlib import Path
 from datetime import datetime
@@ -10,7 +11,7 @@ make_quality_sample = getattr(exam_builder_module, "make_quality_sample", None)
 make_capability_validation_suite = getattr(exam_builder_module, "make_capability_validation_suite", None)
 make_contract_validation_suite = getattr(exam_builder_module, "make_contract_validation_suite", None)
 make_hybrid_contract_validation_suite = getattr(exam_builder_module, "make_hybrid_contract_validation_suite", None)
-certify_r59_missing_slots = getattr(exam_builder_module, "certify_r59_missing_slots", getattr(exam_builder_module, "certify_r57_missing_slots", None))
+certify_r59_missing_slots = getattr(exam_builder_module, "certify_r59_missing_slots", None)
 try:
     from quality_regression import run_release_regression
     from reasoning_capabilities import coverage_inventory, validation_inventory
@@ -52,7 +53,7 @@ def archive_credentials():
     return url, (service_key or fallback), bool(service_key), bool(fallback and not service_key)
 
 def db_stats():
-    con=sqlite3.connect(DB)
+    con=sqlite3.connect(Path(DB).resolve().as_uri()+"?mode=ro",uri=True)
     a=con.execute("select count(*) from sources").fetchone()[0]
     p=con.execute("select count(*) from pages").fetchone()[0]
     an=con.execute("select count(*) from anchors").fetchone()[0]
@@ -79,8 +80,11 @@ def save_generated_to_archive(A,B,model,seed,domains):
         "exam_b":B,
         "manually_edited":False,
     }
-    saved=create_exam(url,key,rec)
-    return saved, None
+    try:
+        saved=create_exam(url,key,rec)
+        return saved, None
+    except Exception:
+        return None, "A/B는 현재 세션에 보존되었습니다. Supabase 저장에 실패했습니다."
 
 def exam_editor(exam,prefix):
     edited=copy.deepcopy(exam)
@@ -234,7 +238,7 @@ with tabs[0]:
     c2.metric("색인 페이지",p)
     c3.metric("원문 정답 앵커",a)
     st.write("자료 유형:",k)
-    con=sqlite3.connect(DB)
+    con=sqlite3.connect(Path(DB).resolve().as_uri()+"?mode=ro",uri=True)
     rows=con.execute("select name,kind,domain,page_count from sources order by kind,domain,name").fetchall()
     con.close()
     st.dataframe([{"파일":r[0],"유형":r[1],"영역":r[2],"쪽수":r[3]} for r in rows],use_container_width=True)
@@ -297,26 +301,23 @@ with tabs[2]:
             "위의 '로드 경로'가 GitHub에서 덮어쓴 exam_builder.py 위치와 같은지 확인하세요."
         )
     st.caption(
-        "R58은 R57의 대형 Writer 요청과 0-pool 문제를 제거합니다. Python이 좁은 evidence bundle을 먼저 고정하고 실제 Judge PASS만 18/18 coverage에 반영합니다."
+        "관계선별과 Writer를 분리하고, 원문 검증 및 저장된 Judge PASS 증거가 있는 계약만 coverage에 반영합니다."
     )
 
     try:
         from capability_contracts import merge_contracts, combined_coverage_inventory
     except Exception as _ce:
         merge_contracts=combined_coverage_inventory=None
-        st.error("R58 capability_contracts 로드 실패: "+str(_ce))
+        st.error("R59 capability_contracts 로드 실패: "+str(_ce))
 
-    st.markdown("##### ✅ R58 한 번에 부족 슬롯 생성 + Judge 인증")
+    st.markdown("##### ✅ R59 한 번에 부족 슬롯 생성 + Judge 인증")
     st.caption("한 번의 버튼으로 각 부족 영역의 고정 후보 풀을 먼저 생성하고, Python hard gate를 통과한 후보만 실제 Judge에 1회씩 보냅니다. PASS한 유형만 coverage에 저장됩니다. Judge REJECT를 본 뒤 새 문항을 다시 쓰는 적응형 재시도는 하지 않습니다.")
     _uploaded_contracts=st.file_uploader("R59 contract JSON 불러오기", type=["json"], key="R59_CONTRACT_UPLOAD")
     if _uploaded_contracts is not None:
         try:
-            _raw=_uploaded_contracts.getvalue(); _upload_sha=hashlib.sha256(_raw).hexdigest()
-            if st.session_state.get("R58_IMPORTED_CONTRACT_SHA") != _upload_sha:
-                _obj=json.loads(_raw.decode("utf-8")); _rows=_obj.get("contracts",[]) if isinstance(_obj,dict) else []
-                st.session_state["R59_CONTRACTS"]=list(_rows or [])
-                st.session_state["R58_IMPORTED_CONTRACT_SHA"]=_upload_sha
-                st.success(f"contract {len(_rows or [])}개를 1회 불러왔습니다. R51~R56 구형 계약은 보존되더라도 R59 verified coverage에는 계산하지 않습니다.")
+            _count=import_contract_upload(st.session_state,_uploaded_contracts.getvalue())
+            if _count is not None:
+                st.success(f"contract {_count}개를 병합했습니다. 같은 업로드는 rerun 때 다시 적용하지 않습니다.")
         except Exception as _ex:
             st.error("contract JSON 불러오기 실패: "+str(_ex))
     if "R59_CONTRACTS" not in st.session_state:
@@ -351,7 +352,7 @@ with tabs[2]:
         with st.expander("Judge 실패 유형", expanded=True): st.json(_rr.get("failure_class_counts",{}))
         with st.expander("Judge 원본 결과", expanded=False): st.json(_rr.get("reviews",[]))
         if _sm.get("coverage_ready"):
-            st.success("R59 실제 AI_VERIFIED 18/18 달성. 이제 최종 A/B 생성으로 넘어갈 수 있습니다.")
+            st.success("선택 영역의 인증 슬롯을 충족했습니다. 최종 A/B 편성의 품질·중복 검증은 별도로 필요합니다.")
         else:
             st.warning("이번 고정 후보 풀 안에서 통과하지 못한 슬롯이 남았습니다. 아래 로그가 원인 진단용으로 보존됩니다.")
     st.info("R59 핵심: 관계선별 → 실제 기출 구조 참조 → 오류수정·전이형 Writer → Python hard gate → Judge 순서로만 진행합니다. 단어 겹침만으로 묶거나 가린 정의를 다시 맞히는 fallback은 폐기했습니다.")
@@ -481,9 +482,9 @@ with tabs[2]:
 
     st.divider()
     st.markdown("#### 최종 A/B 생성")
-    st.caption("9영역×2 capability가 AI_VERIFIED 18/18 된 뒤 최종 A/B를 생성하세요.")
+    st.caption("현재 A/B 생성은 인증 계약을 재사용하지 않는 기존 편성 경로입니다. R59 인증 결과와 연결된 최종 편성은 아직 구현되지 않았습니다.")
 
-    if st.button("전공 A + B 생성",type="primary",use_container_width=True):
+    if st.button("기존 경로 A + B 생성 (별도 검증)",type="primary",use_container_width=True):
         with st.spinner("정답 고정 → 문항 생성 → 근거 대조 → 중복 검사 → A/B 편성 → 보관 중..."):
             try:
                 A,B=make_ab(
@@ -698,7 +699,7 @@ with tabs[4]:
 
 with tabs[5]:
     st.subheader("실제 기출 기반 문항 구조")
-    con=sqlite3.connect(DB)
+    con=sqlite3.connect(Path(DB).resolve().as_uri()+"?mode=ro",uri=True)
     pats=con.execute("select id,points,name,verbs,visual,calc,provenance from exam_patterns order by points,id").fetchall()
     off=con.execute("select name,page_count from sources where kind='official_exam' order by name").fetchall()
     inv=con.execute("select count(*) from anchors where domain='발명'").fetchone()[0]

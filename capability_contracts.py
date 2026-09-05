@@ -1,4 +1,5 @@
-import json, os, re, sqlite3, hashlib
+from certification_state import verified_contract_receipt
+import json, os, re, sqlite3, hashlib, copy
 from pathlib import Path
 
 CONTRACT_FILE='capability_contracts.json'
@@ -60,12 +61,12 @@ def _anchor_rows(db_path, domain, limit=72):
     R51 used only the first high-confidence anchors; R52 scans a wider universe and ranks by
     reasoning affordance, then de-duplicates near-identical evidence.
     """
-    con=sqlite3.connect(db_path)
-    rows=con.execute('''select id,answer,evidence,source_name,page_no,confidence
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True)
+    rows=con.execute('''select id,answer,evidence,source_name,page_no,confidence,topic
                         from anchors where domain=? order by confidence desc,id asc limit 700''',(domain,)).fetchall()
     con.close()
     candidates=[]
-    for rid,a,e,s,p,c in rows:
+    for rid,a,e,s,p,c,topic in rows:
         a=_clean(a); e=_clean(e)
         if not (2<=len(a)<=100 and 20<=len(e)<=950):
             continue
@@ -74,7 +75,7 @@ def _anchor_rows(db_path, domain, limit=72):
         n=_norm(e)
         if len(n)<18:
             continue
-        candidates.append((_structural_score(a,e,c),{'id':int(rid),'answer':a,'evidence':e,'source_name':str(s or ''),'page_no':int(p or 0),'confidence':float(c or 0)}))
+        candidates.append((_structural_score(a,e,c),{'id':int(rid),'topic':_clean(topic),'answer':a,'evidence':e,'source_name':str(s or ''),'page_no':int(p or 0),'confidence':float(c or 0)}))
     candidates.sort(key=lambda z:(-z[0],z[1]['id']))
     out=[]; seen=[]
     page_counts={}
@@ -225,7 +226,7 @@ def validate_contract(db_path, domain, contract):
 
     anchors=[]
     if ids and all(str(x).isdigit() for x in ids):
-        con=sqlite3.connect(db_path)
+        con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True)
         q='select id,domain,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(ids)))
         anchors=[{'id':int(r[0]),'domain':str(r[1]),'answer':_clean(r[2]),'evidence':_clean(r[3]),'source_name':str(r[4] or ''),'page_no':int(r[5] or 0)} for r in con.execute(q,tuple(int(x) for x in ids)).fetchall()]
         con.close()
@@ -322,45 +323,24 @@ def contract_to_question(contract):
 
 # ---------------- R53 hybrid coverage: historical AI_VERIFIED + mined contracts ----------------
 def historical_verified_types(db_path, domains, formula_domains=None):
-    """Return only capability architectures with actual prior Judge PASS evidence."""
+    """Cache DB-derived historical evidence by file identity, never current contracts."""
+    path=Path(db_path).resolve(); stat=path.stat()
+    rows=_historical_verified_cached(str(path),stat.st_mtime_ns,stat.st_size,
+                                    tuple(domains),tuple(sorted(formula_domains or ())))
+    return {d:list(types) for d,types in rows}
+
+
+from functools import lru_cache
+
+@lru_cache(maxsize=16)
+def _historical_verified_cached(path,mtime_ns,size,domains,formula_domains):
     from reasoning_capabilities import r50_validation_inventory
-    inv=r50_validation_inventory(db_path,domains,formula_domains or set())
-    return {d:list((inv.get('domains',{}).get(d,{}) or {}).get('certified_types',[]) or []) for d in domains}
+    inv=r50_validation_inventory(path,domains,set(formula_domains))
+    return tuple((d,tuple((inv.get('domains',{}).get(d,{}) or {}).get('certified_types',[])))
+                 for d in domains)
 
 
-def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
-    """Count DISTINCT capability architectures per domain.
-    Repeated contracts of the same type count as one capability type.
-    """
-    base=historical_verified_types(db_path,domains,formula_domains)
-    rows={}; total=0
-    for d in domains:
-        base_types=[]
-        for x in base.get(d,[]):
-            if x and x not in base_types: base_types.append(x)
-        contract_rows=[x for x in (contracts or []) if x.get('domain')==d and x.get('status') in ('PYTHON_VALIDATED','AI_VERIFIED')]
-        contract_types=[]
-        for x in contract_rows:
-            t=str(x.get('contract_type') or '').strip()
-            if t and t not in contract_types: contract_types.append(t)
-        combined=list(base_types)
-        for t in contract_types:
-            label='contract:'+t
-            if label not in combined: combined.append(label)
-        count=min(2,len(combined))
-        rows[d]={
-            'historical_ai_verified_types':base_types,
-            'python_validated_contract_types':contract_types,
-            'distinct_candidate_types':combined,
-            'candidate_count':count,
-            'target_met':count>=2,
-            'missing':max(0,2-count),
-        }
-        total+=count
-    return {'domains':rows,'candidate_slots':total,'target':len(domains)*2,
-            'all_domains_two':all(v['target_met'] for v in rows.values()),
-            'missing_domains':[d for d,v in rows.items() if not v['target_met']],
-            'note':'R55: 기존 실제 Judge PASS capability + 서로 다른 PYTHON_VALIDATED contract 유형을 합산. 동일 contract_type 반복은 1개로 계산.'}
+
 
 
 def _pair_packet(db_path, domain, limit=84):
@@ -602,7 +582,7 @@ def validate_r56_contract(db_path, domain, contract):
 
     anchors=[]
     if ids:
-        con=sqlite3.connect(db_path)
+        con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True)
         q='select id,domain,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(set(ids))))
         for r in con.execute(q,tuple(sorted(set(ids)))).fetchall():
             anchors.append({'id':int(r[0]),'domain':str(r[1]),'answer':_clean(r[2]),'evidence':_clean(r[3]),'source_name':str(r[4] or ''),'page_no':int(r[5] or 0)})
@@ -732,28 +712,6 @@ JSON 하나만 출력:
         if len(valid)>=need: break
     return valid
 
-def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
-    """R56 coverage: historical actual Judge PASS + only strict R56 validated types.
-    All R51-R55 0-pass contract architectures are ignored even if present in uploaded JSON.
-    """
-    base=historical_verified_types(db_path,domains,formula_domains)
-    rows={}; total=0
-    for d in domains:
-        hist=sorted(set(base.get(d,[]) or []))
-        valid=[]
-        for x in contracts or []:
-            if x.get('domain')!=d or x.get('status') not in ('R56_PYTHON_VALIDATED','R56_AI_VERIFIED'): continue
-            if x.get('contract_type') not in R56_ALLOWED_TYPES: continue
-            ok,_=validate_r56_contract(db_path,d,x)
-            if ok: valid.append(x)
-        ctypes=sorted(set(str(x.get('contract_type')) for x in valid))
-        distinct=hist+['contract:'+x for x in ctypes if ('contract:'+x) not in hist]
-        count=min(2,len(set(distinct))); total+=count
-        rows[d]={'historical_ai_verified_types':hist,'r56_python_validated_contract_types':ctypes,
-                 'distinct_candidate_types':distinct,'candidate_count':count,'target_met':count>=2,'missing':max(0,2-count)}
-    return {'domains':rows,'candidate_slots':total,'target':2*len(domains),'all_domains_two':total>=2*len(domains),
-            'missing_domains':[d for d,v in rows.items() if not v['target_met']],
-            'note':'R56: R55 신규 contract 0/13 실패를 반영해 구형 contract_type은 coverage에서 제외. 기존 실제 Judge PASS + R56 evidence-bound 계약만 계산.'}
 
 def select_hybrid_validation_contracts(db_path, contracts, domains, formula_domains=None):
     base=historical_verified_types(db_path,domains,formula_domains)
@@ -817,7 +775,7 @@ R57_ALLOWED_TYPES={'exam_mixed_evidence_chain','exam_error_diagnosis_transfer','
 R57_RETIRED_TYPES=set(R56_RETIRED_ZERO_PASS_TYPES) | set(R56_ALLOWED_TYPES)
 
 def _r57_style_examples(db_path, domain, limit=3):
-    con=sqlite3.connect(db_path); rows=[]
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); rows=[]
     q="select s.name,p.page_no,p.text from pages p join sources s on s.id=p.source_id where s.kind='past_exam' and s.name like ? and length(p.text)>=250 order by p.page_no limit ?"
     for name,pno,text in con.execute(q,(f'%{domain}%',limit)).fetchall():
         t=_clean(text)
@@ -838,6 +796,10 @@ def _r57_words(s):
     return set(re.findall(r'[가-힣A-Za-z0-9]{2,}', _clean(s)))
 
 def validate_r57_contract(db_path, domain, c):
+    if not isinstance(c,dict): return False, {'errors':['R59_BAD_OBJECT'],'anchors':[]}
+    for key in ('cited_anchor_ids','exact_answers','clues','tasks','reasoning_chain'):
+        if not isinstance(c.get(key),list): return False, {'errors':['R59_BAD_FIELD:'+key],'anchors':[]}
+    if any(not isinstance(x,dict) for x in c['clues']): return False, {'errors':['R59_BAD_CLUE'],'anchors':[]}
     errs=[]; typ=str(c.get('contract_type') or ''); pattern=str(c.get('pattern_id') or '')
     if typ not in R57_ALLOWED_TYPES: errs.append('R57_UNSUPPORTED_TYPE')
     if pattern not in {'P_MIX4','P_ERR4','P_COMPARE4'}: errs.append('R57_BAD_EXAM_PATTERN')
@@ -865,7 +827,7 @@ def validate_r57_contract(db_path, domain, c):
         if len(na)>=2 and (na in nv or any(na in _norm(t) for t in tasks)): errs.append('R57_DIRECT_ANSWER_LEAK:'+ans[:30])
     anchors=[]
     if ids:
-        con=sqlite3.connect(db_path); q='select id,domain,topic,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(ids)))
+        con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); q='select id,domain,topic,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(ids)))
         for r in con.execute(q,tuple(ids)).fetchall(): anchors.append({'id':int(r[0]),'domain':str(r[1]),'topic':_clean(r[2]),'answer':_clean(r[3]),'evidence':_clean(r[4]),'source_name':str(r[5] or ''),'page_no':int(r[6] or 0)})
         con.close()
     amap={a['id']:a for a in anchors}
@@ -944,17 +906,6 @@ def synthesize_r57_pool(api_key, model, db_path, domain, existing, need, pool_si
         if len(out)>=pool_size: break
     return out
 
-def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
-    base=historical_verified_types(db_path,domains,formula_domains); rows={}; total=0
-    for d in domains:
-        hist=sorted(set(base.get(d,[]) or [])); verified=[]
-        for x in contracts or []:
-            if x.get('domain')!=d or x.get('status')!='R57_AI_VERIFIED' or x.get('contract_type') not in R57_ALLOWED_TYPES: continue
-            ok,_=validate_r57_contract(db_path,d,x)
-            if ok: verified.append(x)
-        ctypes=sorted(set(str(x.get('contract_type')) for x in verified)); distinct=hist+['contract:'+t for t in ctypes]; count=min(2,len(set(distinct))); total+=count
-        rows[d]={'historical_ai_verified_types':hist,'r57_ai_verified_contract_types':ctypes,'verified_slots':count,'target_met':count>=2,'missing':max(0,2-count)}
-    return {'domains':rows,'verified_slots':total,'target':2*len(domains),'all_domains_two':total>=2*len(domains),'missing_domains':[d for d,v in rows.items() if not v['target_met']],'note':'R57: Python 후보 수가 아니라 실제 Judge PASS만 coverage에 반영.'}
 
 def select_hybrid_validation_contracts(db_path, contracts, domains, formula_domains=None):
     base=historical_verified_types(db_path,domains,formula_domains); selected=[]; gaps=[]
@@ -996,7 +947,7 @@ def _r58_rel_score(a,b):
     return shared*3+near*2+same*2+rich
 
 def _r58_anchor_rows(db_path,domain,limit=220):
-    con=sqlite3.connect(db_path); con.row_factory=sqlite3.Row
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); con.row_factory=sqlite3.Row
     rows=[]
     for r in con.execute('select id,domain,topic,answer,evidence,source_name,page_no,confidence from anchors where domain=? order by confidence desc,id',(domain,)).fetchall():
         a={k:r[k] for k in r.keys()}; a['id']=int(a['id']); a['page_no']=int(a.get('page_no') or 0)
@@ -1082,14 +1033,14 @@ def validate_r58_contract(db_path,domain,c):
     nv=_norm(visible+' '+' '.join(tasks))
     for ans in answers:
         if len(_norm(ans))>=2 and _norm(ans) in nv: errs.append('R58_DIRECT_ANSWER_LEAK:'+ans[:30])
-    con=sqlite3.connect(db_path); con.row_factory=sqlite3.Row; anchors=[]
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); con.row_factory=sqlite3.Row; anchors=[]
     if ids:
         q='select id,domain,topic,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(ids)))
         anchors=[dict(r) for r in con.execute(q,tuple(ids)).fetchall()]
     con.close(); amap={int(a['id']):a for a in anchors}
     if len(amap)!=len(ids): errs.append('R58_ANCHOR_NOT_FOUND')
     if any(a.get('domain')!=domain for a in anchors): errs.append('R58_CROSS_DOMAIN')
-    whole=_norm(' '.join(_clean(a.get('answer'))+' '+_clean(a.get('evidence')) for a in anchors))
+    whole={_norm(a.get('answer')) for a in anchors}
     for ans in answers:
         if _norm(ans) not in whole: errs.append('R58_ANSWER_NOT_GROUNDED')
     if len({a.get('source_name') for a in anchors})>1: errs.append('R58_MULTI_SOURCE')
@@ -1164,17 +1115,6 @@ def synthesize_r58_pool(api_key,model,db_path,domain,need,pool_size=None):
         fb['domain']=domain; fb['status']='R58_PYTHON_VALIDATED'; fb['validation']=detail; fb['contract_id']=_fp({'v':'R58F','d':domain,'ids':fb.get('cited_anchor_ids'),'a':fb.get('exact_answers')}); rows.append(fb); existing_keys.add(key)
     return rows[:pool_size]
 
-def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
-    base=historical_verified_types(db_path,domains,formula_domains); rows={}; total=0
-    for d in domains:
-        hist=sorted(set(base.get(d,[]) or [])); verified=[]
-        for x in contracts or []:
-            if x.get('domain')!=d or x.get('status')!='R58_AI_VERIFIED' or x.get('contract_type') not in R58_ALLOWED_TYPES: continue
-            ok,_=validate_r58_contract(db_path,d,x)
-            if ok: verified.append(x)
-        ctypes=sorted(set(str(x.get('contract_type')) for x in verified)); count=min(2,len(set(hist+['contract:'+t for t in ctypes]))); total+=count
-        rows[d]={'historical_ai_verified_types':hist,'r58_ai_verified_contract_types':ctypes,'verified_slots':count,'target_met':count>=2,'missing':max(0,2-count)}
-    return {'domains':rows,'verified_slots':total,'target':2*len(domains),'all_domains_two':total>=2*len(domains),'missing_domains':[d for d,v in rows.items() if not v['target_met']],'note':'R58: historical Judge PASS + R58 real Judge PASS only.'}
 
 
 # ========================= R59 actual-exam transfer architecture =========================
@@ -1182,7 +1122,7 @@ R59_ALLOWED_TYPES = ('contrastive_error_transfer','criterion_conflict_resolution
 R59_SCHEMA_VERSION = 'R59-ACTUAL-EXAM-TRANSFER-V1'
 
 def _r59_official_examples(db_path, limit=3):
-    con=sqlite3.connect(f'file:{db_path}?immutable=1',uri=True); con.row_factory=sqlite3.Row
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); con.row_factory=sqlite3.Row
     rows=con.execute("""select p.text,s.name,p.page_no from pages p join sources s on s.id=p.source_id
                        where s.kind='official_exam' and p.text like '%[4점]%' order by s.id,p.page_no limit ?""",(int(limit*3),)).fetchall()
     con.close(); out=[]
@@ -1226,7 +1166,7 @@ def validate_r59_contract(db_path,domain,c):
         except: pass
     ids=list(dict.fromkeys(ids))
     if len(ids)<2 or len(ids)>3: errs.append('R59_NEED_2_TO_3_ANCHORS')
-    con=sqlite3.connect(f'file:{db_path}?immutable=1',uri=True); con.row_factory=sqlite3.Row
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); con.row_factory=sqlite3.Row
     anchors=[]
     if ids:
         q='select id,domain,topic,answer,evidence,source_name,page_no from anchors where id in (%s)'%(','.join('?'*len(ids)))
@@ -1236,7 +1176,7 @@ def validate_r59_contract(db_path,domain,c):
     if any(a.get('domain')!=domain for a in anchors): errs.append('R59_CROSS_DOMAIN')
     if len({a.get('source_name') for a in anchors})>1: errs.append('R59_MULTI_SOURCE')
     answers=[_clean(x) for x in c.get('exact_answers') or [] if _clean(x)]
-    if len(answers)<2 or len({_norm(x) for x in answers})<2: errs.append('R59_NEED_DISTINCT_ANSWERS')
+    if len(answers)!=2 or len({_norm(x) for x in answers})!=2: errs.append('R59_NEED_DISTINCT_ANSWERS')
     whole=_norm(' '.join(_clean(a.get('answer'))+' '+_clean(a.get('evidence')) for a in anchors))
     for ans in answers[:2]:
         if _norm(ans) not in whole: errs.append('R59_ANSWER_NOT_GROUNDED')
@@ -1244,6 +1184,8 @@ def validate_r59_contract(db_path,domain,c):
     if len(clues)<4: errs.append('R59_NEED_4_CLUES')
     per={}
     visible=[]
+    if {cl.get('side') for cl in clues}!={'A','B'}: errs.append('R59_BAD_CLUE_SIDES')
+    if len({_norm(cl.get('text')) for cl in clues})!=len(clues): errs.append('R59_DUPLICATE_CLUES')
     for i,cl in enumerate(clues):
         try: aid=int(cl.get('anchor_id'))
         except: aid=-1
@@ -1260,7 +1202,7 @@ def validate_r59_contract(db_path,domain,c):
     if not _clean(c.get('student_claim')): errs.append('R59_NO_STUDENT_CLAIM')
     if not _clean(c.get('transfer_case')): errs.append('R59_NO_TRANSFER_CASE')
     chain=[_clean(x) for x in c.get('reasoning_chain') or [] if _clean(x)]
-    if len(chain)<3: errs.append('R59_REASONING_LT3')
+    if len(set(chain))<3: errs.append('R59_REASONING_LT3')
     if c.get('task2_uses_task1') is not True: errs.append('R59_DEPENDENCY_FALSE')
     # The public task must contain an explicit error/choice operation, not pure identification.
     optext=' '.join(tasks)+' '+_clean(c.get('student_claim'))
@@ -1289,7 +1231,7 @@ def _r59_prompt(domain,bundles,official):
     payload=[]
     for i,b in enumerate(bundles):
         aa=b['anchors'][:3]
-        payload.append({'bundle_id':i,'anchors':[{'id':x['id'],'topic':x['topic'],'answer':x['answer'],'evidence':_clean(x['evidence'])[:850],'page_no':x['page_no']} for x in aa]})
+        payload.append({'bundle_id':i,'selector_relation':b.get('selector_relation',{}),'anchors':[{'id':x['id'],'topic':x['topic'],'answer':x['answer'],'evidence':_clean(x['evidence'])[:850],'page_no':x['page_no']} for x in aa]})
     return f'''대한민국 중등 기술 임용 4점 문항의 설계자다. 아래 실제 기출은 오직 구조만 참고하고 사실/정답은 복사하지 않는다.
 영역: {domain}
 실제 기출 구조 예시: {json.dumps(official,ensure_ascii=False)[:5200]}
@@ -1310,52 +1252,6 @@ JSON만 출력:
 {{"contracts":[{{"bundle_id":0,"contract_type":"contrastive_error_transfer|criterion_conflict_resolution","topic":"...","cited_anchor_ids":[1,2],"exact_answers":["anchor answer 그대로 2개"],"clues":[{{"side":"A","anchor_id":1,"text":"근거 단서1"}},{{"side":"A","anchor_id":1,"text":"근거 단서2"}},{{"side":"B","anchor_id":2,"text":"근거 단서1"}},{{"side":"B","anchor_id":2,"text":"근거 단서2"}}],"student_claim":"사례 A와 B를 잘못 연결한 학생 판단. 실제 정답명 금지","transfer_case":"위 단서 중 2개 이상을 조합한 추가 상황. 실제 정답명 금지","tasks":["① 학생 판단의 오류를 찾아 올바르게 수정하고, 두 자료의 근거를 이용하여 판단 기준을 서술하시오.","② ①에서 고친 판단 기준을 추가 상황에 적용하여 해당하는 개념 또는 방법을 쓰고 근거를 서술하시오."],"reasoning_chain":["A/B의 복수 단서 비교","학생 판단 오류 수정 및 기준 도출","도출 기준을 추가 상황에 전이"],"task2_uses_task1":true}}]}}
 '''
 
-def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
-    from openai import OpenAI
-    size=int(pool_size or (4 if need<=1 else 6)); bundles=_r59_source_bundles(db_path,domain,max_bundles=size)
-    if not bundles: return []
-    official=_r59_official_examples(db_path,2)
-    client=OpenAI(api_key=api_key,timeout=75,max_retries=1)
-    contracts=[]
-    # transport-resilient split: two small fixed calls at most; no Judge-driven regeneration.
-    chunks=[bundles[:3],bundles[3:6]] if len(bundles)>3 else [bundles]
-    for chunk in chunks:
-        if not chunk: continue
-        try:
-            rr=client.responses.create(model=model,input=_r59_prompt(domain,chunk,official),reasoning={'effort':'high'})
-            raw=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',rr.output_text.strip()))
-            arr=raw.get('contracts') or []
-        except Exception:
-            arr=[]
-        for c in arr:
-            try: bi=int(c.get('bundle_id',-1))
-            except: bi=-1
-            if bi<0 or bi>=len(chunk): continue
-            aa=chunk[bi]['anchors'][:3]; allowed={int(x['id']):x for x in aa}
-            ids=[]
-            for z in c.get('cited_anchor_ids') or []:
-                try: z=int(z)
-                except: continue
-                if z in allowed: ids.append(z)
-            ids=list(dict.fromkeys(ids))
-            if len(ids)<2: continue
-            c=copy.deepcopy(c); c['domain']=domain; c['cited_anchor_ids']=ids
-            c['contract_type']=str(c.get('contract_type') or 'contrastive_error_transfer')
-            if c['contract_type'] not in R59_ALLOWED_TYPES: c['contract_type']='contrastive_error_transfer'
-            # Force answers from cited anchors; AI may not invent/change them.
-            c['exact_answers']=[_clean(allowed[z]['answer']) for z in ids[:2]]
-            c['status']='R59_RAW'; c['schema_version']=R59_SCHEMA_VERSION
-            ok,diag=validate_r59_contract(db_path,domain,c); c['validation']=diag
-            if ok:
-                c['status']='R59_PYTHON_VALIDATED'; c['contract_id']=f"R59-{domain}-{c['contract_type']}-"+'-'.join(map(str,ids[:2]))
-                contracts.append(c)
-    # distinct contract ids/types first
-    out=[]; seen=set()
-    for c in contracts:
-        k=(c.get('contract_type'),tuple(c.get('cited_anchor_ids') or []))
-        if k in seen: continue
-        seen.add(k); out.append(c)
-    return out[:size]
 
 # Final R59 coverage override: only historical Judge PASS + R59 real Judge PASS.
 def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
@@ -1363,7 +1259,7 @@ def combined_coverage_inventory(db_path, contracts, domains, formula_domains=Non
     for d in domains:
         hist=sorted(set(base.get(d,[]) or [])); verified=[]
         for x in contracts or []:
-            if x.get('domain')!=d or x.get('status')!='R59_AI_VERIFIED' or x.get('contract_type') not in R59_ALLOWED_TYPES: continue
+            if not isinstance(x,dict) or x.get('domain')!=d or not verified_contract_receipt(x) or x.get('contract_type') not in R59_ALLOWED_TYPES: continue
             ok,_=validate_r59_contract(db_path,d,x)
             if ok: verified.append(x)
         ctypes=sorted(set(str(x.get('contract_type')) for x in verified))
@@ -1393,8 +1289,8 @@ JSON만 출력:{{"relations":[{{"anchor_ids":[1,2],"relation_type":"contrast|con
         rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
         obj=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',rr.output_text.strip()))
         rels=obj.get('relations') or []
-    except Exception:
-        return []
+    except Exception as ex:
+        raise RuntimeError('relation selector failed: '+type(ex).__name__) from ex
     amap={int(a['id']):a for a in anchors}; out=[]; seen=set()
     for r in rels:
         ids=[]
@@ -1424,17 +1320,12 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
     # Small fixed writer calls. Transport retry is bounded and never Judge-driven.
     chunks=[bundles[i:i+2] for i in range(0,len(bundles),2)]
     for chunk in chunks:
-        payload=[]
-        for i,b in enumerate(chunk):
-            payload.append({'bundle_id':i,'selector_relation':b.get('selector_relation',{}),
-                            'anchors':[{'id':x['id'],'topic':x.get('topic',''),'answer':x['answer'],'evidence':_clean(x['evidence'])[:850],'page_no':x['page_no']} for x in b['anchors']]})
-        prompt=_r59_prompt(domain,chunk,official).replace('서브노트 근거 bundle: '+json.dumps([{'bundle_id':i,'anchors':[{'id':x['id'],'topic':x['topic'],'answer':x['answer'],'evidence':_clean(x['evidence'])[:850],'page_no':x['page_no']} for x in b['anchors'][:3]]} for i,b in enumerate(chunk)],ensure_ascii=False),
-                                                   '서브노트 근거 bundle 및 선별관계: '+json.dumps(payload,ensure_ascii=False))
+        prompt=_r59_prompt(domain,chunk,official)
         try:
             rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
             raw=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',rr.output_text.strip())); arr=raw.get('contracts') or []
-        except Exception:
-            arr=[]
+        except Exception as ex:
+            raise RuntimeError('writer failed: '+type(ex).__name__) from ex
         for c in arr:
             try: bi=int(c.get('bundle_id',-1))
             except: bi=-1

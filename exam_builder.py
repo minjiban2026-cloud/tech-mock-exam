@@ -1,3 +1,4 @@
+from pathlib import Path
 import copy
 BUILDER_API_VERSION = "ONECLICK-JUDGED-R57-20260904"
 
@@ -2668,7 +2669,7 @@ def _smart_relation_bundle(db_path, domain, need, used_answers, excluded_topics,
         rows=copy.deepcopy(_cached["rows"]); source_kinds=copy.deepcopy(_cached["source_kinds"])
         page_map=copy.deepcopy(_cached["page_map"]); raw_page_map=copy.deepcopy(_cached["raw_page_map"])
     else:
-        con=sqlite3.connect(db_path); con.row_factory=sqlite3.Row
+        con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); con.row_factory=sqlite3.Row
         cols={r[1] for r in con.execute("PRAGMA table_info(anchors)").fetchall()}
         required={"domain","topic","answer","evidence","source_name","page_no"}
         missing=sorted(required-cols)
@@ -4738,8 +4739,12 @@ certify_r57_missing_slots = certify_r58_missing_slots
 # ========================= R59 actual-exam transfer certification =========================
 def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',judge_model=None,domains=None,seed=None):
     from capability_contracts import combined_coverage_inventory, synthesize_r59_pool, validate_r59_contract, r59_contract_to_question
+    from certification_state import attach_receipt, review_passes, upsert_contracts
     if domains is None: domains=list(DEFAULT_DOMAINS)
-    existing=list(contracts or []); jm=judge_model or model; style=official_style_profile(db_path)
+    domains=list(dict.fromkeys(domains))
+    if not domains or any(d not in DOMAINS for d in domains): raise ValueError('유효한 출제 영역을 선택하세요.')
+    if not api_key: raise ValueError('R59 인증에는 API key가 필요합니다.')
+    existing=copy.deepcopy(list(contracts or [])); jm=judge_model or model; style=official_style_profile(db_path)
     # Only historical certified + R59 AI verified count. Older Python-only contracts never count.
     before=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)
     logs=[]; reviews=[]; accepted=[]
@@ -4748,24 +4753,34 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
         need=int(inv['domains'][d].get('missing',0))
         if need<=0:
             logs.append({'domain':d,'need_before':0,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'skipped':'already_verified'}); continue
-        pool=synthesize_r59_pool(api_key,model,db_path,d,need,pool_size=(4 if need==1 else 6))
-        tested=passed=kept=0
+        try:
+            pool=synthesize_r59_pool(api_key,model,db_path,d,need,pool_size=(4 if need==1 else 6))
+        except Exception as ex:
+            logs.append({'domain':d,'need_before':need,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'missing_after':need,'generation_error':str(ex)})
+            continue
+        if seed is not None: random.Random(str(seed)+':'+d).shuffle(pool)
+        tested=passed=kept=validated=0
         for c in pool:
-            ok,_=validate_r59_contract(db_path,d,c)
+            ok,validation=validate_r59_contract(db_path,d,c)
             if not ok: continue
+            validated+=1
+            c=copy.deepcopy(c); c['validation']=validation
             q=r59_contract_to_question(c)
             if not q: continue
             tested+=1
             try: rv=judge_question(api_key,jm,q,q.get('source_context_override',''),style)
             except Exception as ex: rv={'pass':False,'reason':'Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+            if rv.get('pass') is True and not review_passes(rv):
+                rv=dict(rv, **{'pass':False,'fatal_flags':['INVALID_JUDGE_EVIDENCE'],'reason':'Judge PASS evidence is incomplete or below threshold'})
             sig=_coverage_failure_signals(rv,q)
             reviews.append({'domain':d,'contract_type':c.get('contract_type'),'topic':c.get('topic'),'pass':rv.get('pass'),'reason':rv.get('reason',''),'scores':rv.get('scores',{}),'fatal_flags':rv.get('fatal_flags',[]),'failure_signals':sig})
-            if rv.get('pass') is True:
+            if review_passes(rv):
                 passed+=1; cc=copy.deepcopy(c); cc['status']='R59_AI_VERIFIED'; cc['ai_quality']=copy.deepcopy(rv); cc['judge_model']=jm
-                if cc.get('contract_id') not in {x.get('contract_id') for x in existing}: existing.append(cc)
+                attach_receipt(cc)
+                existing=upsert_contracts(existing,[cc])
                 accepted.append(cc); kept+=1
                 if combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing']<=0: break
-        logs.append({'domain':d,'need_before':need,'pool_constructed':len(pool),'python_validated':len(pool),'judge_tested':tested,'judge_pass':passed,'accepted':kept,'missing_after':combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing'],'accepted_types':[x.get('contract_type') for x in accepted if x.get('domain')==d]})
+        logs.append({'domain':d,'need_before':need,'pool_constructed':len(pool),'python_validated':validated,'judge_tested':tested,'judge_pass':passed,'accepted':kept,'missing_after':combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing'],'accepted_types':[x.get('contract_type') for x in accepted if x.get('domain')==d]})
     after=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS); fc={}
     for r in reviews:
         if r.get('pass') is False:

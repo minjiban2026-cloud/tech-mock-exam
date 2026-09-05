@@ -1,3 +1,4 @@
+from pathlib import Path
 import re, sqlite3, random, hashlib, json
 
 CAP_ORDERED='ordered_sequence_repair'
@@ -54,7 +55,7 @@ def _condition_pair(sentence):
     return None
 
 def discover_capabilities(db_path, domain, max_each=20):
-    con=sqlite3.connect(db_path); ordered=[]; cond=[]
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); ordered=[]; cond=[]
     for src,pno in _domain_page_refs(con,domain):
         text=_page_text(con,src,pno)
         if not text: continue
@@ -112,7 +113,7 @@ def _lex_tokens(s):
     return out
 
 def _contrast_specs(db_path,domain,max_each=20):
-    con=sqlite3.connect(db_path); rows=con.execute('select answer,evidence,source_name,page_no from anchors where domain=? order by source_name,page_no,id',(domain,)).fetchall(); con.close()
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); rows=con.execute('select answer,evidence,source_name,page_no from anchors where domain=? order by source_name,page_no,id',(domain,)).fetchall(); con.close()
     candidates=[]
     for i in range(len(rows)):
         a1,e1,s1,p1=_clean(rows[i][0]),_clean(rows[i][1]),str(rows[i][2]),int(rows[i][3] or 0)
@@ -183,7 +184,7 @@ _DIR_WORDS=('증가','감소','향상','저하','커지','작아지','높아지'
 _CAUSE_WORDS=('때문','원인','방지','예방','대책','위해','필요')
 
 def _semantic_operation_specs(db_path,domain,max_each=20):
-    con=sqlite3.connect(db_path)
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True)
     rows=con.execute('select answer,evidence,source_name,page_no from anchors where domain=? order by source_name,page_no,id',(domain,)).fetchall()
     con.close()
     directional=[]; causal=[]; seen_d=set(); seen_c=set()

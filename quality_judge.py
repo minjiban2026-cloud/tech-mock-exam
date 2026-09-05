@@ -1,4 +1,4 @@
-import json, re, statistics
+import json, re, statistics, math
 
 SCORE_KEYS = [
     "grounding","answer_leakage","coherence","inferential_distance",
@@ -172,7 +172,7 @@ JSON만 출력:
     except Exception:
         return {"pass":False,"review_stage":"integrated","reason":"통합 AI 심사 점수 파싱 실패","raw":x}
 
-    if any(v<0 or v>5 for v in vals.values()):
+    if any(not math.isfinite(v) or v<0 or v>5 for v in vals.values()):
         return {"pass":False,"review_stage":"integrated","reason":"통합 AI 심사 점수 범위 오류","scores":vals}
 
     fatal=[str(f) for f in x.get("fatal_flags",[]) if str(f).strip()]

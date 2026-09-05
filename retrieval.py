@@ -1,3 +1,4 @@
+from pathlib import Path
 
 import sqlite3, random, re
 
@@ -9,7 +10,7 @@ GENERIC_EXACT={
 }
 
 def connect(db_path):
-    con=sqlite3.connect(db_path)
+    con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True)
     con.row_factory=sqlite3.Row
     return con
 
