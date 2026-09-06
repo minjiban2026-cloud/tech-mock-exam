@@ -21,7 +21,7 @@ def bind(ref, anchors, *, role='evidence'):
     if not anchor or len(quote)<minimum or quote not in clean(anchor.get('evidence')):
         raise ValueError('EXACT_SOURCE_QUOTE_REQUIRED')
     # A result can be a short selected value. A reason cannot be just its name.
-    if role!='result' and quote==clean(anchor.get('answer')):
+    if role=='evidence' and quote==clean(anchor.get('answer')):
         raise ValueError('NAME_ONLY_ANSWER')
     if role=='result' and re.fullmatch(r'[A-Za-z0-9]+',quote):
         if not re.search(r'(?<![A-Za-z0-9])'+re.escape(quote)+r'(?![A-Za-z0-9])',clean(anchor['evidence'])):
@@ -58,7 +58,7 @@ def validate_plan(plan, source_anchors, relation_type=None):
         except (ValueError,TypeError,KeyError) as ex:
             reject(str(ex),path);return None
     criterion=bound(plan.get('criterion'),'criterion')
-    transfer=bound(plan.get('transfer_condition'),'transfer_condition')
+    transfer=bound(plan.get('transfer_condition'),'transfer_condition','transfer')
     # Structural leakage checks must inspect what the examinee will actually see,
     # not the hidden provenance quote. A provenance quote can legitimately contain
     # the scored result while the public transfer_condition paraphrases only the
@@ -73,13 +73,29 @@ def validate_plan(plan, source_anchors, relation_type=None):
     criterion_surface=surface(plan.get('criterion'),criterion)
     transfer_surface=surface(plan.get('transfer_condition'),transfer)
     parts=[]
+    result_bindings=[]
     for name in ('task1','task2'):
         task=plan.get(name)
         if not isinstance(task,dict):
-            reject('TASK_PLAN_REQUIRED',name);parts.append((None,None));continue
-        result=bound(task.get('result'),name+'.result','result')
+            reject('TASK_PLAN_REQUIRED',name);parts.append((None,None));result_bindings.append(None);continue
+        result_ref=task.get('result')
+        result_binding=bound(result_ref,name+'.result','result')
+        result_bindings.append(result_binding)
+        # The scored result is the selector's explicit value, while the binding quote
+        # is provenance.  Earlier R59 versions accidentally scored the whole binding
+        # sentence, which made correct short answers look like leaked source text and
+        # poisoned clue construction.  A value is accepted only when it is literally
+        # contained in its already-validated source binding.
+        result=result_binding
+        if isinstance(result_ref,dict):
+            value=clean(result_ref.get('value'))
+            if value:
+                if result_binding is None or re.sub(r'\s+','',value) not in re.sub(r'\s+','',result_binding):
+                    reject('RESULT_VALUE_NOT_IN_BINDING',name+'.result.value')
+                else:
+                    result=value
         reason=bound(task.get('reason'),name+'.reason')
-        if result is not None and reason is not None and result==reason:
+        if result is not None and reason is not None and clean(result)==clean(reason):
             reject('RESULT_AND_REASON_IDENTICAL',name)
         parts.append((result,reason))
     if all(x is not None for pair in parts for x in pair) and parts[0]==parts[1]:
@@ -91,7 +107,9 @@ def validate_plan(plan, source_anchors, relation_type=None):
         if dependency.get('input')!='task1.result' or dependency.get('output')!='task2.result':
             reject('TASK2_INPUT_NOT_TASK1_RESULT','dependency')
         required=bound(dependency.get('required_result'),'dependency.required_result','result')
-        if required is not None and parts[0][0] is not None and required!=parts[0][0]:
+        # dependency.required_result is a provenance binding, so compare it with the
+        # task1 result binding rather than the shorter scored surface value.
+        if required is not None and result_bindings and result_bindings[0] is not None and required!=result_bindings[0]:
             reject('DEPENDENCY_RESULT_MISMATCH','dependency.required_result')
         if len(clean(dependency.get('why_required')))<24:
             reject('DEPENDENCY_EXPLANATION_REQUIRED','dependency.why_required')

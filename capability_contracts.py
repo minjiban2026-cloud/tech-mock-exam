@@ -1185,23 +1185,102 @@ def _r59_source_bundles(db_path,domain,max_bundles=8):
         if len(out)>=max_bundles: break
     return out
 
-def _r59_grounded_fragment(fragment, anchor, min_shared=3):
-    """Public clues must be source text, not Writer-authored paraphrases.
+def _r59_redact_answer(text, answers):
+    """Deterministically hide scored answer strings without inventing facts."""
+    out=_clean(text)
+    # longest first so a longer result is not partially exposed by a shorter one
+    vals=sorted({_clean(a) for a in answers if _clean(a)}, key=len, reverse=True)
+    for ans in vals:
+        if len(_norm(ans))<2:
+            continue
+        # Exact visible-string replacement first; normalized fallback is intentionally
+        # not attempted because that could alter unrelated source characters.
+        out=re.sub(re.escape(ans), '[가림]', out, flags=re.I)
+    return _clean(out)
 
-    R59 diagnostics showed that semantic paraphrases can sound plausible while adding
-    facts absent from the selected anchor.  Grounding ownership therefore belongs to
-    Python: a clue is accepted only when its normalized text is a contiguous fragment
-    of the anchor evidence and it does not expose the fixed answer.
+
+def _r59_grounded_fragment(fragment, anchor, min_shared=3):
+    """Verify an exact source excerpt or a source excerpt with deterministic answer redaction.
+
+    ``[가림]`` may replace scored answer text, but every remaining piece must occur in
+    the source evidence in the same order.  This keeps grounding exact while allowing
+    the public material to conceal the answer instead of forcing Writer paraphrases.
     """
     f=_clean(fragment); src=_clean(anchor.get('evidence'))
     nf,ns=_norm(f),_norm(src)
     if len(nf)<8: return False
     ans=_norm(anchor.get('answer'))
-    if ans and len(ans)>=2 and ans in nf: return False
-    if nf in ns: return True
-    # Deterministic redaction of an answer label is also source-grounded.
-    redacted=nf.replace('항목','')
-    return len(redacted)>=8 and redacted in ns
+    # An unredacted anchor label is not a useful public clue.
+    if '[가림]' not in f and ans and len(ans)>=2 and ans in nf: return False
+    if '[가림]' not in f:
+        return nf in ns
+    pieces=[_norm(x) for x in f.split('[가림]') if len(_norm(x))>=2]
+    if not pieces: return False
+    pos=0
+    for piece in pieces:
+        idx=ns.find(piece,pos)
+        if idx<0: return False
+        pos=idx+len(piece)
+    return True
+
+
+def _r59_plan_clues(bundle):
+    """Build public A/B clues from validated bindings; redact answers deterministically."""
+    plan=bundle.get('source_plan') or {}
+    # fixed_answers are "result\n근거: ..."; only the scored result is hidden.
+    answers=[_clean(x.split('\n',1)[0]) for x in (bundle.get('fixed_answers') or [])]
+    anchors={int(a['id']):a for a in (bundle.get('anchors') or [])}
+    candidates=[]; seen=set()
+
+    def binding(ref):
+        if not isinstance(ref,dict): return None
+        b=ref.get('binding') if isinstance(ref.get('binding'),dict) else ref
+        if not isinstance(b,dict) or type(b.get('anchor_id')) is not int: return None
+        return b
+
+    def add(ref, side):
+        b=binding(ref)
+        if not b: return
+        aid=b['anchor_id']; q=_clean(b.get('quote'))
+        if aid not in anchors or len(_norm(q))<8: return
+        public=_r59_redact_answer(q,answers)
+        # A clue containing only the mask has no informational value.
+        if len(_norm(public.replace('[가림]','')))<6: return
+        if not _r59_grounded_fragment(public,anchors[aid],2): return
+        key=(aid,side,_norm(public))
+        if key not in seen:
+            seen.add(key);candidates.append({'side':side,'anchor_id':aid,'text':public})
+
+    t1=plan.get('task1') or {}; t2=plan.get('task2') or {}
+    add(plan.get('criterion'),'A')
+    add(t1.get('reason'),'A')
+    add(plan.get('transfer_condition'),'B')
+    add(t2.get('reason'),'B')
+
+    # Determine each anchor's natural side from the task result provenance so fallback
+    # excerpts never drift to the wrong half merely because one side already exists.
+    side_by_anchor={}
+    for side,task in (('A',t1),('B',t2)):
+        b=binding(task.get('result'))
+        if b: side_by_anchor[b['anchor_id']]=side
+
+    for aid,a in anchors.items():
+        if any(x['anchor_id']==aid for x in candidates): continue
+        ev=_clean(a.get('evidence'))
+        side=side_by_anchor.get(aid,'A' if not any(x['side']=='A' for x in candidates) else 'B')
+        # Try the complete evidence first with deterministic answer redaction, then
+        # source-contiguous subfragments.  No semantic paraphrase is introduced.
+        options=[ev]+[_clean(x).strip(' -:') for x in re.split(r'[·•▶■□★※\n]|(?<=[.!?])\s+',ev)]
+        for part in options:
+            if len(_norm(part))<10: continue
+            public=_r59_redact_answer(part,answers)
+            if len(_norm(public.replace('[가림]','')))<6: continue
+            if _r59_grounded_fragment(public,a,2):
+                key=(aid,side,_norm(public))
+                if key not in seen:
+                    seen.add(key);candidates.append({'side':side,'anchor_id':aid,'text':public})
+                break
+    return candidates
 
 def validate_r59_contract(db_path,domain,c):
     if not isinstance(c,dict): return False, {'errors':['BAD_CONTRACT_OBJECT'],'anchors':[]}
@@ -1318,12 +1397,12 @@ def _r59_prompt(domain,bundles,official):
 정답 명칭을 지운 뒤에도 원문 근거의 조건·성질을 이용해 추론할 수 있어야 한다. 새 숫자·효과·기술 사실을 발명하지 않는다.
 계획을 충족할 수 없으면 해당 bundle은 생략하고 omissions에 이유를 기록한다.
 JSON 객체만 출력:
-{{"contracts":[{{"bundle_id":0,"topic":"문항 주제","clues":[{{"side":"A","anchor_id":1,"text":"단서"}}],
+{{"contracts":[{{"bundle_id":0,"topic":"문항 주제","clues":[],
 "student_claim":"검토할 학생 판단","transfer_case":"계획에 고정된 추가 조건의 상황화",
 "tasks":["① 판단과 근거 요구","② ① 결과를 사용하는 후속 요구"],
 "reasoning_chain":["자료 분석","중간 판단","후속 적용"],"task2_uses_task1":true}}],
 "omissions":[{{"bundle_id":0,"reason":"작성 불가 이유"}}]}}
-clues는 각 cited anchor마다 최소 1개씩 작성한다. clue.text는 반드시 해당 anchor evidence의 정확한 연속 구절을 그대로 사용하고, fixed answer 문자열은 포함하지 않는다. 원문에 없는 설명을 바꾸어 쓰거나 보충하지 않는다. 별도의 exact_answers를 출력하지 않는다.
+clues는 비워 둔다. 학생에게 보일 source clue는 Python이 검증된 source_plan binding에서 직접 구성한다. Writer는 clue를 재작성하지 않는다. 별도의 exact_answers를 출력하지 않는다.
 """
 
 
@@ -1433,20 +1512,43 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
             bridge,_,terms=_r59_span_bridge([a,b])
             if not bridge: continue
             shared=len(_r59_terms((a.get('topic') or '')+' '+(a.get('evidence') or '')) & _r59_terms((b.get('topic') or '')+' '+(b.get('evidence') or '')))
-            score=(8 if span<=1 else 5 if span<=3 else 3 if span<=R59_MAX_PAGE_SPAN else 1)+min(shared,4)
-            pair_candidates.append((score,-span,a,b,terms))
-    pair_candidates.sort(key=lambda x:(-x[0],-x[1],int(x[2]['id']),int(x[3]['id'])))
+            # Direct cross-reference is much stronger than mere page proximity.  This
+            # promotes pairs such as "method -> its category/property/application"
+            # and avoids flooding the selector with unrelated same-page headings.
+            ae=_norm(a.get('evidence') or ''); be=_norm(b.get('evidence') or '')
+            aa=_norm(a.get('answer') or ''); ba=_norm(b.get('answer') or '')
+            direct=0
+            if len(aa)>=3 and aa in be: direct += 7
+            if len(ba)>=3 and ba in ae: direct += 7
+            at=_norm(a.get('topic') or ''); bt=_norm(b.get('topic') or '')
+            if len(at)>=4 and at in be: direct += 3
+            if len(bt)>=4 and bt in ae: direct += 3
+            score=direct+(8 if span<=1 else 5 if span<=3 else 3 if span<=R59_MAX_PAGE_SPAN else 1)+min(shared,4)
+            pair_candidates.append((score,direct,-span,a,b,terms))
+    pair_candidates.sort(key=lambda x:(-x[0],-x[1],-x[2],int(x[3]['id']),int(x[4]['id'])))
+    # Diversify across source pages.  Diagnostics 7 showed that a raw top-28 list can
+    # be monopolized by many headings on one page, starving stronger relations elsewhere.
+    chosen=[]; page_counts={}
+    for row in pair_candidates:
+        _,direct,__,a,b,terms=row
+        pk=(a.get('source_name'),min(int(a.get('page_no') or 0),int(b.get('page_no') or 0)),
+            max(int(a.get('page_no') or 0),int(b.get('page_no') or 0)))
+        cap=4 if direct>0 else 2
+        if page_counts.get(pk,0)>=cap: continue
+        page_counts[pk]=page_counts.get(pk,0)+1; chosen.append(row)
+        if len(chosen)>=28: break
     pair_payload=[{'anchor_ids':[int(a['id']),int(b['id'])],'page_span':abs(int(a.get('page_no') or 0)-int(b.get('page_no') or 0)),
-                   'bridge_terms':terms,'anchors':[a,b]} for _,__,a,b,terms in pair_candidates[:28]]
+                   'direct_crossref_score':direct,'bridge_terms':terms,'anchors':[a,b]} for _,direct,__,a,b,terms in chosen]
     diag['selector_pair_candidates']=copy.deepcopy(pair_payload)
     prompt=f"""기술 임용 4점 출제용 관계와 채점 계획을 선별한다. 문제 문장은 쓰지 않는다.
 영역:{domain}
 Python이 source/page/개념 연결성으로 미리 좁힌 후보 pair:{json.dumps(pair_payload,ensure_ascii=False)}
 최대 {wanted}개를 고른다. 반드시 제시된 candidate pair의 anchor_ids 중 하나를 그대로 사용한다.
 같은 페이지/단어/주제라는 이유만으로 묶지 않는다. 정의 두 개를 명칭으로 답하는 관계는 제외한다.
-먼저 ①의 판단 결과가 ②에서 반드시 쓰이는 관계를 고른다. 다만 원문에 ‘① 다음 ②’라는 절차 문장이 직접 있어야 하는 것은 아니다.
-①에서 특정한 대상·기법·국가·과정·재료를 식별하고, 그 식별 결과를 ②에서 그 대상의 속성·적용·후속 판단을 찾는 조회 키로 실제 사용한다면 논리적 의존으로 인정한다.
-반대로 ①을 몰라도 ②를 독립적으로 풀 수 있거나 단지 같은 주제에 있다는 이유만으로는 관계로 만들지 않는다.
+①의 결과가 ②의 조회 대상을 특정하는 관계를 우선 고른다. 원문에 ‘① 다음 ②’라는 절차 문장이 직접 있을 필요는 없다.
+특히 한 anchor의 evidence가 다른 anchor의 개념을 직접 언급하면서 그 개념의 분류·속성·조건·효과·적용 대상을 제시하면, 이는 유효한 조회 관계다. 예: 기법을 먼저 식별한 뒤 그 기법이 속한 유형을 판정하거나, 재료를 식별한 뒤 그 재료의 성질 인자를 찾는 구조. 별도의 ‘선택 조건’ 문장이 없다는 이유만으로 버리지 않는다.
+분류형 관계도 유효하다. A의 evidence가 A가 속하는 범주 C를 직접 밝히고, B의 evidence가 C가 포함된 분류체계를 제시한다면 ①에서 A를 식별하고 ②에서 그 분류 C를 답하게 할 수 있다. 이때 ②에 별도의 상황 선택 조건은 필요하지 않다. 동일 대상의 '정의→속성/용도/조건/효과' 조회도 evidence가 직접 연결하면 유효하다.
+반대로 서로의 개념을 전혀 참조하지 않는 단순 병렬 정의·목록·같은 페이지 조합은 관계로 만들지 않는다.
 각 task의 정답 결과와 채점 근거를 원문 evidence의 연속 구절로 선택한다.
 명칭만 뽑거나 정의 두 개를 이어 붙이지 않는다. 기술적 판단 기준/올바른 수정내용/적용 결과가 실제 evidence에 있어야 한다.
 모든 binding은 {{"anchor_id":정수,"quote":"evidence의 정확한 연속 구절"}} 형태다.
@@ -1490,6 +1592,21 @@ JSON:
         if not isinstance(obj,dict) or not isinstance(obj.get('relations'),list): raise ValueError('RELATIONS_ARRAY_REQUIRED')
         rels=obj['relations']
         omissions=obj.get('omissions',[])
+        # One global reconsideration pass for semantic false negatives.  It does not
+        # relax provenance or create a relation itself; it only asks the selector to
+        # re-evaluate explicit classification/property cross-references that R59's old
+        # '② needs a separate choice condition' interpretation repeatedly discarded.
+        if not rels:
+            diag['selector_calls']=2
+            reconsider=prompt+"\n\n[재검토 규칙] 첫 판정에서 relations=[]였다. omissions를 다시 보되, A의 원문이 특정 범주/속성을 직접 밝히고 B의 원문이 그 범주 체계나 동일 대상의 속성·용도·효과를 직접 제시하면 dependent_sequence로 인정할 수 있다. ②에 별도의 선택 상황 문장을 요구하지 않는다. 단순 병렬 정의면 여전히 제외한다. 첫 omissions: "+json.dumps(omissions,ensure_ascii=False)
+            try:
+                rr2=client.responses.create(model=model,input=reconsider,reasoning={'effort':'medium'})
+                diag['selector_reconsider_response_text']=str(rr2.output_text or '')[:60000]
+                obj2=_load_r59_selector_json(rr2.output_text)
+                if isinstance(obj2,dict) and isinstance(obj2.get('relations'),list) and obj2.get('relations'):
+                    rels=obj2['relations']; omissions=obj2.get('omissions',omissions)
+            except Exception as ex2:
+                diag['selector_reconsider_error']=type(ex2).__name__
         diag['selector_omissions']=copy.deepcopy(omissions) if isinstance(omissions,list) else []
         for omission in diag['selector_omissions'][:24]:
             diag['omissions'].append({'stage':'selector','detail':copy.deepcopy(omission)})
@@ -1567,6 +1684,9 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
                      source_plan=copy.deepcopy(b['source_plan']),exact_answers=copy.deepcopy(b['fixed_answers']),
                      selector_relation=copy.deepcopy(b['selector_relation']),contract_type=b['contract_type'],
                      status='R59_RAW',schema_version=R59_SCHEMA_VERSION)
+            # Grounding ownership belongs to Python.  Discard Writer-authored clues
+            # and derive them only from exact source_plan bindings.
+            c['clues']=_r59_plan_clues(b)
             ok,validation=validate_r59_contract(db_path,domain,c);c['validation']=validation
             if not ok:
                 diag['python_rejected']+=1;_generation_reject(diag,'python',validation['errors'],c);continue
@@ -1591,12 +1711,11 @@ def r59_prejudge_errors(c,q):
         acts=_action_signature(task)
         if _simple_answer_label(answer) and set(acts)&{'reason','correct','apply'}:
             errors.append('LABEL_ONLY_SCORING_TASK_'+str(i+1))
-    # Apply independently of "판단/적용" wording: those words are not reasoning evidence.
-    for side in ('A','B'):
-        material=' '.join(str(cl.get('text','')) for cl in c.get('clues',[]) if cl.get('side')==side)
-        for a in anchors:
-            if _max_copy_similarity(material,a.get('evidence',''),a.get('answer',''))>=0.74:
-                errors.append('DEFINITION_RECOGNITION_'+side);break
+    # Source-grounded clues are intentionally exact excerpts, so high copy
+    # similarity to evidence is no longer itself a failure.  The previous gate
+    # contradicted the grounding gate: exact source clues passed grounding and were
+    # then rejected merely for being exact source text.  Direct answer exposure is
+    # checked below (and by validate_r59_contract); Judge still vetoes rote items.
     visible=' '.join(str(q.get(k,'')) for k in ('intro','passage'))+' '+' '.join(q.get('tasks',[]))
     if c.get('source_plan'):
         from question_plans import validate_plan

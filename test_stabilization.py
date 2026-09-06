@@ -34,7 +34,7 @@ def fixture(domain, typ=None):
         clues=[]
         for side,anchor in [('A',a),('B',b)]:
             text=anchor['evidence']
-            for x in (a,b): text=text.replace(x['answer'],'[항목]')
+            for x in (a,b): text=text.replace(x['answer'],'[가림]')
             words=text.split(); mid=max(1,len(words)//4)
             clues.extend({'side':side,'anchor_id':anchor['id'],'text':chunk}
                          for chunk in (' '.join(words[:-mid]),' '.join(words[mid:])))
@@ -151,8 +151,10 @@ class StabilizationTests(unittest.TestCase):
         with patch.object(cc,'_r59_select_bundles',return_value=[bundle]),patch('openai.OpenAI',return_value=client):
             pool=cc.synthesize_r59_pool('mock','mock',DB,c['domain'],1)
         self.assertEqual(pool.diagnostics['writer_returned'],1)
-        self.assertEqual(len(pool),0)  # Definition shape fixture must now be vetoed.
-        self.assertTrue(pool.diagnostics['failure_counts'])
+        # Python now verifies provenance/leakage/structure and lets Judge decide
+        # whether an otherwise grounded item is still too rote.
+        self.assertEqual(len(pool),1)
+        self.assertEqual(pool.diagnostics['failure_counts'],{})
         self.assertIn('MOCK RELATION',cc._r59_prompt(c['domain'],[bundle],[]))
 
     def test_database_unchanged_and_readonly(self):
