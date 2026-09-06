@@ -1158,6 +1158,12 @@ def _r59_grounded_fragment(fragment, anchor, min_shared=3):
     return len(_r57_words(f)&_r57_words(src))>=min_shared
 
 def validate_r59_contract(db_path,domain,c):
+    if not isinstance(c,dict): return False, {'errors':['BAD_CONTRACT_OBJECT'],'anchors':[]}
+    for field in ('cited_anchor_ids','exact_answers','clues','tasks','reasoning_chain'):
+        if not isinstance(c.get(field),list): return False, {'errors':['BAD_FIELD:'+field],'anchors':[]}
+    if any(not isinstance(cl,dict) for cl in c['clues']): return False, {'errors':['BAD_CLUE_OBJECT'],'anchors':[]}
+    if any(not isinstance(cl.get('side'),str) or not isinstance(cl.get('text'),str) or type(cl.get('anchor_id')) is not int for cl in c['clues']): return False, {'errors':['BAD_CLUE_FIELDS'],'anchors':[]}
+    if any(not isinstance(value,str) for field in ('exact_answers','tasks','reasoning_chain') for value in c[field]): return False, {'errors':['BAD_TEXT_FIELDS'],'anchors':[]}
     errs=[]; typ=str(c.get('contract_type') or '')
     if typ not in R59_ALLOWED_TYPES: errs.append('R59_BAD_TYPE')
     ids=[]
@@ -1177,9 +1183,14 @@ def validate_r59_contract(db_path,domain,c):
     if len({a.get('source_name') for a in anchors})>1: errs.append('R59_MULTI_SOURCE')
     answers=[_clean(x) for x in c.get('exact_answers') or [] if _clean(x)]
     if len(answers)!=2 or len({_norm(x) for x in answers})!=2: errs.append('R59_NEED_DISTINCT_ANSWERS')
-    whole=_norm(' '.join(_clean(a.get('answer'))+' '+_clean(a.get('evidence')) for a in anchors))
-    for ans in answers[:2]:
-        if _norm(ans) not in whole: errs.append('R59_ANSWER_NOT_GROUNDED')
+    if c.get('source_plan') is not None:
+        from question_plans import validate_plan
+        plan_ok,plan=validate_plan(c['source_plan'],anchors)
+        if not plan_ok: errs.extend(plan['errors'])
+        elif answers != [_clean(x) for x in plan['answers']]: errs.append('WRITER_CHANGED_FIXED_ANSWERS')
+    else:
+        allowed={_norm(a.get('answer')) for a in anchors}
+        if any(_norm(ans) not in allowed for ans in answers): errs.append('R59_ANSWER_NOT_GROUNDED')
     clues=list(c.get('clues') or [])
     if len(clues)<4: errs.append('R59_NEED_4_CLUES')
     per={}
@@ -1219,38 +1230,49 @@ def r59_contract_to_question(c):
              "\n\n[추가 상황]\n"+_clean(c.get('transfer_case')))
     anchors=(c.get('validation') or {}).get('anchors') or []
     ctx='\n\n'.join(f"[{a.get('source_name','')} p.{a.get('page_no',0)} / anchor {a.get('id')}]\n정답/개념: {_clean(a.get('answer'))}\n근거: {_clean(a.get('evidence'))}" for a in anchors)
-    return {'domain':c.get('domain'),'topic':c.get('topic'),'points':4,'pattern_id':'T4_R59','capability_id':'contract:'+str(c.get('contract_type')),
+    q={'domain':c.get('domain'),'topic':c.get('topic'),'points':4,'pattern_id':'T4_R59','capability_id':'contract:'+str(c.get('contract_type')),
             'question_type':'오류판단/근거설명/전이적용','material_form':'대비 사례+학생 판단+추가 상황',
             'intro':'다음 <자료>의 학생 판단을 검토하고 <작성 방법>에 따라 순서대로 서술하시오.',
             'passage':passage,'conditions':[], 'tasks':c.get('tasks') or [],'answer':c.get('exact_answers') or [],
             'solution':c.get('reasoning_chain') or [],'subpoints':[2,2],
             'evidence':[_clean(a.get('evidence')) for a in anchors],'source_context_override':ctx,
             'contract_id':c.get('contract_id'),'contract_type':c.get('contract_type')}
+    q['premise_mode']='ai_grounded'
+    q['source_plan']=copy.deepcopy(c.get('source_plan'))
+    if c.get('source_plan'):
+        from question_plans import validate_plan
+        ok,plan=validate_plan(c['source_plan'],anchors)
+        if not ok: return None
+        q['rubric']=plan['rubric']
+        q['solution']=[row['result']+' / '+row['reason'] for row in plan['rubric']]
+    return q
+
 
 def _r59_prompt(domain,bundles,official):
     payload=[]
     for i,b in enumerate(bundles):
-        aa=b['anchors'][:3]
-        payload.append({'bundle_id':i,'selector_relation':b.get('selector_relation',{}),'anchors':[{'id':x['id'],'topic':x['topic'],'answer':x['answer'],'evidence':_clean(x['evidence'])[:850],'page_no':x['page_no']} for x in aa]})
-    return f'''대한민국 중등 기술 임용 4점 문항의 설계자다. 아래 실제 기출은 오직 구조만 참고하고 사실/정답은 복사하지 않는다.
+        payload.append({'bundle_id':i,'selector_relation':b.get('selector_relation'),
+                        'source_plan':b['source_plan'],'fixed_answers':b['fixed_answers'],
+                        'anchors':b['anchors']})
+    return f"""대한민국 중등 기술 임용 4점 문항의 문장 편집자다.
 영역: {domain}
-실제 기출 구조 예시: {json.dumps(official,ensure_ascii=False)[:5200]}
-서브노트 근거 bundle: {json.dumps(payload,ensure_ascii=False)}
+실제 기출 구조 참고 (기술 사실/정답 복사 금지): {json.dumps(official,ensure_ascii=False)[:5200]}
+검증한 고정 계획: {json.dumps(payload,ensure_ascii=False)}
+각 bundle에서 계획의 task1.result와 task2.result를 채점할 수 있는 문항 하나만 작성한다.
+정답/근거/관계/추가 조건은 이미 고정되어 있다. fixed_answers와 source_plan을 수정하거나 새 기술 조건을 추가하지 않는다.
+정의를 가리고 명칭을 맞히게 하거나, 근거 단서가 그대로 정답표가 되는 문항은 만들지 않는다.
+①은 판단과 근거를 요구한다. ②는 계획의 ① 결과를 입력으로 사용하여 후속 결과와 근거를 요구한다.
+① 결과를 ②에 미리 알려주지 않는다. 새 숫자·효과·기술 사실을 발명하지 않는다.
+계획을 충족할 수 없으면 해당 bundle은 생략하고 omissions에 이유를 기록한다.
+JSON 객체만 출력:
+{{"contracts":[{{"bundle_id":0,"topic":"문항 주제","clues":[{{"side":"A","anchor_id":1,"text":"단서"}}],
+"student_claim":"검토할 학생 판단","transfer_case":"계획에 고정된 추가 조건의 상황화",
+"tasks":["① 판단과 근거 요구","② ① 결과를 사용하는 후속 요구"],
+"reasoning_chain":["자료 분석","중간 판단","후속 적용"],"task2_uses_task1":true}}],
+"omissions":[{{"bundle_id":0,"reason":"작성 불가 이유"}}]}}
+clues는 A/B 각 두 개 이상의 서로 다른 원문 지원 단서다. 별도의 exact_answers를 출력하지 않는다.
+"""
 
-목표는 정의 맞히기가 아니다. 각 bundle마다 "잘못 적용된 학생 판단을 수정 → 수정 근거를 두 단서 이상으로 설명 → 그 판단 기준을 추가 상황에 전이"하는 후보 1개를 작성한다.
-중요:
-- 기술 사실은 anchor evidence에 있는 것만 사용한다. 새로운 사례의 기술적 속성은 만들지 않는다.
-- 추가 상황은 anchor에 이미 있는 단서들을 재조합할 뿐 새 인과/수치/효과를 추가하지 않는다.
-- 실제 정답명은 material/student_claim/transfer_case/tasks에 절대 노출하지 않는다.
-- 각 정답 측면에 서로 다른 단서가 최소 2개 있어야 한다.
-- 학생 판단은 두 사례 중 하나를 의도적으로 잘못 연결한다. 이것은 '학생의 오류'이지 기술 사실 진술이 아니다.
-- ①은 단순 명칭 2개 쓰기가 아니라 오류를 찾아 올바르게 수정하고 근거를 설명해야 한다.
-- ②는 ①에서 고친 판단 기준 없이는 답할 수 없게 만든다.
-- bundle 안 두 anchor가 실제로 대비/선택 관계를 만들 수 없으면 그 bundle은 OMIT한다.
-
-JSON만 출력:
-{{"contracts":[{{"bundle_id":0,"contract_type":"contrastive_error_transfer|criterion_conflict_resolution","topic":"...","cited_anchor_ids":[1,2],"exact_answers":["anchor answer 그대로 2개"],"clues":[{{"side":"A","anchor_id":1,"text":"근거 단서1"}},{{"side":"A","anchor_id":1,"text":"근거 단서2"}},{{"side":"B","anchor_id":2,"text":"근거 단서1"}},{{"side":"B","anchor_id":2,"text":"근거 단서2"}}],"student_claim":"사례 A와 B를 잘못 연결한 학생 판단. 실제 정답명 금지","transfer_case":"위 단서 중 2개 이상을 조합한 추가 상황. 실제 정답명 금지","tasks":["① 학생 판단의 오류를 찾아 올바르게 수정하고, 두 자료의 근거를 이용하여 판단 기준을 서술하시오.","② ①에서 고친 판단 기준을 추가 상황에 적용하여 해당하는 개념 또는 방법을 쓰고 근거를 서술하시오."],"reasoning_chain":["A/B의 복수 단서 비교","학생 판단 오류 수정 및 기준 도출","도출 기준을 추가 상황에 전이"],"task2_uses_task1":true}}]}}
-'''
 
 
 # Final R59 coverage override: only historical Judge PASS + R59 real Judge PASS.
@@ -1270,86 +1292,157 @@ def combined_coverage_inventory(db_path, contracts, domains, formula_domains=Non
             'note':'R59: historical Judge PASS + actual-exam-transfer R59 real Judge PASS only.'}
 
 # R59 relation-first selector override. The selector chooses the reasoning relation before the writer sees a bundle.
+class GenerationPool(list):
+    """List-compatible result with request-local, JSON-exportable diagnostics."""
+    def __init__(self, rows=(), diagnostics=None):
+        super().__init__(rows)
+        self.diagnostics=diagnostics if diagnostics is not None else {
+            'retrieved_anchors':0,'selector_calls':0,'selector_returned':0,'selector_accepted':0,
+            'writer_calls':0,'writer_returned':0,'python_rejected':0,'python_validated':0,
+            'failure_counts':{},'rejections':[],'omissions':[]}
+
+
+def _generation_reject(diag,stage,errors,candidate=None):
+    codes=[str(x) for x in errors]
+    for code in codes:
+        key=stage+':'+code
+        diag['failure_counts'][key]=diag['failure_counts'].get(key,0)+1
+    if len(diag['rejections'])<24:
+        diag['rejections'].append({'stage':stage,'errors':codes,'candidate':copy.deepcopy(candidate)})
+
+
 def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     from openai import OpenAI
-    anchors=_anchor_rows(db_path,domain,limit=32)
-    if len(anchors)<4: return []
-    items=[{'id':a['id'],'answer':a['answer'],'evidence':_clean(a['evidence'])[:700],'source_name':a['source_name'],'page_no':a['page_no']} for a in anchors]
-    prompt=f'''대한민국 중등 기술 임용 4점 출제용 관계 선별기다. 문항을 쓰지 말고 관계만 고른다.
+    from question_plans import validate_plan,PLAN_SCHEMA
+    out=GenerationPool();diag=out.diagnostics
+    anchors=_anchor_rows(db_path,domain,limit=32);diag['retrieved_anchors']=len(anchors)
+    if len(anchors)<2:
+        _generation_reject(diag,'retrieval',['INSUFFICIENT_ANCHORS']);return out
+    prompt=f"""기술 임용 4점 출제용 관계와 채점 계획을 선별한다. 문제 문장은 쓰지 않는다.
 영역:{domain}
-후보 anchor:{json.dumps(items,ensure_ascii=False)}
-
-최대 {wanted}개 관계를 선택하라. 각 관계는 반드시 같은 source 안에서 2~3개 anchor로 구성한다.
-PASS 가능한 관계는 다음뿐이다: 서로 다른 개념/방법을 조건에 따라 선택하는 대비, 한 규칙을 잘못 적용한 오류를 다른 조건에 전이해 수정할 수 있는 관계, 동일 체계 안의 단계/원인-결과가 뒤 판단에 실제로 쓰이는 관계.
-REJECT: 같은 페이지일 뿐인 항목, 단순 정의 2개, 상하위 목록, 독립 개념 병렬, 명칭 두 개 암기, 단어만 비슷한 항목.
-특히 두 answer가 각각 자료 한 줄만 읽고 바로 맞혀지는 관계는 고르지 마라.
-JSON만 출력:{{"relations":[{{"anchor_ids":[1,2],"relation_type":"contrast|conditional_choice|error_transfer|dependent_sequence","master_relation":"구체적 관계 한 문장","why_inferential":"왜 최소 2개 단서를 결합해야 하는지"}}]}}'''
+원문 anchor:{json.dumps(anchors,ensure_ascii=False)}
+최대 {wanted}개를 고른다. 같은 source의 서로 다른 2~3개 anchor를 사용한다.
+같은 페이지/단어/주제라는 이유만으로 묶지 않는다. 정의 두 개를 명칭으로 답하는 관계는 제외한다.
+먼저 ①의 판단 결과가 ②에서 반드시 쓰이는 관계를 고른다.
+각 task의 정답 결과와 채점 근거를 원문 evidence의 연속 구절로 선택한다.
+명칭만 뽑거나 정의 두 개를 이어 붙이지 않는다. 기술적 판단 기준/올바른 수정내용/적용 결과가 실제 evidence에 있어야 한다.
+criterion, transfer_condition, result, reason, required_result는 모두 {{"anchor_id":정수,"quote":"evidence에 그대로 있는 12자 이상 연속 구절"}} 형태다.
+간접 지식이나 기출 정답을 사용하지 않는다. 서로 맞물리는 계획이 없으면 relations=[]를 반환한다.
+JSON:
+{{"relations":[{{"anchor_ids":[1,2],"relation_type":"contrast|conditional_choice|error_transfer|dependent_sequence",
+"contract_type":"contrastive_error_transfer|criterion_conflict_resolution","master_relation":"관계 설명",
+"source_plan":{{"schema":"{PLAN_SCHEMA}","criterion":{{}},"transfer_condition":{{}},
+"task1":{{"result":{{}},"reason":{{}}}},"task2":{{"result":{{}},"reason":{{}}}},
+"dependency":{{"input":"task1.result","output":"task2.result","required_result":{{}},
+"why_required":"① 결과를 빼면 ②의 어느 판단이 불가능해지는지 구체적으로 설명"}}}}}}]}}
+"""
+    diag['selector_calls']=1
     try:
-        client=OpenAI(api_key=api_key,timeout=75,max_retries=1)
+        client=OpenAI(api_key=api_key,timeout=75,max_retries=0)
         rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
-        obj=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',rr.output_text.strip()))
-        rels=obj.get('relations') or []
+        obj=json.loads(_strip_json(rr.output_text))
+        if not isinstance(obj,dict) or not isinstance(obj.get('relations'),list): raise ValueError('RELATIONS_ARRAY_REQUIRED')
+        rels=obj['relations']
     except Exception as ex:
-        raise RuntimeError('relation selector failed: '+type(ex).__name__) from ex
-    amap={int(a['id']):a for a in anchors}; out=[]; seen=set()
+        _generation_reject(diag,'selector_call',[type(ex).__name__]);return out
+    diag['selector_returned']=len(rels)
+    amap={int(a['id']):a for a in anchors};seen=set()
+    if not rels: _generation_reject(diag,'selector',['NO_RELATION_SELECTED'])
     for r in rels:
-        ids=[]
-        for z in r.get('anchor_ids') or []:
-            try: z=int(z)
-            except: continue
-            if z in amap: ids.append(z)
-        ids=list(dict.fromkeys(ids))
-        if not 2<=len(ids)<=3: continue
+        if not isinstance(r,dict): _generation_reject(diag,'selector',['BAD_RELATION_OBJECT']);continue
+        ids=r.get('anchor_ids')
+        if not isinstance(ids,list) or not 2<=len(ids)<=3 or any(type(z) is not int or z not in amap for z in ids) or len(set(ids))!=len(ids):
+            _generation_reject(diag,'selector',['INVALID_ANCHOR_IDS'],r);continue
         aa=[amap[z] for z in ids]
-        if len({x['source_name'] for x in aa})!=1: continue
-        if len({_norm(x['answer']) for x in aa[:2]})<2: continue
+        if len({x['source_name'] for x in aa})!=1 or len({_norm(x['answer']) for x in aa})!=len(aa):
+            _generation_reject(diag,'selector',['UNRELATED_OR_DUPLICATE_SOURCE'],r);continue
+        if r.get('contract_type') not in R59_ALLOWED_TYPES or r.get('relation_type') not in ('contrast','conditional_choice','error_transfer','dependent_sequence'):
+            _generation_reject(diag,'selector',['INVALID_RELATION_TYPE'],r);continue
+        ok,plan=validate_plan(r.get('source_plan'),aa)
+        if not ok: _generation_reject(diag,'plan',plan['errors'],r);continue
         key=tuple(sorted(ids))
         if key in seen: continue
-        seen.add(key); out.append({'score':99,'anchors':aa,'selector_relation':r})
-        if len(out)>=wanted: break
+        seen.add(key)
+        out.append({'anchors':aa,'selector_relation':r,'source_plan':copy.deepcopy(r['source_plan']),
+                    'fixed_answers':plan['answers'],'contract_type':r['contract_type']})
+        if len(out)>=wanted:break
+    diag['selector_accepted']=len(out)
     return out
+
 
 # Override pool synthesis: relation selector -> actual-exam guided writer -> Python hard gate. No low-quality deterministic fallback.
 def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
     from openai import OpenAI
     size=int(pool_size or (4 if need<=1 else 6))
     bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size)
-    if not bundles: return []
+    out=GenerationPool(diagnostics=getattr(bundles,'diagnostics',None));diag=out.diagnostics
+    if not bundles:return out
     official=_r59_official_examples(db_path,2)
-    client=OpenAI(api_key=api_key,timeout=75,max_retries=1); contracts=[]
-    # Small fixed writer calls. Transport retry is bounded and never Judge-driven.
-    chunks=[bundles[i:i+2] for i in range(0,len(bundles),2)]
-    for chunk in chunks:
-        prompt=_r59_prompt(domain,chunk,official)
+    client=OpenAI(api_key=api_key,timeout=75,max_retries=0)
+    for start in range(0,len(bundles),2):
+        chunk=bundles[start:start+2];diag['writer_calls']+=1
         try:
-            rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
-            raw=json.loads(re.sub(r'^```(?:json)?\s*|\s*```$','',rr.output_text.strip())); arr=raw.get('contracts') or []
+            rr=client.responses.create(model=model,input=_r59_prompt(domain,chunk,official),reasoning={'effort':'high'})
+            raw=json.loads(_strip_json(rr.output_text))
+            if not isinstance(raw,dict) or not isinstance(raw.get('contracts'),list):raise ValueError('CONTRACTS_ARRAY_REQUIRED')
+            arr=raw['contracts']
         except Exception as ex:
-            raise RuntimeError('writer failed: '+type(ex).__name__) from ex
-        for c in arr:
-            try: bi=int(c.get('bundle_id',-1))
-            except: bi=-1
-            if bi<0 or bi>=len(chunk): continue
-            aa=chunk[bi]['anchors']; allowed={int(x['id']):x for x in aa}
-            ids=[]
-            for z in c.get('cited_anchor_ids') or []:
-                try: z=int(z)
-                except: continue
-                if z in allowed: ids.append(z)
-            ids=list(dict.fromkeys(ids))
-            if len(ids)<2: continue
-            c=copy.deepcopy(c); c['domain']=domain; c['cited_anchor_ids']=ids[:3]
-            c['contract_type']=str(c.get('contract_type') or 'contrastive_error_transfer')
-            if c['contract_type'] not in R59_ALLOWED_TYPES: c['contract_type']='contrastive_error_transfer'
-            c['exact_answers']=[_clean(allowed[z]['answer']) for z in ids[:2]]
-            c['selector_relation']=copy.deepcopy(chunk[bi].get('selector_relation',{}))
-            c['status']='R59_RAW'; c['schema_version']=R59_SCHEMA_VERSION
-            ok,diag=validate_r59_contract(db_path,domain,c); c['validation']=diag
-            if ok:
-                c['status']='R59_PYTHON_VALIDATED'; c['contract_id']=f"R59-{domain}-{c['contract_type']}-"+'-'.join(map(str,ids[:2])); contracts.append(c)
-    out=[]; seen=set()
-    for c in contracts:
-        k=(c.get('contract_type'),tuple(c.get('cited_anchor_ids') or []))
-        if k in seen: continue
-        seen.add(k); out.append(c)
-    return out[:size]
+            _generation_reject(diag,'writer_call',[type(ex).__name__]);continue
+        omissions=raw.get('omissions')
+        if isinstance(omissions,list):diag['omissions'].extend(copy.deepcopy(omissions[:6]))
+        diag['writer_returned']+=len(arr)
+        if not arr:_generation_reject(diag,'writer',['NO_QUESTION_WRITTEN'])
+        seen=set()
+        for raw_c in arr:
+            if not isinstance(raw_c,dict):
+                _generation_reject(diag,'writer_schema',['BAD_CONTRACT_OBJECT']);continue
+            bi=raw_c.get('bundle_id')
+            if type(bi) is not int or not 0<=bi<len(chunk) or bi in seen:
+                _generation_reject(diag,'writer_schema',['INVALID_OR_DUPLICATE_BUNDLE_ID'],raw_c);continue
+            seen.add(bi);b=chunk[bi]
+            if 'exact_answers' in raw_c and raw_c['exact_answers']!=b['fixed_answers']:
+                _generation_reject(diag,'writer_schema',['WRITER_CHANGED_FIXED_ANSWERS'],raw_c);continue
+            c=copy.deepcopy(raw_c)
+            c.update(domain=domain,cited_anchor_ids=[a['id'] for a in b['anchors']],
+                     source_plan=copy.deepcopy(b['source_plan']),exact_answers=copy.deepcopy(b['fixed_answers']),
+                     selector_relation=copy.deepcopy(b['selector_relation']),contract_type=b['contract_type'],
+                     status='R59_RAW',schema_version=R59_SCHEMA_VERSION)
+            ok,validation=validate_r59_contract(db_path,domain,c);c['validation']=validation
+            if not ok:
+                diag['python_rejected']+=1;_generation_reject(diag,'python',validation['errors'],c);continue
+            c['status']='R59_PYTHON_VALIDATED'
+            q=r59_contract_to_question(c);errors=r59_prejudge_errors(c,q)
+            if errors:
+                diag['python_rejected']+=1;_generation_reject(diag,'quality_gate',errors,c);continue
+            c['contract_id']='R59-'+_fp({k:c.get(k) for k in ('domain','contract_type','source_plan','clues','tasks')})
+            out.append(c);diag['python_validated']+=1
+    return out
+
+
+
+def r59_prejudge_errors(c,q):
+    """Reject known definition/label failures before spending Judge calls."""
+    from validators import _max_copy_similarity,_simple_answer_label,_action_signature
+    errors=[]
+    if not q:return ['QUESTION_CONVERSION_FAILED']
+    anchors=(c.get('validation') or {}).get('anchors',[])
+    if not c.get('source_plan'):errors.append('SOURCE_BOUND_PLAN_REQUIRED')
+    for i,(task,answer) in enumerate(zip(q.get('tasks',[]),q.get('answer',[]))):
+        acts=_action_signature(task)
+        if _simple_answer_label(answer) and set(acts)&{'reason','correct','apply'}:
+            errors.append('LABEL_ONLY_SCORING_TASK_'+str(i+1))
+    # Apply independently of "판단/적용" wording: those words are not reasoning evidence.
+    for side in ('A','B'):
+        material=' '.join(str(cl.get('text','')) for cl in c.get('clues',[]) if cl.get('side')==side)
+        for a in anchors:
+            if _max_copy_similarity(material,a.get('evidence',''),a.get('answer',''))>=0.74:
+                errors.append('DEFINITION_RECOGNITION_'+side);break
+    visible=' '.join(str(q.get(k,'')) for k in ('intro','passage'))+' '+' '.join(q.get('tasks',[]))
+    if c.get('source_plan'):
+        from question_plans import validate_plan
+        ok,plan=validate_plan(c['source_plan'],anchors)
+        if not ok:errors.extend(plan['errors'])
+        else:
+            for i,row in enumerate(plan['rubric']):
+                if _norm(row['result']) in _norm(visible):errors.append('FIXED_RESULT_LEAK_'+str(i+1))
+    return list(dict.fromkeys(errors))

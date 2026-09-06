@@ -35,7 +35,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · ACTUAL-EXAM-TRANSFER-R59-20260904")
+st.caption("배포 버전: FINAL-STABLE-20260831 · ACTUAL-EXAM-TRANSFER-R59-20260904 · SOURCE-PLAN-DIAGNOSTICS")
 
 def secret(name, default=""):
     try:
@@ -351,6 +351,20 @@ with tabs[2]:
         with st.expander("영역별 생성/검증 로그", expanded=True): st.json(_rr.get("domain_logs",[]))
         with st.expander("Judge 실패 유형", expanded=True): st.json(_rr.get("failure_class_counts",{}))
         with st.expander("Judge 원본 결과", expanded=False): st.json(_rr.get("reviews",[]))
+        st.download_button("실행 진단 전체 JSON 저장",data=json.dumps(_rr,ensure_ascii=False,indent=2),
+                           file_name="generation_diagnostics.json",mime="application/json")
+        for _idx,_review in enumerate(_rr.get("reviews",[])):
+            with st.expander(f"심사 문항 {_idx+1} · {_review.get('domain','')} · {'PASS' if _review.get('pass') else 'REJECT'}"):
+                _question=_review.get("question")
+                if _question:
+                    st.write(_question.get("passage",""))
+                    st.write("작성 방법",_question.get("tasks",[]))
+                    st.write("고정 정답",_question.get("answer",[]))
+                    st.write("채점 근거",_question.get("rubric",[]))
+                else:
+                    st.caption("이전 실행에는 문항 원문이 저장되지 않았습니다.")
+                st.write(_review.get("reason",""))
+
         if _sm.get("coverage_ready"):
             st.success("선택 영역의 인증 슬롯을 충족했습니다. 최종 A/B 편성의 품질·중복 검증은 별도로 필요합니다.")
         else:

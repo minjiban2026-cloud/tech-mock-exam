@@ -111,7 +111,7 @@ class StabilizationTests(unittest.TestCase):
 
     def test_mock_certification_5_to_18_and_json_roundtrip(self):
         pools={d:[fixture(d,t) for t in cc.R59_ALLOWED_TYPES] for d in eb.DOMAINS}
-        with patch.object(cc,'synthesize_r59_pool',side_effect=lambda key,model,db,d,*a,**kw:copy.deepcopy(pools[d])), patch.object(eb,'judge_question',return_value=review()) as judge:
+        with patch.object(cc,'r59_prejudge_errors',return_value=[]), patch.object(cc,'synthesize_r59_pool',side_effect=lambda key,model,db,d,*a,**kw:copy.deepcopy(pools[d])), patch.object(eb,'judge_question',return_value=review()) as judge:
             run=eb.certify_r59_missing_slots(DB,[],domains=eb.DOMAINS,api_key='offline-mock',model='mock',judge_model='mock',seed=59)
         self.assertEqual(run['summary']['before_verified'],5)
         self.assertEqual(run['summary']['after_verified'],18)
@@ -122,7 +122,7 @@ class StabilizationTests(unittest.TestCase):
 
     def test_retry_upserts_and_refreshes_evidence(self):
         d=eb.DOMAINS[0]; c=fixture(d); c['validation']={'anchors':[{'evidence':'STALE EVIDENCE'}]}
-        with patch.object(cc,'synthesize_r59_pool',return_value=[c]),patch.object(eb,'judge_question',return_value=review()) as judge:
+        with patch.object(cc,'r59_prejudge_errors',return_value=[]), patch.object(cc,'synthesize_r59_pool',return_value=[c]),patch.object(eb,'judge_question',return_value=review()) as judge:
             run=eb.certify_r59_missing_slots(DB,[c],domains=[d],api_key='mock',seed=4)
         self.assertEqual(len(run['contracts']),1)
         self.assertEqual(run['summary']['after_verified'],2)
@@ -133,19 +133,25 @@ class StabilizationTests(unittest.TestCase):
         def pool(key,model,db,d,*args,**kwargs):
             if d==ds[1]: raise TimeoutError('mock timeout')
             return [fixture(d)]
-        with patch.object(cc,'synthesize_r59_pool',side_effect=pool),patch.object(eb,'judge_question',return_value=review()):
+        with patch.object(cc,'r59_prejudge_errors',return_value=[]), patch.object(cc,'synthesize_r59_pool',side_effect=pool),patch.object(eb,'judge_question',return_value=review()):
             run=eb.certify_r59_missing_slots(DB,[],domains=ds,api_key='mock',seed=2)
         self.assertEqual(len(run['accepted_contracts']),1)
         self.assertIn('generation_error',run['domain_logs'][1])
 
     def test_writer_executes_after_successful_selector(self):
         c=fixture(eb.DOMAINS[0]); ids=c['cited_anchor_ids']; anchors={a['id']:a for a in cc._anchor_rows(DB,c['domain'],72)}
-        bundle={'anchors':[anchors[i] for i in ids],'selector_relation':{'master_relation':'MOCK RELATION'}}
-        payload=dict(c,bundle_id=0); response=SimpleNamespace(output_text=json.dumps({'contracts':[payload]}))
+        from test_generation_diagnostics import plan_for
+        from question_plans import validate_plan
+        plan=plan_for([anchors[i] for i in ids])
+        fixed=validate_plan(plan,[anchors[i] for i in ids])[1]['answers']
+        bundle={'anchors':[anchors[i] for i in ids],'selector_relation':{'master_relation':'MOCK RELATION'},'source_plan':plan,'fixed_answers':fixed,'contract_type':cc.R59_ALLOWED_TYPES[0]}
+        payload=dict(c,bundle_id=0,exact_answers=fixed); response=SimpleNamespace(output_text=json.dumps({'contracts':[payload]}))
         client=SimpleNamespace(responses=SimpleNamespace(create=lambda **kw:response))
         with patch.object(cc,'_r59_select_bundles',return_value=[bundle]),patch('openai.OpenAI',return_value=client):
             pool=cc.synthesize_r59_pool('mock','mock',DB,c['domain'],1)
-        self.assertEqual(len(pool),1)
+        self.assertEqual(pool.diagnostics['writer_returned'],1)
+        self.assertEqual(len(pool),0)  # Definition shape fixture must now be vetoed.
+        self.assertTrue(pool.diagnostics['failure_counts'])
         self.assertIn('MOCK RELATION',cc._r59_prompt(c['domain'],[bundle],[]))
 
     def test_database_unchanged_and_readonly(self):

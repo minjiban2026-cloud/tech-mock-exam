@@ -114,7 +114,7 @@ def judge_question(api_key, model, question, source_context="", style_profile=""
         "question_type":question.get("question_type"),"material_form":question.get("material_form"),
         "intro":question.get("intro"),"passage":question.get("passage"),
         "conditions":question.get("conditions",[]),"tasks":question.get("tasks",[]),
-        "fixed_answer":question.get("answer",[]),"evidence":question.get("evidence",[]),
+        "fixed_answer":question.get("answer",[]),"scoring_rubric":question.get("rubric",[]),"evidence":question.get("evidence",[]),
         "master_concept":question.get("master_concept",""),"relation":question.get("relation",""),
     }
     prompt=f"""
