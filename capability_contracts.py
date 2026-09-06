@@ -24,6 +24,19 @@ def _norm(s):
     return re.sub(r'[^0-9A-Za-z가-힣]+','',_clean(s)).lower()
 
 
+# R59 source hygiene: PDF extraction occasionally leaves a sentence cut at a
+# connective ending (e.g. "...발달하여"). Such fragments are unsafe as a
+# complete scoring premise even when their anchor confidence is high.
+def _obviously_incomplete_evidence(text):
+    t=_clean(text)
+    if not t:
+        return True
+    return bool(re.search(r'(?:하여|해서|하며|하면서|되어|되며|되면서|이고|이며|때문에|따라서|그러나|그리고|또는|및)\s*$',t))
+
+
+R59_MAX_PAGE_SPAN = 6
+
+
 def _fp(x):
     return hashlib.sha256(json.dumps(x,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:24]
 
@@ -69,6 +82,8 @@ def _anchor_rows(db_path, domain, limit=72):
     for rid,a,e,s,p,c,topic in rows:
         a=_clean(a); e=_clean(e)
         if not (2<=len(a)<=100 and 20<=len(e)<=950):
+            continue
+        if _obviously_incomplete_evidence(e):
             continue
         if len(re.findall(r'[가-힣A-Za-z]',e))<12:
             continue
@@ -1207,7 +1222,12 @@ def validate_r59_contract(db_path,domain,c):
     tasks=[_clean(x) for x in c.get('tasks') or [] if _clean(x)]
     if len(tasks)!=2: errs.append('R59_NEED_2_TASKS')
     if len(tasks)==2 and not any(k in tasks[1] for k in ('①','판단 기준','고친','수정한','앞의')): errs.append('R59_TASK2_NOT_DEPENDENT')
-    nv=_norm(' '.join(visible)+' '+' '.join(tasks)+' '+_clean(c.get('student_claim'))+' '+_clean(c.get('transfer_case')))
+    if len(tasks)==2 and re.search(r'(?:①|앞의|이전|첫\s*번째).{0,12}(?:무관|관계없이|사용하지|참고하지)|(?:독립적으로|별개로).{0,12}(?:판단|적용)',tasks[1]):
+        errs.append('R59_TASK2_EXPLICITLY_INDEPENDENT')
+    transfer_text=_clean(c.get('transfer_case'))
+    if re.search(r'자료.{0,10}(?:사용하지|참고하지)|(?:일반적인|일반)\s*지식.{0,12}(?:그대로|사용)|(?:근거|자료).{0,10}무관',transfer_text):
+        errs.append('R59_TRANSFER_BYPASSES_SOURCE')
+    nv=_norm(' '.join(visible)+' '+' '.join(tasks)+' '+_clean(c.get('student_claim'))+' '+transfer_text)
     for ans in answers[:2]:
         if len(_norm(ans))>=2 and _norm(ans) in nv: errs.append('R59_DIRECT_ANSWER_LEAK:'+ans[:24])
     if not _clean(c.get('student_claim')): errs.append('R59_NO_STUDENT_CLAIM')
@@ -1377,6 +1397,13 @@ JSON:
         aa=[amap[z] for z in ids]
         if len({x['source_name'] for x in aa})!=1 or len({_norm(x['answer']) for x in aa})!=len(aa):
             _generation_reject(diag,'selector',['UNRELATED_OR_DUPLICATE_SOURCE'],r);continue
+        pages=[int(x.get('page_no') or 0) for x in aa]
+        known_pages=[x for x in pages if x>0]
+        if len(known_pages)>=2 and max(known_pages)-min(known_pages)>R59_MAX_PAGE_SPAN:
+            _generation_reject(diag,'selector',['SOURCE_SPAN_TOO_WIDE'],r,
+                               [{'code':'SOURCE_SPAN_TOO_WIDE','path':'anchor_ids',
+                                 'page_span':max(known_pages)-min(known_pages),
+                                 'max_page_span':R59_MAX_PAGE_SPAN}]);continue
         if r.get('contract_type') not in R59_ALLOWED_TYPES or r.get('relation_type') not in ('contrast','conditional_choice','error_transfer','dependent_sequence'):
             _generation_reject(diag,'selector',['INVALID_RELATION_TYPE'],r);continue
         ok,plan=validate_plan(r.get('source_plan'),aa,relation_type=r.get('relation_type'))

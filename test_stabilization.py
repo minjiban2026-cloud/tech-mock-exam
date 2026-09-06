@@ -30,6 +30,7 @@ def fixture(domain, typ=None):
     rows=cc._anchor_rows(DB,domain,72)
     for a,b in itertools.combinations(rows,2):
         if a['source_name']!=b['source_name'] or a['answer']==b['answer']: continue
+        if a.get('page_no') and b.get('page_no') and abs(int(a['page_no'])-int(b['page_no']))>cc.R59_MAX_PAGE_SPAN: continue
         clues=[]
         for side,anchor in [('A',a),('B',b)]:
             text=anchor['evidence']
@@ -168,13 +169,10 @@ class StabilizationTests(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError): connect(missing)
         self.assertFalse(missing.exists())
 
-    @unittest.expectedFailure
     def test_semantic_dependency_not_proven_by_reference_word(self):
-        # Known blocker: merely mentioning task 1 still passes the lexical validator.
         c=fixture(eb.DOMAINS[0]); c['tasks']=['① 사례 A를 판단하시오.','② ①과 무관하게 사례 B만 보고 판단하시오.']
         self.assertFalse(cc.validate_r59_contract(DB,c['domain'],c)[0])
 
-    @unittest.expectedFailure
     def test_decorative_transfer_not_proven_by_source_overlap(self):
         c=fixture(eb.DOMAINS[0]); c['transfer_case']='자료를 사용하지 않고 일반적인 지식을 그대로 쓰면 된다.'
         self.assertFalse(cc.validate_r59_contract(DB,c['domain'],c)[0])

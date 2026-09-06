@@ -4778,7 +4778,12 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
             if rv.get('pass') is True and not review_passes(rv):
                 rv=dict(rv, **{'pass':False,'fatal_flags':['INVALID_JUDGE_EVIDENCE'],'reason':'Judge PASS evidence is incomplete or below threshold'})
             sig=_coverage_failure_signals(rv,q)
-            reviews.append({'domain':d,'contract_type':c.get('contract_type'),'topic':c.get('topic'),'pass':rv.get('pass'),'reason':rv.get('reason',''),'scores':rv.get('scores',{}),'fatal_flags':rv.get('fatal_flags',[]),'failure_signals':sig,'question':copy.deepcopy(q),'judge_review':copy.deepcopy(rv),'contract_id':c.get('contract_id')})
+            reviews.append({'domain':d,'contract_type':c.get('contract_type'),'topic':c.get('topic'),'pass':rv.get('pass'),
+                            'reason':rv.get('reason',''),'weakest_point':rv.get('weakest_point',''),
+                            'scores':rv.get('scores',{}),'fatal_flags':rv.get('fatal_flags',[]),'failure_signals':sig,
+                            'question':copy.deepcopy(q),'source_plan':copy.deepcopy(c.get('source_plan')),
+                            'selector_relation':copy.deepcopy(c.get('selector_relation')),
+                            'judge_review':copy.deepcopy(rv),'contract_id':c.get('contract_id')})
             if review_passes(rv):
                 passed+=1; cc=copy.deepcopy(c); cc['status']='R59_AI_VERIFIED'; cc['ai_quality']=copy.deepcopy(rv); cc['judge_model']=jm
                 attach_receipt(cc)

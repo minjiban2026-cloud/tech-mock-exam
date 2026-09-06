@@ -361,9 +361,16 @@ with tabs[2]:
                     st.write("작성 방법",_question.get("tasks",[]))
                     st.write("고정 정답",_question.get("answer",[]))
                     st.write("채점 근거",_question.get("rubric",[]))
+                    _plan=_review.get("source_plan") or _question.get("source_plan")
+                    if _plan:
+                        with st.expander("Writer 이전 고정 source plan", expanded=False):
+                            st.json(_plan)
                 else:
                     st.caption("이전 실행에는 문항 원문이 저장되지 않았습니다.")
-                st.write(_review.get("reason",""))
+                st.write("Judge reason",_review.get("reason",""))
+                _weak=_review.get("weakest_point") or (_review.get("judge_review") or {}).get("weakest_point","")
+                if _weak:
+                    st.write("Judge weakest_point",_weak)
 
         if _sm.get("coverage_ready"):
             st.success("선택 영역의 인증 슬롯을 충족했습니다. 최종 A/B 편성의 품질·중복 검증은 별도로 필요합니다.")
