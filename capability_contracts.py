@@ -1186,10 +1186,22 @@ def _r59_source_bundles(db_path,domain,max_bundles=8):
     return out
 
 def _r59_grounded_fragment(fragment, anchor, min_shared=3):
+    """Public clues must be source text, not Writer-authored paraphrases.
+
+    R59 diagnostics showed that semantic paraphrases can sound plausible while adding
+    facts absent from the selected anchor.  Grounding ownership therefore belongs to
+    Python: a clue is accepted only when its normalized text is a contiguous fragment
+    of the anchor evidence and it does not expose the fixed answer.
+    """
     f=_clean(fragment); src=_clean(anchor.get('evidence'))
-    if len(_norm(f))<18: return False
-    if _norm(anchor.get('answer')) in _norm(f): return False
-    return len(_r57_words(f)&_r57_words(src))>=min_shared
+    nf,ns=_norm(f),_norm(src)
+    if len(nf)<8: return False
+    ans=_norm(anchor.get('answer'))
+    if ans and len(ans)>=2 and ans in nf: return False
+    if nf in ns: return True
+    # Deterministic redaction of an answer label is also source-grounded.
+    redacted=nf.replace('항목','')
+    return len(redacted)>=8 and redacted in ns
 
 def validate_r59_contract(db_path,domain,c):
     if not isinstance(c,dict): return False, {'errors':['BAD_CONTRACT_OBJECT'],'anchors':[]}
@@ -1226,7 +1238,7 @@ def validate_r59_contract(db_path,domain,c):
         allowed={_norm(a.get('answer')) for a in anchors}
         if any(_norm(ans) not in allowed for ans in answers): errs.append('R59_ANSWER_NOT_GROUNDED')
     clues=list(c.get('clues') or [])
-    if len(clues)<4: errs.append('R59_NEED_4_CLUES')
+    if len(clues)<2: errs.append('R59_NEED_2_CLUES')
     per={}
     visible=[]
     if {cl.get('side') for cl in clues}!={'A','B'}: errs.append('R59_BAD_CLUE_SIDES')
@@ -1237,7 +1249,7 @@ def validate_r59_contract(db_path,domain,c):
         txt=_clean(cl.get('text')); visible.append(txt); per[aid]=per.get(aid,0)+1
         if aid not in amap: errs.append(f'R59_CLUE_{i}_BAD_ANCHOR'); continue
         if not _r59_grounded_fragment(txt,amap[aid],2): errs.append(f'R59_CLUE_{i}_WEAK_GROUNDING')
-    if len([a for a,n in per.items() if n>=2])<2: errs.append('R59_NEED_TWO_CLUES_PER_SIDE')
+    if any(per.get(aid,0)<1 for aid in ids): errs.append('R59_NEED_CLUE_FOR_EACH_ANCHOR')
     tasks=[_clean(x) for x in c.get('tasks') or [] if _clean(x)]
     if len(tasks)!=2: errs.append('R59_NEED_2_TASKS')
     if len(tasks)==2 and not any(k in tasks[1] for k in ('①','판단 기준','고친','수정한','앞의')): errs.append('R59_TASK2_NOT_DEPENDENT')
@@ -1311,7 +1323,7 @@ JSON 객체만 출력:
 "tasks":["① 판단과 근거 요구","② ① 결과를 사용하는 후속 요구"],
 "reasoning_chain":["자료 분석","중간 판단","후속 적용"],"task2_uses_task1":true}}],
 "omissions":[{{"bundle_id":0,"reason":"작성 불가 이유"}}]}}
-clues는 A/B 각 두 개 이상의 서로 다른 원문 지원 단서다. 별도의 exact_answers를 출력하지 않는다.
+clues는 각 cited anchor마다 최소 1개씩 작성한다. clue.text는 반드시 해당 anchor evidence의 정확한 연속 구절을 그대로 사용하고, fixed answer 문자열은 포함하지 않는다. 원문에 없는 설명을 바꾸어 쓰거나 보충하지 않는다. 별도의 exact_answers를 출력하지 않는다.
 """
 
 
@@ -1404,16 +1416,33 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     from openai import OpenAI
     from question_plans import validate_plan,PLAN_SCHEMA
     out=GenerationPool();diag=out.diagnostics
-    anchors=_anchor_rows(db_path,domain,limit=32);diag['retrieved_anchors']=len(anchors)
+    anchors=_anchor_rows(db_path,domain,limit=96);diag['retrieved_anchors']=len(anchors)
     diag['selector_diagnostic_version']='R59-SELECTOR-TRACE-1'
     diag['selector_model']=model
     diag['selector_anchors']=copy.deepcopy(anchors)
     if len(anchors)<2:
         _generation_reject(diag,'retrieval',['INSUFFICIENT_ANCHORS']);return out
+    # Python narrows the combinatorial search to local/source-coherent pairs first.
+    # The AI judges whether a reasoning dependency exists; it no longer has to invent
+    # arbitrary pairings from a flat anchor list.
+    pair_candidates=[]
+    for i,a in enumerate(anchors):
+        for b in anchors[i+1:]:
+            if a.get('source_name')!=b.get('source_name'): continue
+            span=abs(int(a.get('page_no') or 0)-int(b.get('page_no') or 0))
+            bridge,_,terms=_r59_span_bridge([a,b])
+            if not bridge: continue
+            shared=len(_r59_terms((a.get('topic') or '')+' '+(a.get('evidence') or '')) & _r59_terms((b.get('topic') or '')+' '+(b.get('evidence') or '')))
+            score=(8 if span<=1 else 5 if span<=3 else 3 if span<=R59_MAX_PAGE_SPAN else 1)+min(shared,4)
+            pair_candidates.append((score,-span,a,b,terms))
+    pair_candidates.sort(key=lambda x:(-x[0],-x[1],int(x[2]['id']),int(x[3]['id'])))
+    pair_payload=[{'anchor_ids':[int(a['id']),int(b['id'])],'page_span':abs(int(a.get('page_no') or 0)-int(b.get('page_no') or 0)),
+                   'bridge_terms':terms,'anchors':[a,b]} for _,__,a,b,terms in pair_candidates[:28]]
+    diag['selector_pair_candidates']=copy.deepcopy(pair_payload)
     prompt=f"""기술 임용 4점 출제용 관계와 채점 계획을 선별한다. 문제 문장은 쓰지 않는다.
 영역:{domain}
-원문 anchor:{json.dumps(anchors,ensure_ascii=False)}
-최대 {wanted}개를 고른다. 같은 source의 서로 다른 2~3개 anchor를 사용한다.
+Python이 source/page/개념 연결성으로 미리 좁힌 후보 pair:{json.dumps(pair_payload,ensure_ascii=False)}
+최대 {wanted}개를 고른다. 반드시 제시된 candidate pair의 anchor_ids 중 하나를 그대로 사용한다.
 같은 페이지/단어/주제라는 이유만으로 묶지 않는다. 정의 두 개를 명칭으로 답하는 관계는 제외한다.
 먼저 ①의 판단 결과가 ②에서 반드시 쓰이는 관계를 고른다. 다만 원문에 ‘① 다음 ②’라는 절차 문장이 직접 있어야 하는 것은 아니다.
 ①에서 특정한 대상·기법·국가·과정·재료를 식별하고, 그 식별 결과를 ②에서 그 대상의 속성·적용·후속 판단을 찾는 조회 키로 실제 사용한다면 논리적 의존으로 인정한다.
