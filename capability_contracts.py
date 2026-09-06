@@ -120,6 +120,25 @@ def _strip_json(text):
     return t
 
 
+def _load_r59_selector_json(text):
+    """Parse selector JSON with one narrow structural repair.
+
+    Some compact model responses have been observed to omit exactly the closing
+    brace of a relation object between source_plan and the top-level omissions
+    array (``}}],\"omissions\"`` instead of ``}}}],...``).  We only apply
+    this deterministic repair after normal JSON parsing fails; no semantic fields
+    are invented or changed.
+    """
+    raw=_strip_json(text)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as first:
+        repaired=raw.replace('}}],"omissions"','}}}],"omissions"',1)
+        if repaired==raw:
+            raise first
+        return json.loads(repaired)
+
+
 def _existing_digest(existing):
     return [
         {'contract_type':x.get('contract_type'),'topic':x.get('topic'),'cited_anchor_ids':x.get('cited_anchor_ids'),'exact_answers':x.get('exact_answers')}
@@ -1364,9 +1383,12 @@ reason에는 충족하지 못한 조건, missing_evidence에는 원문에 추가
 JSON:
 {{"relations":[{{"anchor_ids":[1,2],"relation_type":"contrast|conditional_choice|error_transfer|dependent_sequence",
 "contract_type":"contrastive_error_transfer|criterion_conflict_resolution","master_relation":"관계 설명",
-"source_plan":{{"schema":"{PLAN_SCHEMA}","criterion":{{}},"transfer_condition":{{}},
-"task1":{{"result":{{}},"reason":{{}}}},"task2":{{"result":{{}},"reason":{{}}}},
-"dependency":{{"input":"task1.result","output":"task2.result","required_result":{{}},
+"source_plan":{{"schema":"{PLAN_SCHEMA}",
+"criterion":{{"text":"판단 기준 설명","binding":{{"anchor_id":1,"quote":"원문 연속 구절"}}}},
+"transfer_condition":{{"text":"후속 적용 조건 설명","binding":{{"anchor_id":2,"quote":"원문 연속 구절"}}}},
+"task1":{{"result":{{"value":"판단 결과","binding":{{"anchor_id":1,"quote":"원문 결과 구절"}}}},"reason":{{"text":"근거 설명","binding":{{"anchor_id":1,"quote":"원문 근거 구절"}}}}}},
+"task2":{{"result":{{"value":"후속 결과","binding":{{"anchor_id":2,"quote":"원문 결과 구절"}}}},"reason":{{"text":"근거 설명","binding":{{"anchor_id":2,"quote":"원문 근거 구절"}}}}}},
+"dependency":{{"input":"task1.result","output":"task2.result","required_result":{{"anchor_id":1,"quote":"task1.result와 같은 원문 결과 구절"}},
 "why_required":"① 결과를 빼면 ②의 어느 판단이 불가능해지는지 구체적으로 설명"}}}}}}],
 "omissions":[{{"anchor_ids":[1,2],"reason":"성립하지 않는 이유","missing_evidence":"부족한 원문 근거"}}]}}
 """
@@ -1375,7 +1397,7 @@ JSON:
         client=OpenAI(api_key=api_key,timeout=75,max_retries=0)
         rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
         diag['selector_response_text']=str(rr.output_text or '')[:60000]
-        obj=json.loads(_strip_json(rr.output_text))
+        obj=_load_r59_selector_json(rr.output_text)
         if not isinstance(obj,dict) or not isinstance(obj.get('relations'),list): raise ValueError('RELATIONS_ARRAY_REQUIRED')
         rels=obj['relations']
         omissions=obj.get('omissions',[])

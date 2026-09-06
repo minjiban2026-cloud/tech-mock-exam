@@ -38,7 +38,23 @@ def validate_plan(plan, source_anchors, relation_type=None):
         return False, {'errors':['SOURCE_BOUND_PLAN_REQUIRED'],'error_details':[{'code':'SOURCE_BOUND_PLAN_REQUIRED','path':'source_plan'}]}
     amap={int(a['id']):a for a in source_anchors}
     def bound(ref,path,role='evidence'):
-        try:return bind(ref,amap,role=role)
+        # R59 selector outputs are allowed to carry explanatory text/value wrappers
+        # around the actual source binding.  The canonical provenance object is
+        # still {anchor_id, quote}; validation always resolves back to that object.
+        try:
+            if isinstance(ref,dict) and type(ref.get('anchor_id')) is int and isinstance(ref.get('quote'),str):
+                return bind(ref,amap,role=role)
+            if isinstance(ref,dict) and isinstance(ref.get('binding'),dict):
+                return bind(ref['binding'],amap,role=role)
+            if isinstance(ref,dict) and isinstance(ref.get('bindings'),list):
+                refs=ref['bindings']
+                if not refs:
+                    raise ValueError('BINDING_OBJECT_REQUIRED')
+                if role=='result' and len(refs)!=1:
+                    raise ValueError('SINGLE_RESULT_BINDING_REQUIRED')
+                vals=[bind(x,amap,role=role) for x in refs]
+                return ' / '.join(vals)
+            raise ValueError('BINDING_OBJECT_REQUIRED')
         except (ValueError,TypeError,KeyError) as ex:
             reject(str(ex),path);return None
     criterion=bound(plan.get('criterion'),'criterion')
