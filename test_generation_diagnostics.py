@@ -87,12 +87,12 @@ class GenerationDiagnosticsTests(unittest.TestCase):
         self.assertIn('writer_schema:WRITER_CHANGED_FIXED_ANSWERS',pool.diagnostics['failure_counts'])
 
     def test_raw_count_separate_from_validated_count(self):
-        candidate=dict(self.c,bundle_id=0,clues=[]);candidate.pop('exact_answers')
+        candidate=dict(self.c,bundle_id=0,clues=[],student_claim='학생은 두 사례를 같은 방식으로 설명하였다.');candidate.pop('exact_answers')
         with patch.object(cc,'_r59_select_bundles',return_value=[self.bundle()]),patch('openai.OpenAI',return_value=fake_client([{'contracts':[candidate]}])):
             pool=cc.synthesize_r59_pool('mock','mock',DB,self.c['domain'],1)
         self.assertEqual(pool.diagnostics['writer_returned'],1)
         self.assertEqual(pool.diagnostics['python_validated'],0)
-        self.assertIn('python:R59_NEED_2_CLUES',pool.diagnostics['failure_counts'])
+        self.assertIn('quality_gate:NO_ACTUAL_ERROR_CLAIM',pool.diagnostics['failure_counts'])
 
     def test_reported_definition_failure_blocked_before_judge(self):
         # Reconstruct the failure class from DB source; the original question was not saved by R59.

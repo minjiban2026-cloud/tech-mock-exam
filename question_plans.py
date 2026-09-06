@@ -17,8 +17,13 @@ def bind(ref, anchors, *, role='evidence'):
         raise ValueError('BINDING_OBJECT_REQUIRED')
     anchor=anchors.get(ref['anchor_id'])
     quote=clean(ref['quote'])
-    minimum=1 if role=='result' else 12
-    if not anchor or len(quote)<minimum or quote not in clean(anchor.get('evidence')):
+    minimum=1 if role=='result' else 4
+    src=clean(anchor.get('evidence')) if anchor else ''
+    # Preserve exact provenance while tolerating PDF extraction whitespace splits
+    # such as '성능 을' vs '성능을'. No words or numbers may change.
+    nq=re.sub(r'\s+','',quote)
+    ns=re.sub(r'\s+','',src)
+    if not anchor or len(nq)<minimum or nq not in ns:
         raise ValueError('EXACT_SOURCE_QUOTE_REQUIRED')
     # A result can be a short selected value. A reason cannot be just its name.
     if role=='evidence' and quote==clean(anchor.get('answer')):
@@ -90,7 +95,16 @@ def validate_plan(plan, source_anchors, relation_type=None):
         if isinstance(result_ref,dict):
             value=clean(result_ref.get('value'))
             if value:
-                if result_binding is None or re.sub(r'\s+','',value) not in re.sub(r'\s+','',result_binding):
+                nv=re.sub(r'\s+','',value)
+                nb=re.sub(r'\s+','',result_binding or '')
+                # A scored result may be the anchor's canonical label/topic even
+                # when the evidence binding deliberately contains only the criterion.
+                # This is provenance-safe: the label comes from the same DB anchor.
+                rb = result_ref.get('binding') if isinstance(result_ref.get('binding'),dict) else result_ref
+                aid = rb.get('anchor_id') if isinstance(rb,dict) else None
+                anchor = amap.get(aid) if type(aid) is int else None
+                labels={re.sub(r'\s+','',clean((anchor or {}).get(k))) for k in ('answer','topic')}
+                if result_binding is None or (nv not in nb and nv not in labels):
                     reject('RESULT_VALUE_NOT_IN_BINDING',name+'.result.value')
                 else:
                     result=value

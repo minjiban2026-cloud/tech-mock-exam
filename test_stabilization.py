@@ -41,7 +41,7 @@ def fixture(domain, typ=None):
         c={'domain':domain,'topic':a['topic'],'contract_type':typ or cc.R59_ALLOWED_TYPES[0],
            'schema_version':cc.R59_SCHEMA_VERSION,'status':'R59_PYTHON_VALIDATED',
            'cited_anchor_ids':[a['id'],b['id']],'exact_answers':[a['answer'],b['answer']],
-           'clues':clues,'student_claim':'학생은 두 사례에 같은 기준을 적용했다고 판단하였다.',
+           'clues':clues,'student_claim':'학생은 두 사례에 같은 기준을 적용해도 된다고 잘못 판단하였다.',
            'transfer_case':'추가 상황은 사례 A의 첫 조건과 사례 B의 둘째 조건을 함께 가진다.',
            'tasks':['① 두 사례의 학생 판단 오류를 수정하고 판단 근거를 설명하시오.',
                     '② ①에서 수정한 판단 기준을 추가 상황에 적용하고 근거를 설명하시오.'],

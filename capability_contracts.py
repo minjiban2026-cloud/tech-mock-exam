@@ -133,7 +133,12 @@ def _load_r59_selector_json(text):
     try:
         return json.loads(raw)
     except json.JSONDecodeError as first:
-        repaired=raw.replace('}}],"omissions"','}}}],"omissions"',1)
+        repaired=raw
+        # Observed compact-model defect: a relation object may miss exactly one
+        # closing brace before the next relation OR before top-level omissions.
+        # Repair only these structural separators; never invent semantic fields.
+        repaired=re.sub(r'}}\s*,\s*{(?="anchor_ids")', r'}}},{', repaired)
+        repaired=re.sub(r'}}\s*]\s*,\s*"omissions"', r'}}}],"omissions"', repaired)
         if repaired==raw:
             raise first
         return json.loads(repaired)
@@ -1317,10 +1322,10 @@ def validate_r59_contract(db_path,domain,c):
         allowed={_norm(a.get('answer')) for a in anchors}
         if any(_norm(ans) not in allowed for ans in answers): errs.append('R59_ANSWER_NOT_GROUNDED')
     clues=list(c.get('clues') or [])
-    if len(clues)<2: errs.append('R59_NEED_2_CLUES')
+    if c.get('public_clues') is not False and len(clues)<2: errs.append('R59_NEED_2_CLUES')
     per={}
     visible=[]
-    if {cl.get('side') for cl in clues}!={'A','B'}: errs.append('R59_BAD_CLUE_SIDES')
+    if c.get('public_clues') is not False and {cl.get('side') for cl in clues}!={'A','B'}: errs.append('R59_BAD_CLUE_SIDES')
     if len({_norm(cl.get('text')) for cl in clues})!=len(clues): errs.append('R59_DUPLICATE_CLUES')
     for i,cl in enumerate(clues):
         try: aid=int(cl.get('anchor_id'))
@@ -1328,7 +1333,7 @@ def validate_r59_contract(db_path,domain,c):
         txt=_clean(cl.get('text')); visible.append(txt); per[aid]=per.get(aid,0)+1
         if aid not in amap: errs.append(f'R59_CLUE_{i}_BAD_ANCHOR'); continue
         if not _r59_grounded_fragment(txt,amap[aid],2): errs.append(f'R59_CLUE_{i}_WEAK_GROUNDING')
-    if any(per.get(aid,0)<1 for aid in ids): errs.append('R59_NEED_CLUE_FOR_EACH_ANCHOR')
+    if c.get('public_clues') is not False and any(per.get(aid,0)<1 for aid in ids): errs.append('R59_NEED_CLUE_FOR_EACH_ANCHOR')
     tasks=[_clean(x) for x in c.get('tasks') or [] if _clean(x)]
     if len(tasks)!=2: errs.append('R59_NEED_2_TASKS')
     if len(tasks)==2 and not any(k in tasks[1] for k in ('①','판단 기준','고친','수정한','앞의')): errs.append('R59_TASK2_NOT_DEPENDENT')
@@ -1355,9 +1360,19 @@ def r59_contract_to_question(c):
     clues=list(c.get('clues') or [])
     side1=[_clean(x.get('text')) for x in clues if x.get('side')=='A']
     side2=[_clean(x.get('text')) for x in clues if x.get('side')=='B']
-    passage=("[사례 A]\n- "+'\n- '.join(side1)+"\n\n[사례 B]\n- "+'\n- '.join(side2)+
-             "\n\n[학생의 판단]\n"+_clean(c.get('student_claim'))+
-             "\n\n[추가 상황]\n"+_clean(c.get('transfer_case')))
+    # Do not dump source-definition excerpts into the examinee material.
+    # Diagnostics 8 showed that exact source bullets made every Judge-visible item
+    # a copy/lookup exercise. Source excerpts remain hidden provenance for scoring;
+    # the public material is the error claim + transfer situation only.
+    blocks=[]
+    if side1 or side2:
+        # Kept only for backward-compatible contracts that explicitly opt in. New
+        # R59 contracts set public_clues=False.
+        if c.get('public_clues') is True:
+            blocks.append("[사례 A]\n- "+'\n- '.join(side1)+"\n\n[사례 B]\n- "+'\n- '.join(side2))
+    blocks.append("[학생의 판단]\n"+_clean(c.get('student_claim')))
+    blocks.append("[추가 상황]\n"+_clean(c.get('transfer_case')))
+    passage='\n\n'.join(blocks)
     anchors=(c.get('validation') or {}).get('anchors') or []
     ctx='\n\n'.join(f"[{a.get('source_name','')} p.{a.get('page_no',0)} / anchor {a.get('id')}]\n정답/개념: {_clean(a.get('answer'))}\n근거: {_clean(a.get('evidence'))}" for a in anchors)
     q={'domain':c.get('domain'),'topic':c.get('topic'),'points':4,'pattern_id':'T4_R59','capability_id':'contract:'+str(c.get('contract_type')),
@@ -1391,7 +1406,11 @@ def _r59_prompt(domain,bundles,official):
 각 bundle에서 계획의 task1.result와 task2.result를 채점할 수 있는 문항 하나만 작성한다.
 정답/근거/관계/추가 조건은 이미 고정되어 있다. fixed_answers와 source_plan을 수정하거나 새 기술 조건을 추가하지 않는다.
 정의를 가리고 명칭을 맞히게 하거나, 근거 단서가 그대로 정답표가 되는 문항은 만들지 않는다.
-①은 판단과 근거를 요구한다. ②는 계획의 ① 결과를 입력으로 사용하여 후속 결과와 근거를 요구한다.
+학생의 판단은 반드시 source_plan의 한 기준을 잘못 적용한 '실제 오류'여야 한다. 정답 정의를 긍정문으로 다시 말하는 것은 금지한다.
+가능하면 한 anchor의 성질/조건을 다른 대상에 잘못 적용하거나, 두 대비 기준 중 하나를 잘못 선택한 주장으로 만든다.
+추가 상황은 ①의 결과를 단순 재진술하지 말고, ①에서 바로잡은 대상/기준을 사용해야만 후속 판단이 가능하도록 조건을 바꾼다.
+source_plan의 binding quote를 12자 이상 연속 복사하지 않는다. 정답 명칭뿐 아니라 근거 문장 전체를 그대로 옮기는 것도 금지한다.
+①은 오류 판단+수정+근거를 요구한다. ②는 ①의 수정 결과를 입력으로 사용하여 다른 조건에서 후속 결과+근거를 요구한다.
 고정된 task1.result와 task2.result의 정답 문자열은 intro·clues·student_claim·transfer_case·tasks 어디에도 그대로 쓰지 않는다.
 특히 ②의 자료가 ①의 정답 명칭을 포함해야 의미가 통하는 경우에는 그 명칭 대신 ‘①에서 판별한 대상/과정/기법’처럼 선행 판단을 참조하도록 표현한다.
 정답 명칭을 지운 뒤에도 원문 근거의 조건·성질을 이용해 추론할 수 있어야 한다. 새 숫자·효과·기술 사실을 발명하지 않는다.
@@ -1683,10 +1702,10 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
             c.update(domain=domain,cited_anchor_ids=[a['id'] for a in b['anchors']],
                      source_plan=copy.deepcopy(b['source_plan']),exact_answers=copy.deepcopy(b['fixed_answers']),
                      selector_relation=copy.deepcopy(b['selector_relation']),contract_type=b['contract_type'],
-                     status='R59_RAW',schema_version=R59_SCHEMA_VERSION)
+                     status='R59_RAW',schema_version=R59_SCHEMA_VERSION,public_clues=False)
             # Grounding ownership belongs to Python.  Discard Writer-authored clues
             # and derive them only from exact source_plan bindings.
-            c['clues']=_r59_plan_clues(b)
+            c['clues']=[]
             ok,validation=validate_r59_contract(db_path,domain,c);c['validation']=validation
             if not ok:
                 diag['python_rejected']+=1;_generation_reject(diag,'python',validation['errors'],c);continue
@@ -1711,6 +1730,13 @@ def r59_prejudge_errors(c,q):
         acts=_action_signature(task)
         if _simple_answer_label(answer) and set(acts)&{'reason','correct','apply'}:
             errors.append('LABEL_ONLY_SCORING_TASK_'+str(i+1))
+    if c.get('public_clues') is not False:
+        # Legacy/public-clue contracts: block definition recognition before Judge.
+        # New R59 contracts do not expose source clues at all.
+        for i,a in enumerate(anchors):
+            ev=_clean(a.get('evidence'))
+            if ev and _max_copy_similarity(str(q.get('passage','')),ev,str(a.get('answer','')))>=0.72:
+                errors.append('DEFINITION_RECOGNITION_'+str(i+1))
     # Source-grounded clues are intentionally exact excerpts, so high copy
     # similarity to evidence is no longer itself a failure.  The previous gate
     # contradicted the grounding gate: exact source clues passed grounding and were
@@ -1724,4 +1750,24 @@ def r59_prejudge_errors(c,q):
         else:
             for i,row in enumerate(plan['rubric']):
                 if _norm(row['result']) in _norm(visible):errors.append('FIXED_RESULT_LEAK_'+str(i+1))
+            # Reject plans where the two scored parts are merely two direct lookups
+            # from separate definition snippets. This is the exact failure family
+            # seen in diagnostics 8 (microbe names, VLAN role/action, cycle labels).
+            r0,r1=plan['rubric']
+            def lookupish(row):
+                rr=_norm(row.get('result')); rs=_norm(row.get('reason'))
+                return len(rr)>=2 and (rr in rs or len(rs)<=len(rr)+14)
+            dep=_clean((c.get('selector_relation') or {}).get('source_plan',{}).get('dependency',{}).get('why_required'))
+            formal_lookup=bool(re.search(r'(?:조회|찾|분류|대입|확인).{0,18}(?:수 있다|가능|한다)',dep))
+            if lookupish(r0) and lookupish(r1) and formal_lookup:
+                errors.append('ROTE_LOOKUP_PLAN')
+            # Same-fact two-part questions are not distinct 4-point tasks.
+            from difflib import SequenceMatcher
+            if SequenceMatcher(None,_norm(r0.get('reason')),_norm(r1.get('reason'))).ratio()>=0.72:
+                errors.append('DUPLICATE_SEMANTIC_TASKS')
+    # Writer must present an actual questionable/incorrect application, not a
+    # correct definition paraphrase decorated with the words '학생의 판단'.
+    claim=_clean(c.get('student_claim'))
+    if not re.search(r'아니|않|잘못|오류|충분|만으로|무관|반대|바뀌|부적절|타당',claim):
+        errors.append('NO_ACTUAL_ERROR_CLAIM')
     return list(dict.fromkeys(errors))
