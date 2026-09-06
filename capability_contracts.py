@@ -1316,6 +1316,9 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     from question_plans import validate_plan,PLAN_SCHEMA
     out=GenerationPool();diag=out.diagnostics
     anchors=_anchor_rows(db_path,domain,limit=32);diag['retrieved_anchors']=len(anchors)
+    diag['selector_diagnostic_version']='R59-SELECTOR-TRACE-1'
+    diag['selector_model']=model
+    diag['selector_anchors']=copy.deepcopy(anchors)
     if len(anchors)<2:
         _generation_reject(diag,'retrieval',['INSUFFICIENT_ANCHORS']);return out
     prompt=f"""기술 임용 4점 출제용 관계와 채점 계획을 선별한다. 문제 문장은 쓰지 않는다.
@@ -1334,21 +1337,33 @@ conditional_choice의 criterion은 어떤 조건에서 무엇을 선택하는지
 dependency.required_result는 task1.result binding을 그대로 사용한다. task2.result를 넣지 않는다.
 transfer_condition은 task2.result를 미리 알려주는 정답 문장이 아니어야 한다.
 간접 지식이나 기출 정답을 사용하지 않는다. 서로 맞물리는 계획이 없으면 relations=[]를 반환한다.
+생략한 관계는 omissions에 anchor_ids, reason, missing_evidence를 기록한다.
+relations가 비어 있으면 가장 유력했던 1~3개 관계가 왜 성립하지 않았는지 반드시 기록한다.
+reason에는 충족하지 못한 조건, missing_evidence에는 원문에 추가로 필요한 판단 근거를 설명한다.
+진단을 위해 억지로 관계나 계획을 만들지 않는다.
 JSON:
 {{"relations":[{{"anchor_ids":[1,2],"relation_type":"contrast|conditional_choice|error_transfer|dependent_sequence",
 "contract_type":"contrastive_error_transfer|criterion_conflict_resolution","master_relation":"관계 설명",
 "source_plan":{{"schema":"{PLAN_SCHEMA}","criterion":{{}},"transfer_condition":{{}},
 "task1":{{"result":{{}},"reason":{{}}}},"task2":{{"result":{{}},"reason":{{}}}},
 "dependency":{{"input":"task1.result","output":"task2.result","required_result":{{}},
-"why_required":"① 결과를 빼면 ②의 어느 판단이 불가능해지는지 구체적으로 설명"}}}}}}]}}
+"why_required":"① 결과를 빼면 ②의 어느 판단이 불가능해지는지 구체적으로 설명"}}}}}}],
+"omissions":[{{"anchor_ids":[1,2],"reason":"성립하지 않는 이유","missing_evidence":"부족한 원문 근거"}}]}}
 """
     diag['selector_calls']=1
     try:
         client=OpenAI(api_key=api_key,timeout=75,max_retries=0)
         rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
+        diag['selector_response_text']=str(rr.output_text or '')[:60000]
         obj=json.loads(_strip_json(rr.output_text))
         if not isinstance(obj,dict) or not isinstance(obj.get('relations'),list): raise ValueError('RELATIONS_ARRAY_REQUIRED')
         rels=obj['relations']
+        omissions=obj.get('omissions',[])
+        diag['selector_omissions']=copy.deepcopy(omissions) if isinstance(omissions,list) else []
+        for omission in diag['selector_omissions'][:24]:
+            diag['omissions'].append({'stage':'selector','detail':copy.deepcopy(omission)})
+        if not rels and not diag['selector_omissions']:
+            _generation_reject(diag,'selector',['EMPTY_SELECTION_WITHOUT_EXPLANATION'])
     except Exception as ex:
         _generation_reject(diag,'selector_call',[type(ex).__name__]);return out
     diag['selector_returned']=len(rels)
