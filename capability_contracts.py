@@ -1185,7 +1185,7 @@ def validate_r59_contract(db_path,domain,c):
     if len(answers)!=2 or len({_norm(x) for x in answers})!=2: errs.append('R59_NEED_DISTINCT_ANSWERS')
     if c.get('source_plan') is not None:
         from question_plans import validate_plan
-        plan_ok,plan=validate_plan(c['source_plan'],anchors)
+        plan_ok,plan=validate_plan(c['source_plan'],anchors,relation_type=(c.get('selector_relation') or {}).get('relation_type'))
         if not plan_ok: errs.extend(plan['errors'])
         elif answers != [_clean(x) for x in plan['answers']]: errs.append('WRITER_CHANGED_FIXED_ANSWERS')
     else:
@@ -1241,7 +1241,7 @@ def r59_contract_to_question(c):
     q['source_plan']=copy.deepcopy(c.get('source_plan'))
     if c.get('source_plan'):
         from question_plans import validate_plan
-        ok,plan=validate_plan(c['source_plan'],anchors)
+        ok,plan=validate_plan(c['source_plan'],anchors,relation_type=(c.get('selector_relation') or {}).get('relation_type'))
         if not ok: return None
         q['rubric']=plan['rubric']
         q['solution']=[row['result']+' / '+row['reason'] for row in plan['rubric']]
@@ -1302,13 +1302,13 @@ class GenerationPool(list):
             'failure_counts':{},'rejections':[],'omissions':[]}
 
 
-def _generation_reject(diag,stage,errors,candidate=None):
+def _generation_reject(diag,stage,errors,candidate=None,details=None):
     codes=[str(x) for x in errors]
     for code in codes:
         key=stage+':'+code
         diag['failure_counts'][key]=diag['failure_counts'].get(key,0)+1
     if len(diag['rejections'])<24:
-        diag['rejections'].append({'stage':stage,'errors':codes,'candidate':copy.deepcopy(candidate)})
+        diag['rejections'].append({'stage':stage,'errors':codes,'candidate':copy.deepcopy(candidate),'error_details':copy.deepcopy(details or [])})
 
 
 def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
@@ -1326,7 +1326,13 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
 먼저 ①의 판단 결과가 ②에서 반드시 쓰이는 관계를 고른다.
 각 task의 정답 결과와 채점 근거를 원문 evidence의 연속 구절로 선택한다.
 명칭만 뽑거나 정의 두 개를 이어 붙이지 않는다. 기술적 판단 기준/올바른 수정내용/적용 결과가 실제 evidence에 있어야 한다.
-criterion, transfer_condition, result, reason, required_result는 모두 {{"anchor_id":정수,"quote":"evidence에 그대로 있는 12자 이상 연속 구절"}} 형태다.
+모든 binding은 {{"anchor_id":정수,"quote":"evidence의 정확한 연속 구절"}} 형태다.
+result는 길이 제한 없이 정확한 판단 결과만 선택한다. 글자 수를 채우려고 주변 목록을 붙이지 않는다.
+criterion, transfer_condition, reason은 12자 이상의 근거 구절을 사용한다. result와 reason은 다른 내용을 담아야 한다.
+conditional_choice의 criterion은 어떤 조건에서 무엇을 선택하는지 뒷받침해야 한다. 가능한 항목의 목록만 있으면 선택 기준이 아니므로 OMIT한다.
+①에서 한 대안을 선택한다면 task1.result에는 그 대안만 넣는다. 여러 선택지를 그대로 정답으로 복사하지 않는다.
+dependency.required_result는 task1.result binding을 그대로 사용한다. task2.result를 넣지 않는다.
+transfer_condition은 task2.result를 미리 알려주는 정답 문장이 아니어야 한다.
 간접 지식이나 기출 정답을 사용하지 않는다. 서로 맞물리는 계획이 없으면 relations=[]를 반환한다.
 JSON:
 {{"relations":[{{"anchor_ids":[1,2],"relation_type":"contrast|conditional_choice|error_transfer|dependent_sequence",
@@ -1358,8 +1364,8 @@ JSON:
             _generation_reject(diag,'selector',['UNRELATED_OR_DUPLICATE_SOURCE'],r);continue
         if r.get('contract_type') not in R59_ALLOWED_TYPES or r.get('relation_type') not in ('contrast','conditional_choice','error_transfer','dependent_sequence'):
             _generation_reject(diag,'selector',['INVALID_RELATION_TYPE'],r);continue
-        ok,plan=validate_plan(r.get('source_plan'),aa)
-        if not ok: _generation_reject(diag,'plan',plan['errors'],r);continue
+        ok,plan=validate_plan(r.get('source_plan'),aa,relation_type=r.get('relation_type'))
+        if not ok: _generation_reject(diag,'plan',plan['errors'],r,plan.get('error_details'));continue
         key=tuple(sorted(ids))
         if key in seen: continue
         seen.add(key)
@@ -1440,7 +1446,7 @@ def r59_prejudge_errors(c,q):
     visible=' '.join(str(q.get(k,'')) for k in ('intro','passage'))+' '+' '.join(q.get('tasks',[]))
     if c.get('source_plan'):
         from question_plans import validate_plan
-        ok,plan=validate_plan(c['source_plan'],anchors)
+        ok,plan=validate_plan(c['source_plan'],anchors,relation_type=(c.get('selector_relation') or {}).get('relation_type'))
         if not ok:errors.extend(plan['errors'])
         else:
             for i,row in enumerate(plan['rubric']):
