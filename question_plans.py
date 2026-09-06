@@ -59,6 +59,19 @@ def validate_plan(plan, source_anchors, relation_type=None):
             reject(str(ex),path);return None
     criterion=bound(plan.get('criterion'),'criterion')
     transfer=bound(plan.get('transfer_condition'),'transfer_condition')
+    # Structural leakage checks must inspect what the examinee will actually see,
+    # not the hidden provenance quote. A provenance quote can legitimately contain
+    # the scored result while the public transfer_condition paraphrases only the
+    # condition. Using the hidden quote here caused valid plans to be rejected.
+    def surface(ref, fallback):
+        if isinstance(ref,dict):
+            for key in ('text','value'):
+                value=clean(ref.get(key))
+                if value:
+                    return value
+        return fallback
+    criterion_surface=surface(plan.get('criterion'),criterion)
+    transfer_surface=surface(plan.get('transfer_condition'),transfer)
     parts=[]
     for name in ('task1','task2'):
         task=plan.get(name)
@@ -82,9 +95,11 @@ def validate_plan(plan, source_anchors, relation_type=None):
             reject('DEPENDENCY_RESULT_MISMATCH','dependency.required_result')
         if len(clean(dependency.get('why_required')))<24:
             reject('DEPENDENCY_EXPLANATION_REQUIRED','dependency.why_required')
-    if transfer is not None and criterion is not None and transfer==criterion:
+    if (transfer_surface is not None and criterion_surface is not None and
+            len(clean(transfer_surface))>=8 and len(clean(criterion_surface))>=8 and
+            transfer_surface==criterion_surface):
         reject('TRANSFER_REPEATS_CRITERION','transfer_condition')
-    if transfer is not None and parts[1][0] is not None and parts[1][0] in transfer:
+    if transfer_surface is not None and parts[1][0] is not None and clean(parts[1][0]) in clean(transfer_surface):
         reject('TRANSFER_DISCLOSES_TASK2_RESULT','transfer_condition')
     if relation_type=='conditional_choice':
         condition_markers=r'경우|조건|때|이면|하면|이상|이하|초과|미만|따라|비교|대비|반면|보다'

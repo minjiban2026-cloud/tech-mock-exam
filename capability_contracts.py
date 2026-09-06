@@ -1301,7 +1301,9 @@ def _r59_prompt(domain,bundles,official):
 정답/근거/관계/추가 조건은 이미 고정되어 있다. fixed_answers와 source_plan을 수정하거나 새 기술 조건을 추가하지 않는다.
 정의를 가리고 명칭을 맞히게 하거나, 근거 단서가 그대로 정답표가 되는 문항은 만들지 않는다.
 ①은 판단과 근거를 요구한다. ②는 계획의 ① 결과를 입력으로 사용하여 후속 결과와 근거를 요구한다.
-① 결과를 ②에 미리 알려주지 않는다. 새 숫자·효과·기술 사실을 발명하지 않는다.
+고정된 task1.result와 task2.result의 정답 문자열은 intro·clues·student_claim·transfer_case·tasks 어디에도 그대로 쓰지 않는다.
+특히 ②의 자료가 ①의 정답 명칭을 포함해야 의미가 통하는 경우에는 그 명칭 대신 ‘①에서 판별한 대상/과정/기법’처럼 선행 판단을 참조하도록 표현한다.
+정답 명칭을 지운 뒤에도 원문 근거의 조건·성질을 이용해 추론할 수 있어야 한다. 새 숫자·효과·기술 사실을 발명하지 않는다.
 계획을 충족할 수 없으면 해당 bundle은 생략하고 omissions에 이유를 기록한다.
 JSON 객체만 출력:
 {{"contracts":[{{"bundle_id":0,"topic":"문항 주제","clues":[{{"side":"A","anchor_id":1,"text":"단서"}}],
@@ -1350,6 +1352,54 @@ def _generation_reject(diag,stage,errors,candidate=None,details=None):
         diag['rejections'].append({'stage':stage,'errors':codes,'candidate':copy.deepcopy(candidate),'error_details':copy.deepcopy(details or [])})
 
 
+
+_R59_SPAN_STOPWORDS={'경우','사용','방법','정의','과정','결과','조건','기술','관련','종류','특징','기준','위해','대한','한다','있다','것으로'}
+
+def _r59_terms(text):
+    return {t for t in re.findall(r'[가-힣A-Za-z0-9]{3,}',_clean(text)) if t not in _R59_SPAN_STOPWORDS}
+
+
+def _r59_span_bridge(anchors):
+    """Allow moderately separated anchors only when their evidence shares a concrete concept.
+
+    Page distance is a weak proxy. The old fixed 6-page cutoff rejected legitimate
+    same-concept transfers (e.g. a material named again later) while only accidentally
+    blocking unrelated 28-page pairs. We keep a hard ceiling and require a lexical
+    concept bridge beyond the local window.
+    """
+    pages=[int(a.get('page_no') or 0) for a in anchors if int(a.get('page_no') or 0)>0]
+    if len(pages)<2:
+        return True,0,[]
+    span=max(pages)-min(pages)
+    if span<=R59_MAX_PAGE_SPAN:
+        return True,span,[]
+    if span>18:
+        return False,span,[]
+    termsets=[]
+    for a in anchors:
+        termsets.append(_r59_terms((a.get('answer') or '')+' '+(a.get('topic') or '')+' '+(a.get('evidence') or '')))
+    bridge=set()
+    for i in range(len(termsets)):
+        for j in range(i+1,len(termsets)):
+            bridge |= termsets[i] & termsets[j]
+    # Korean particles/suffixes often make token equality too brittle (e.g.
+    # "펄라이트경" vs "펄라이트를"). Also accept a distinctive 4+ char
+    # concept fragment from one anchor's answer/topic when it occurs verbatim
+    # in the other anchor's evidence.
+    generic_fragments={'사용방법','해결방안','관련지식','기술교육','과정중심','판단기준','적용조건'}
+    for i,a in enumerate(anchors):
+        concept=_norm((a.get('answer') or '')+' '+(a.get('topic') or ''))
+        for n in range(min(8,len(concept)),3,-1):
+            for k in range(0,max(0,len(concept)-n+1)):
+                frag=concept[k:k+n]
+                if frag in generic_fragments or len(frag)<4:
+                    continue
+                for j,b in enumerate(anchors):
+                    if i!=j and frag in _norm(b.get('evidence') or ''):
+                        bridge.add(frag)
+                        break
+    return bool(bridge),span,sorted(bridge,key=lambda x:(-len(x),x))[:12]
+
 def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     from openai import OpenAI
     from question_plans import validate_plan,PLAN_SCHEMA
@@ -1365,7 +1415,9 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
 원문 anchor:{json.dumps(anchors,ensure_ascii=False)}
 최대 {wanted}개를 고른다. 같은 source의 서로 다른 2~3개 anchor를 사용한다.
 같은 페이지/단어/주제라는 이유만으로 묶지 않는다. 정의 두 개를 명칭으로 답하는 관계는 제외한다.
-먼저 ①의 판단 결과가 ②에서 반드시 쓰이는 관계를 고른다.
+먼저 ①의 판단 결과가 ②에서 반드시 쓰이는 관계를 고른다. 다만 원문에 ‘① 다음 ②’라는 절차 문장이 직접 있어야 하는 것은 아니다.
+①에서 특정한 대상·기법·국가·과정·재료를 식별하고, 그 식별 결과를 ②에서 그 대상의 속성·적용·후속 판단을 찾는 조회 키로 실제 사용한다면 논리적 의존으로 인정한다.
+반대로 ①을 몰라도 ②를 독립적으로 풀 수 있거나 단지 같은 주제에 있다는 이유만으로는 관계로 만들지 않는다.
 각 task의 정답 결과와 채점 근거를 원문 evidence의 연속 구절로 선택한다.
 명칭만 뽑거나 정의 두 개를 이어 붙이지 않는다. 기술적 판단 기준/올바른 수정내용/적용 결과가 실제 evidence에 있어야 한다.
 모든 binding은 {{"anchor_id":정수,"quote":"evidence의 정확한 연속 구절"}} 형태다.
@@ -1394,8 +1446,16 @@ JSON:
 """
     diag['selector_calls']=1
     try:
-        client=OpenAI(api_key=api_key,timeout=75,max_retries=0)
-        rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
+        client=OpenAI(api_key=api_key,timeout=90,max_retries=0)
+        try:
+            rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
+        except Exception as first_ex:
+            # One bounded retry only for transport/timeout failures. A semantic empty
+            # selection is never retried merely to force a relation.
+            if type(first_ex).__name__ not in ('APITimeoutError','APIConnectionError'):
+                raise
+            diag['selector_retry_reason']=type(first_ex).__name__
+            rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'medium'})
         diag['selector_response_text']=str(rr.output_text or '')[:60000]
         obj=_load_r59_selector_json(rr.output_text)
         if not isinstance(obj,dict) or not isinstance(obj.get('relations'),list): raise ValueError('RELATIONS_ARRAY_REQUIRED')
@@ -1419,13 +1479,14 @@ JSON:
         aa=[amap[z] for z in ids]
         if len({x['source_name'] for x in aa})!=1 or len({_norm(x['answer']) for x in aa})!=len(aa):
             _generation_reject(diag,'selector',['UNRELATED_OR_DUPLICATE_SOURCE'],r);continue
-        pages=[int(x.get('page_no') or 0) for x in aa]
-        known_pages=[x for x in pages if x>0]
-        if len(known_pages)>=2 and max(known_pages)-min(known_pages)>R59_MAX_PAGE_SPAN:
+        span_ok,page_span,bridge_terms=_r59_span_bridge(aa)
+        if not span_ok:
             _generation_reject(diag,'selector',['SOURCE_SPAN_TOO_WIDE'],r,
                                [{'code':'SOURCE_SPAN_TOO_WIDE','path':'anchor_ids',
-                                 'page_span':max(known_pages)-min(known_pages),
-                                 'max_page_span':R59_MAX_PAGE_SPAN}]);continue
+                                 'page_span':page_span,'max_local_page_span':R59_MAX_PAGE_SPAN,
+                                 'hard_page_span':18,'bridge_terms':bridge_terms}]);continue
+        if page_span>R59_MAX_PAGE_SPAN:
+            diag.setdefault('span_bridge_accepts',[]).append({'anchor_ids':ids,'page_span':page_span,'bridge_terms':bridge_terms})
         if r.get('contract_type') not in R59_ALLOWED_TYPES or r.get('relation_type') not in ('contrast','conditional_choice','error_transfer','dependent_sequence'):
             _generation_reject(diag,'selector',['INVALID_RELATION_TYPE'],r);continue
         ok,plan=validate_plan(r.get('source_plan'),aa,relation_type=r.get('relation_type'))
