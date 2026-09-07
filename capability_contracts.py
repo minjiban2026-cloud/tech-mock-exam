@@ -1494,6 +1494,9 @@ selector_relation의 operation_score/reasoning_viability를 높게 만든 조건
 정답이 '분류/종류/기준/…에 따라' 같은 짧은 분류명인 경우, 그 분류명을 사실상 번역한 표현을 자료에 쓰지 말고 실제 사례의 관찰값·조건·결과로 우회한다.
 기출 4점처럼 한 문장 안의 두 단서를 조합해 기준을 선택하거나, 조건 변화 전후를 비교하거나, 계산·수치·원인·결과 중 하나를 적용하도록 만든다. source가 이를 뒷받침하지 못하면 억지로 만들지 말고 omissions로 보낸다.
 source_plan의 binding quote를 12자 이상 연속 복사하지 않는다. 정답 명칭뿐 아니라 근거 문장 전체를 그대로 옮기는 것도 금지한다.
+정답이 둘 이상의 핵심어로 이루어졌다면 그 핵심어들을 나누어 지문·학생 판단·작성 요구에 재노출하지 않는다. 정답 전체를 쓰지 않았더라도 핵심어 대부분이 보이면 직접 노출로 처리된다.
+고정 정답이나 근거가 문장 중간에서 잘린 경우에는 해당 bundle을 반드시 omissions로 보낸다. 잘린 표현을 상식으로 복원하지 않는다.
+두 소문항이 모두 자료의 정의·수치 목록과 명칭을 일대일 대응하는 구조라면 작성하지 않는다. 최소 한 소문항은 조건 변화에 따른 결과, 원인 진단, 절차 교정, 수치 관계의 적용 중 하나를 실제로 수행해야 한다.
 ①은 오류 판단+수정+근거를 요구한다. ②는 ①의 수정 결과를 입력으로 사용하여 다른 조건에서 후속 결과+근거를 요구한다.
 고정된 task1.result와 task2.result의 정답 문자열은 intro·clues·student_claim·transfer_case·tasks 어디에도 그대로 쓰지 않는다.
 특히 ②의 자료가 ①의 정답 명칭을 포함해야 의미가 통하는 경우에는 그 명칭 대신 ‘①에서 판별한 대상/과정/기법’처럼 선행 판단을 참조하도록 표현한다.
@@ -1623,14 +1626,22 @@ def _r62_operation_profile(anchor):
         catalog+=2
     if nans and nev.startswith(nans) and len(nev)<=len(nans)+20 and richness<=2:
         catalog+=2
+    stripped_ans=ans.strip(' ·-:;')
+    fragment_penalty=0
+    if not stripped_ans or re.search(r'(?:기울기가|비율이|값이|크기가|온도가|압력이|부피가|속도가)\s*\d+(?:\.\d+)?$',stripped_ans):
+        fragment_penalty=12
+    elif re.search(r'(?:및|와|과|또는|에서|으로|로|따라|경우|때|보다|이상|이하|초과|미만)$',stripped_ans):
+        fragment_penalty=8
+    evidence_fragment=bool(ev and not re.search(r'[.!?。]|(?:다|함|됨|임|한다|된다|이다|있다|없다|때|경우|이상|이하|초과|미만|비율|과정|측정|설치|적용|제거|방지|증가|감소)$',ev))
     return {'numeric':numeric,'conditional':conditional,'causal':causal,'procedural':procedural,
-            'relational':relational,'richness':richness,'catalog_penalty':catalog}
+            'relational':relational,'richness':richness,'catalog_penalty':catalog,
+            'fragment_penalty':fragment_penalty,'evidence_fragment':evidence_fragment}
 
 
 def _r62_pair_quality(first,second,direct_forward,shared,span):
     p1=_r62_operation_profile(first); p2=_r62_operation_profile(second)
     op_bonus=p1['richness']+p2['richness']+min(p1['richness'],p2['richness'])
-    catalog_penalty=p1['catalog_penalty']+p2['catalog_penalty']
+    catalog_penalty=p1['catalog_penalty']+p2['catalog_penalty']+p1.get('fragment_penalty',0)+p2.get('fragment_penalty',0)
     both_short=len(_norm(first.get('answer') or ''))<=18 and len(_norm(second.get('answer') or ''))<=18
     short_penalty=8 if both_short and op_bonus<10 else (3 if both_short and op_bonus<14 else 0)
     distance_penalty=0 if span<=3 else min(8,max(0,span-3)//3)
@@ -1648,7 +1659,48 @@ def _r63_reasoning_viability(row):
     score=op+balanced*2+axes*3+min(4,direct//3)
     if span>12: score-=6
     if r1<=2 and r2<=2: score-=8
+    score-=int(p1.get('fragment_penalty',0))+int(p2.get('fragment_penalty',0))
     return score
+
+
+def _r64_result_head(value):
+    return _clean(str(value or '').split('\n',1)[0]).strip(' ·-:;')
+
+
+def _r64_answer_tokens(value):
+    generic={'개념','절차','과정','방법','방식','기준','관계','비교','판단','적용','문제','해결','종류','특징','효과','원인','결과'}
+    out=[]
+    for raw in re.findall(r'[가-힣A-Za-z0-9]+',_r64_result_head(value)):
+        x=re.sub(r'(?:으로|에서|에게|까지|부터|보다|처럼|하고|이며|와|과|의|를|을|은|는|이|가)$','',raw)
+        if len(_norm(x))>=2 and _norm(x) not in generic:out.append(x)
+    return out
+
+
+def _r64_fragment_answer(value):
+    head=_r64_result_head(value)
+    if not head:return True
+    return bool(re.search(r'(?:기울기가|비율이|값이|크기가|온도가|압력이|부피가|속도가)\s*\d+(?:\.\d+)?$',head) or
+                re.search(r'(?:및|와|과|또는|에서|으로|로|따라|경우|때|보다|이상|이하|초과|미만)$',head))
+
+
+def _r64_public_quality_errors(c,q):
+    """Cheap deterministic vetoes for the failure families in diagnostics 13."""
+    errors=[]
+    answers=list(q.get('answer') or [])
+    visible=_norm(' '.join([str(q.get('passage',''))]+list(q.get('tasks') or [])))
+    for i,answer in enumerate(answers,1):
+        head=_r64_result_head(answer); nh=_norm(head)
+        if _r64_fragment_answer(answer):errors.append(f'R64_TRUNCATED_FIXED_ANSWER_{i}')
+        if len(nh)>=2 and nh in visible:errors.append(f'R64_DIRECT_RESULT_LEAK_{i}')
+        toks=_r64_answer_tokens(answer)
+        exposed=sum(1 for t in toks if _norm(t) in visible)
+        if len(toks)>=2 and exposed>=2 and exposed/len(toks)>=0.66:
+            errors.append(f'R64_COMPOUND_ANSWER_EXPOSED_{i}')
+    tasks=' '.join(q.get('tasks') or [])
+    label_requests=len(re.findall(r'명칭|용어|이름|해당하는\s*(?:것|기법|공법|오차|사이클)',tasks))
+    transform_ops=len(re.findall(r'계산|산출|변화|증가|감소|순서|원인|결과|수정|개선|차이|비교|조건.{0,8}(?:바뀌|달라)|적용\s*여부',tasks))
+    if label_requests>=2 and transform_ops==0:errors.append('R64_TWO_LABEL_LOOKUPS')
+    return list(dict.fromkeys(errors))
 
 
 def _r62_support_score(anchor,pair):
@@ -1755,7 +1807,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=160,max_candidates=max(24,wanted*8))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R63-PYTHON-RELATION-MINER-3'
+    diag['selector_diagnostic_version']='R64-TRUNCATION-LEAK-ROTE-GATE-1'
     diag['selector_model']='PYTHON_DETERMINISTIC'
     diag['selector_calls']=0
     diag['selector_pair_candidates']=[{k:copy.deepcopy(v) for k,v in r.items() if k not in ('anchors','source_plan','fixed_answers')} for r in candidates[:48]]
@@ -1767,13 +1819,15 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     # not sent merely to fill Writer quota; diagnostics 12 showed those calls were
     # overwhelmingly ROTE_ONLY/TOO_EASY.
     ranked=sorted(candidates,key=lambda r:(-r.get('reasoning_viability',-999),-r.get('operation_score',-999),-r.get('score',0),r.get('page_span',999)))
-    strong=[r for r in ranked if r.get('operation_score',-999)>=8 and r.get('reasoning_viability',-999)>=20]
-    moderate=[r for r in ranked if r not in strong and r.get('operation_score',-999)>=4 and r.get('reasoning_viability',-999)>=16]
+    strong=[r for r in ranked if r.get('operation_score',-999)>=8 and r.get('reasoning_viability',-999)>=20 and
+            not any(p.get('fragment_penalty',0) for p in r.get('operation_profiles',[]))]
+    moderate=[r for r in ranked if r not in strong and r.get('operation_score',-999)>=4 and r.get('reasoning_viability',-999)>=16 and
+              not any(p.get('fragment_penalty',0) for p in r.get('operation_profiles',[]))]
     selected=(strong+moderate)[:wanted]
     if not selected:
         _generation_reject(diag,'python_relation_quality',['NO_4PT_REASONING_VIABLE_PAIR'])
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R63_REASONING_VIABILITY_FIRST'
+    diag['selection_strategy']='R64_REASONING_VIABILITY_WITH_FRAGMENT_VETO'
     seen=set()
     for r in selected:
         ids=tuple(r['anchor_ids'])
@@ -1943,4 +1997,5 @@ def r59_prejudge_errors(c,q):
     judgment_markers=r'판단|판정|주장|분류|기록|결론|해석|보았다|간주|해당|충분|옳|타당|적절|잘못|오류|아니|않'
     if not claim or not re.search(judgment_markers,claim):
         errors.append('CLAIM_LACKS_JUDGMENT')
+    errors.extend(_r64_public_quality_errors(c,q))
     return list(dict.fromkeys(errors))

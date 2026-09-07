@@ -18,7 +18,7 @@ class R63Diagnostics12Regression(unittest.TestCase):
         for domain in domains:
             pool=_r59_select_bundles('','',DB,domain,wanted=4)
             self.assertEqual(pool.diagnostics.get('selector_calls'),0)
-            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R63_REASONING_VIABILITY_FIRST')
+            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R64_REASONING_VIABILITY_WITH_FRAGMENT_VETO')
             for b in pool:
                 rel=b['selector_relation']
                 self.assertGreaterEqual(rel['operation_score'],4,(domain,rel))
