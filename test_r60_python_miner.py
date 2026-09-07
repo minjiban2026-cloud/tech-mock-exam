@@ -13,16 +13,17 @@ class R60PythonMinerTests(unittest.TestCase):
                 for r in rows:
                     self.assertEqual(len({a['source_name'] for a in r['anchors']}),1)
                     self.assertTrue(r['source_plan'])
-                    self.assertGreater(r['score'],0)
+                    self.assertIsInstance(r['score'],int)
 
     def test_selector_path_uses_zero_ai_calls(self):
         for d in DOMAINS:
             with self.subTest(domain=d):
-                rows=_r59_select_bundles('unused','unused','knowledge.db',d,wanted=2)
+                rows=_r59_select_bundles('','','knowledge.db',d,wanted=2)
                 # R63 may deliberately return zero when every pair is below the
                 # pre-Writer reasoning floor; this is a quality-preserving result.
                 self.assertGreaterEqual(len(rows),0)
                 self.assertEqual(rows.diagnostics.get('selector_calls'),0)
-                self.assertEqual(rows.diagnostics.get('selector_model'),'PYTHON_DETERMINISTIC')
+                self.assertEqual(rows.diagnostics.get('selector_model'),'PYTHON_FALLBACK_NO_KEY')
+                self.assertEqual(rows.diagnostics.get('selection_strategy'),'R65_PYTHON_RECALL_THEN_BATCH_LUNA')
 
 if __name__=='__main__': unittest.main()

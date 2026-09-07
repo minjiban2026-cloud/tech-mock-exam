@@ -1632,7 +1632,7 @@ def _r62_operation_profile(anchor):
         fragment_penalty=12
     elif re.search(r'(?:및|와|과|또는|에서|으로|로|따라|경우|때|보다|이상|이하|초과|미만)$',stripped_ans):
         fragment_penalty=8
-    evidence_fragment=bool(ev and not re.search(r'[.!?。]|(?:다|함|됨|임|한다|된다|이다|있다|없다|때|경우|이상|이하|초과|미만|비율|과정|측정|설치|적용|제거|방지|증가|감소)$',ev))
+    evidence_fragment=bool(ev and _obviously_incomplete_evidence(ev))
     return {'numeric':numeric,'conditional':conditional,'causal':causal,'procedural':procedural,
             'relational':relational,'richness':richness,'catalog_penalty':catalog,
             'fragment_penalty':fragment_penalty,'evidence_fragment':evidence_fragment}
@@ -1802,44 +1802,110 @@ def _r60_python_relation_candidates(db_path,domain,limit=96,max_candidates=48):
     return anchors,out
 
 
+def _r65_selector_prompt(domain,candidates,wanted):
+    """One cheap semantic ranking call over a Python-grounded shortlist.
+
+    The selector may only return candidate indices. It cannot rewrite anchors,
+    fixed answers, source plans, or technical facts.
+    """
+    payload=[]
+    for i,r in enumerate(candidates):
+        pair=r.get('anchors') or []
+        payload.append({
+            'candidate_id':i,
+            'relation_type':r.get('relation_type'),
+            'contract_type':r.get('contract_type'),
+            'reasoning_viability':r.get('reasoning_viability'),
+            'operation_score':r.get('operation_score'),
+            'page_span':r.get('page_span'),
+            'anchors':[{
+                'id':a.get('id'),'answer':_clean(a.get('answer')),
+                'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))
+            } for a in pair]
+        })
+    return f"""중등 기술 임용 4점 문항의 '관계 후보 선별자'다. 영역: {domain}
+Python이 원문에서 찾은 후보만 평가한다. 기술 사실, 정답, anchor 순서, source_plan은 절대 수정하지 말고 candidate_id만 고른다.
+좋은 후보는 ①에서 기준/관계/오류를 판단한 결과가 ②의 조건 변화·원인 진단·절차 교정·수치/관계 적용에 실제 입력으로 쓰일 수 있어야 한다.
+두 anchor가 각각 정의/수치목록→명칭 대응에 그치거나, 두 짧은 명칭을 병렬로 맞히거나, 두 번째 anchor만 읽어 ②를 독립적으로 풀 수 있으면 낮게 평가한다.
+원자료가 실제 비교, 조건, 인과, 절차, 관계를 제공하는 후보를 우선한다. 단순히 같은 페이지/공통 단어/상호 언급이 있다는 이유로 선택하지 않는다.
+source에 없는 새 사례·효과·조건을 발명해야만 4점 문항이 되는 후보는 제외한다.
+최대 {wanted}개를 좋은 순서대로 선택한다. 적합한 것이 없으면 빈 배열을 반환한다.
+후보: {json.dumps(payload,ensure_ascii=False)}
+JSON 객체만 출력: {{"selected_ids":[0,2],"rejected":{{"1":"짧은 이유"}}}}"""
+
+
 def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
-    """R60 fast path: Python relation miner replaces the AI selector entirely."""
+    """R65 hybrid selector: Python recall shortlist -> one batched Luna semantic rank.
+
+    R64 proved that a strict lexical/operation threshold both missed usable relations
+    and still admitted rote pairs. R65 therefore lets Python veto only obvious
+    impossibilities, then spends at most one low-effort selector call per missing
+    domain. Writer/Judge remain unchanged and fixed answers stay Python-owned.
+    """
     out=GenerationPool(); diag=out.diagnostics
-    anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=160,max_candidates=max(24,wanted*8))
+    anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=160,max_candidates=max(32,wanted*10))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R64-TRUNCATION-LEAK-ROTE-GATE-1'
-    diag['selector_model']='PYTHON_DETERMINISTIC'
+    diag['selector_diagnostic_version']='R65-BATCH-SEMANTIC-RELATION-1'
+    diag['selector_model']=model if api_key else 'PYTHON_FALLBACK_NO_KEY'
     diag['selector_calls']=0
     diag['selector_pair_candidates']=[{k:copy.deepcopy(v) for k,v in r.items() if k not in ('anchors','source_plan','fixed_answers')} for r in candidates[:48]]
     diag['python_relation_candidates']=len(candidates)
     if not candidates:
         _generation_reject(diag,'python_relation_miner',['NO_RELATION_CANDIDATE'])
         return out
-    # R63: quality-first selection. Negative/near-zero operational pairs are
-    # not sent merely to fill Writer quota; diagnostics 12 showed those calls were
-    # overwhelmingly ROTE_ONLY/TOO_EASY.
+
     ranked=sorted(candidates,key=lambda r:(-r.get('reasoning_viability',-999),-r.get('operation_score',-999),-r.get('score',0),r.get('page_span',999)))
-    strong=[r for r in ranked if r.get('operation_score',-999)>=8 and r.get('reasoning_viability',-999)>=20 and
-            not any(p.get('fragment_penalty',0) for p in r.get('operation_profiles',[]))]
-    moderate=[r for r in ranked if r not in strong and r.get('operation_score',-999)>=4 and r.get('reasoning_viability',-999)>=16 and
-              not any(p.get('fragment_penalty',0) for p in r.get('operation_profiles',[]))]
-    selected=(strong+moderate)[:wanted]
+    # Only hard-veto source fragments and clearly information-poor pairs. Semantic
+    # quality is intentionally NOT decided by these numeric proxies anymore.
+    shortlist=[]
+    for r in ranked:
+        prof=r.get('operation_profiles') or []
+        if any(int(p.get('fragment_penalty',0))>0 for p in prof):
+            continue
+        if sum(int(p.get('richness',0)) for p in prof)<3:
+            continue
+        if int(r.get('operation_score',-999)) < -12 or int(r.get('reasoning_viability',-999)) < -18:
+            continue
+        shortlist.append(r)
+        if len(shortlist)>=min(18,max(10,wanted*3)):
+            break
+    if not shortlist:
+        _generation_reject(diag,'python_relation_quality',['NO_4PT_SOURCE_USABLE_PAIR'])
+        return out
+
+    selected=[]
+    if api_key:
+        try:
+            from openai import OpenAI
+            diag['selector_calls']=1
+            client=OpenAI(api_key=api_key,timeout=45,max_retries=0)
+            rr=client.responses.create(model=model,input=_r65_selector_prompt(domain,shortlist,wanted),reasoning={'effort':'low'})
+            raw=json.loads(_strip_json(rr.output_text))
+            ids=raw.get('selected_ids') if isinstance(raw,dict) else None
+            if not isinstance(ids,list): raise ValueError('SELECTED_IDS_REQUIRED')
+            seen=set()
+            for x in ids:
+                if type(x) is int and 0<=x<len(shortlist) and x not in seen:
+                    seen.add(x); selected.append(shortlist[x])
+                    if len(selected)>=wanted: break
+            diag['semantic_selector_rejected']=copy.deepcopy(raw.get('rejected',{})) if isinstance(raw,dict) else {}
+        except Exception as ex:
+            diag.setdefault('selector_retry_reasons',[]).append(type(ex).__name__)
+            _generation_reject(diag,'semantic_selector',[type(ex).__name__])
+    # API failure must not recreate the R64 zero-candidate dead end. This fallback
+    # is deliberately broader than R64, but Writer can omit and pre-Judge/Judge veto.
     if not selected:
-        _generation_reject(diag,'python_relation_quality',['NO_4PT_REASONING_VIABLE_PAIR'])
+        selected=shortlist[:wanted]
+        diag['selector_fallback']='PYTHON_BROAD_SHORTLIST'
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R64_REASONING_VIABILITY_WITH_FRAGMENT_VETO'
+    diag['selection_strategy']='R65_PYTHON_RECALL_THEN_BATCH_LUNA'
+
     seen=set()
     for r in selected:
         ids=tuple(r['anchor_ids'])
         if ids in seen: continue
         seen.add(ids)
-        # R61: a two-anchor pair is often enough to identify an answer but not enough
-        # to write a grounded 4-point reasoning situation.  Add a small same-source,
-        # local source window as *hidden support evidence*.  It cannot change the two
-        # fixed answers or the scored source_plan; it only gives Writer/Judge enough
-        # source-backed conditions/procedures to avoid inventing textbook facts.
-        pair=list(r['anchors'])
-        pair_ids={int(a['id']) for a in pair}
+        pair=list(r['anchors']); pair_ids={int(a['id']) for a in pair}
         pages=[int(a.get('page_no') or 0) for a in pair]
         src=pair[0].get('source_name') if pair else None
         support=[]
@@ -1855,17 +1921,14 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
         support.sort(key=lambda x:(-x[0],min(abs(int(x[1].get('page_no') or 0)-p) for p in pages),int(x[1]['id'])))
         support_rows=[a for _,a in support[:4]]
         context_anchors=pair+support_rows
-        out.append({'anchors':copy.deepcopy(context_anchors),
-                    'scored_anchor_ids':list(ids),
+        out.append({'anchors':copy.deepcopy(context_anchors),'scored_anchor_ids':list(ids),
                     'selector_relation':{'anchor_ids':list(ids),'relation_type':r['relation_type'],
                                          'contract_type':r['contract_type'],'master_relation':r['master_relation'],
                                          'source_plan':copy.deepcopy(r['source_plan']),'miner_score':r['score'],
-                                         'operation_score':r.get('operation_score'),
-                                         'reasoning_viability':r.get('reasoning_viability'),
+                                         'operation_score':r.get('operation_score'),'reasoning_viability':r.get('reasoning_viability'),
                                          'operation_profiles':copy.deepcopy(r.get('operation_profiles')),
                                          'support_anchor_ids':[int(a['id']) for a in support_rows]},
-                    'source_plan':copy.deepcopy(r['source_plan']),
-                    'fixed_answers':copy.deepcopy(r['fixed_answers']),
+                    'source_plan':copy.deepcopy(r['source_plan']),'fixed_answers':copy.deepcopy(r['fixed_answers']),
                     'contract_type':r['contract_type']})
         if len(out)>=wanted: break
     diag['selector_accepted']=len(out)
