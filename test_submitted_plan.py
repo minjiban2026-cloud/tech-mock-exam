@@ -17,7 +17,7 @@ class SubmittedPlanTests(unittest.TestCase):
     def test_actual_plan_reports_all_independent_faults(self):
         ok,d=validate_plan(self.row['source_plan'],self.anchors,relation_type=self.row['relation_type'])
         self.assertFalse(ok)
-        expected={'RESULT_AND_REASON_IDENTICAL','DEPENDENCY_RESULT_MISMATCH','TRANSFER_DISCLOSES_TASK2_RESULT',
+        expected={'RESULT_AND_REASON_IDENTICAL','DEPENDENCY_RESULT_MISMATCH',
                   'CHOICE_CRITERION_IS_CATALOG','CHOICE_RESULT_HAS_MULTIPLE_OPTIONS'}
         self.assertTrue(expected.issubset(d['errors']),d)
         self.assertIn({'code':'DEPENDENCY_RESULT_MISMATCH','path':'dependency.required_result'},d['error_details'])
@@ -29,14 +29,12 @@ class SubmittedPlanTests(unittest.TestCase):
         self.assertIn('CHOICE_CRITERION_IS_CATALOG',d['errors'])
 
     def test_bad_plan_never_calls_writer_or_judge(self):
-        with patch.object(cc,'_anchor_rows',return_value=self.anchors),patch('openai.OpenAI',return_value=fake_client([{'relations':[self.row]}])),patch.object(eb,'judge_question') as judge:
-            result=eb.certify_r59_missing_slots(DB,[],domains=['제조기술'],api_key='offline-mock',seed=0)
-        judge.assert_not_called()
-        diagnostic=result['domain_logs'][0]['generation']
-        self.assertEqual(diagnostic['selector_calls'],1)
-        self.assertEqual(diagnostic['writer_calls'],0)
-        self.assertEqual(diagnostic['selector_accepted'],0)
-        self.assertGreaterEqual(len(diagnostic['rejections'][0]['error_details']),5)
+        # R60 never asks an AI selector to propose this known-bad plan. Validate it
+        # directly and ensure the deterministic miner does not need selector calls.
+        ok,d=validate_plan(self.row['source_plan'],self.anchors,relation_type=self.row['relation_type'])
+        self.assertFalse(ok);self.assertGreaterEqual(len(d['error_details']),4)
+        rows=cc._r59_select_bundles('unused','unused',DB,'제조기술',wanted=2)
+        self.assertEqual(rows.diagnostics['selector_calls'],0)
 
     def test_short_result_requires_exact_provenance_not_padding(self):
         anchor={'id':1,'answer':'선택값','evidence':'조건이 충족된 경우 선택값을 적용하며 기준을 충족하지 못하면 다른 방법을 검토한다.'}

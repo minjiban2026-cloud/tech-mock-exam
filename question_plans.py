@@ -27,12 +27,48 @@ def bind(ref, anchors, *, role='evidence'):
         raise ValueError('EXACT_SOURCE_QUOTE_REQUIRED')
     # A result can be a short selected value. A reason cannot be just its name.
     if role=='evidence' and quote==clean(anchor.get('answer')):
-        raise ValueError('NAME_ONLY_ANSWER')
+        # A short concept label is not a usable reason, but some DB anchors use a
+        # descriptive proposition/condition as their canonical answer heading.
+        # Treat only genuinely short labels as NAME_ONLY; longer source-grounded
+        # headings can legitimately identify the criterion being applied.
+        if len(re.sub(r'\s+','',quote))<=12:
+            raise ValueError('NAME_ONLY_ANSWER')
     if role=='result' and re.fullmatch(r'[A-Za-z0-9]+',quote):
         if not re.search(r'(?<![A-Za-z0-9])'+re.escape(quote)+r'(?![A-Za-z0-9])',clean(anchor['evidence'])):
             raise ValueError('PARTIAL_RESULT_TOKEN')
     return quote
 
+
+def _canonical_label(anchor):
+    """Return a concise concept label derivable from the DB anchor itself."""
+    if not anchor: return ''
+    vals=[]
+    for key in ('answer','topic'):
+        x=clean(anchor.get(key))
+        x=re.sub(r'^[·•▶■□\-\s]+','',x)
+        # Generic heading suffixes are metadata, not part of the scored concept.
+        x=re.sub(r'(?:의\s*)?(?:특징|정의|개요|종류|분류|용도)$','',x).strip()
+        if x and x not in vals: vals.append(x)
+    vals.sort(key=lambda x:(len(x),x))
+    return vals[0] if vals else ''
+
+def _supported_result_value(value, binding, anchor):
+    """Choose an extractive/canonical scored value without adding new facts.
+
+    Selector prose sometimes paraphrases a binding into a new sentence.  Instead
+    of rejecting the whole relation, normalize only the scored surface to either
+    a canonical DB label already present in that prose or the exact source quote.
+    """
+    value=clean(value); binding=clean(binding)
+    nv=re.sub(r'\s+','',value); nb=re.sub(r'\s+','',binding)
+    if value and binding and nv in nb: return value
+    label=_canonical_label(anchor); nl=re.sub(r'\s+','',label)
+    if label and value and len(nl)>=2 and (nl in nv or nv in nl): return label
+    # If the selector wrote an unsupported paraphrase, fall back to the already
+    # validated exact source result phrase.  This is provenance-preserving and lets
+    # Judge assess whether the resulting task is too rote.
+    if binding: return binding
+    return value
 
 def validate_plan(plan, source_anchors, relation_type=None):
     errors=[];details=[]
@@ -104,10 +140,14 @@ def validate_plan(plan, source_anchors, relation_type=None):
                 aid = rb.get('anchor_id') if isinstance(rb,dict) else None
                 anchor = amap.get(aid) if type(aid) is int else None
                 labels={re.sub(r'\s+','',clean((anchor or {}).get(k))) for k in ('answer','topic')}
-                if result_binding is None or (nv not in nb and nv not in labels):
+                if result_binding is None:
                     reject('RESULT_VALUE_NOT_IN_BINDING',name+'.result.value')
-                else:
+                elif nv in nb or nv in labels:
                     result=value
+                else:
+                    # Normalize unsupported selector paraphrases to a source-extractive
+                    # value rather than losing a valid relation before Writer/Judge.
+                    result=_supported_result_value(value,result_binding,anchor)
         reason=bound(task.get('reason'),name+'.reason')
         if result is not None and reason is not None and clean(result)==clean(reason):
             reject('RESULT_AND_REASON_IDENTICAL',name)
@@ -131,8 +171,10 @@ def validate_plan(plan, source_anchors, relation_type=None):
             len(clean(transfer_surface))>=8 and len(clean(criterion_surface))>=8 and
             transfer_surface==criterion_surface):
         reject('TRANSFER_REPEATS_CRITERION','transfer_condition')
-    if transfer_surface is not None and parts[1][0] is not None and clean(parts[1][0]) in clean(transfer_surface):
-        reject('TRANSFER_DISCLOSES_TASK2_RESULT','transfer_condition')
+    # transfer_condition is hidden provenance/Writer guidance in R59, not public
+    # examinee material.  Diagnostics 9 showed valid plans being rejected because
+    # this hidden description contained the task2 concept.  Public leakage is
+    # checked after rendering by FIXED_RESULT_LEAK_* and again by Judge.
     if relation_type=='conditional_choice':
         condition_markers=r'경우|조건|때|이면|하면|이상|이하|초과|미만|따라|비교|대비|반면|보다'
         # A menu identifies possible options but supplies no basis for choosing one.

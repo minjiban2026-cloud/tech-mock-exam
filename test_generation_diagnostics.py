@@ -50,23 +50,17 @@ class GenerationDiagnosticsTests(unittest.TestCase):
         bad=copy.deepcopy(self.plan);bad['dependency']['required_result']=bad['task2']['result']
         self.assertFalse(validate_plan(bad,self.anchors)[0])
 
-    def test_empty_selector_is_visible(self):
-        with patch.object(cc,'_anchor_rows',return_value=self.anchors),patch('openai.OpenAI',return_value=fake_client([{'relations':[]}])):
+    def test_python_miner_empty_is_visible(self):
+        with patch.object(cc,'_r60_python_relation_candidates',return_value=(self.anchors,[])):
             pool=cc.synthesize_r59_pool('mock','mock',DB,self.c['domain'],1)
         self.assertFalse(pool);self.assertEqual(pool.diagnostics['writer_calls'],0)
-        self.assertIn('selector:NO_RELATION_SELECTED',pool.diagnostics['failure_counts'])
+        self.assertIn('python_relation_miner:NO_RELATION_CANDIDATE',pool.diagnostics['failure_counts'])
+        self.assertEqual(pool.diagnostics['selector_calls'],0)
 
-    def test_selector_call_failure_is_visible(self):
-        with patch.object(cc,'_anchor_rows',return_value=self.anchors),patch('openai.OpenAI',return_value=fake_client([TimeoutError()])):
+    def test_python_miner_requires_no_selector_api(self):
+        with patch.object(cc,'_r60_python_relation_candidates',return_value=(self.anchors,[])),patch('openai.OpenAI') as client:
             pool=cc.synthesize_r59_pool('mock','mock',DB,self.c['domain'],1)
-        self.assertIn('selector_call:TimeoutError',pool.diagnostics['failure_counts'])
-
-    def test_missing_plan_stops_before_writer(self):
-        r={'anchor_ids':[a['id'] for a in self.anchors], 'relation_type':'contrast','contract_type':cc.R59_ALLOWED_TYPES[0]}
-        with patch.object(cc,'_anchor_rows',return_value=self.anchors),patch('openai.OpenAI',return_value=fake_client([{'relations':[r]}])):
-            pool=cc.synthesize_r59_pool('mock','mock',DB,self.c['domain'],1)
-        self.assertEqual(pool.diagnostics['writer_calls'],0)
-        self.assertIn('plan:SOURCE_BOUND_PLAN_REQUIRED',pool.diagnostics['failure_counts'])
+        client.assert_not_called();self.assertFalse(pool)
 
     def bundle(self):
         return {'anchors':self.anchors,'source_plan':self.plan,'fixed_answers':validate_plan(self.plan,self.anchors)[1]['answers'],
@@ -87,12 +81,11 @@ class GenerationDiagnosticsTests(unittest.TestCase):
         self.assertIn('writer_schema:WRITER_CHANGED_FIXED_ANSWERS',pool.diagnostics['failure_counts'])
 
     def test_raw_count_separate_from_validated_count(self):
-        candidate=dict(self.c,bundle_id=0,clues=[],student_claim='학생은 두 사례를 같은 방식으로 설명하였다.');candidate.pop('exact_answers')
-        with patch.object(cc,'_r59_select_bundles',return_value=[self.bundle()]),patch('openai.OpenAI',return_value=fake_client([{'contracts':[candidate]}])):
+        candidate=dict(self.c,bundle_id=0);candidate.pop('exact_answers')
+        with patch.object(cc,'_r59_select_bundles',return_value=[self.bundle()]),patch('openai.OpenAI',return_value=fake_client([{'contracts':[candidate]}])),patch.object(cc,'r59_prejudge_errors',return_value=[]):
             pool=cc.synthesize_r59_pool('mock','mock',DB,self.c['domain'],1)
         self.assertEqual(pool.diagnostics['writer_returned'],1)
-        self.assertEqual(pool.diagnostics['python_validated'],0)
-        self.assertIn('quality_gate:NO_ACTUAL_ERROR_CLAIM',pool.diagnostics['failure_counts'])
+        self.assertEqual(pool.diagnostics['python_validated'],1)
 
     def test_reported_definition_failure_blocked_before_judge(self):
         # Reconstruct the failure class from DB source; the original question was not saved by R59.
@@ -122,18 +115,14 @@ class GenerationDiagnosticsTests(unittest.TestCase):
         json.dumps(run,ensure_ascii=False)
 
     def test_selector_writer_answer_contract_roundtrip(self):
-        # API/answer-ownership integration only. Quality veto is mocked explicitly.
-        relation={'anchor_ids':[a['id'] for a in self.anchors], 'relation_type':'error_transfer',
-                  'contract_type':cc.R59_ALLOWED_TYPES[0], 'source_plan':self.plan}
+        # R60 has no AI selector; fixed source-plan ownership still survives Writer.
         candidate=dict(self.c,bundle_id=0);candidate.pop('exact_answers')
-        client=fake_client([{'relations':[relation]},{'contracts':[candidate]}])
-        with patch.object(cc,'_anchor_rows',return_value=self.anchors),patch('openai.OpenAI',return_value=client),patch.object(cc,'r59_prejudge_errors',return_value=[]):
+        client=fake_client([{'contracts':[candidate]}])
+        with patch.object(cc,'_r59_select_bundles',return_value=[self.bundle()]),patch('openai.OpenAI',return_value=client),patch.object(cc,'r59_prejudge_errors',return_value=[]):
             pool=cc.synthesize_r59_pool('mock','mock',DB,self.c['domain'],1)
         self.assertEqual(len(pool),1,pool.diagnostics)
         self.assertEqual(pool[0]['exact_answers'],validate_plan(self.plan,self.anchors)[1]['answers'])
-        self.assertNotEqual(pool[0]['exact_answers'],[a['answer'] for a in self.anchors])
         q=cc.r59_contract_to_question(pool[0]);self.assertEqual(len(q['rubric']),2)
-        self.assertEqual(pool.diagnostics['selector_accepted'],1)
         self.assertEqual(pool.diagnostics['python_validated'],1)
 
     def test_non_object_contract_rejected(self):

@@ -120,28 +120,102 @@ def _strip_json(text):
     return t
 
 
-def _load_r59_selector_json(text):
-    """Parse selector JSON with one narrow structural repair.
+def _repair_json_closers(raw):
+    """Conservatively restore only missing closing brackets/braces.
 
-    Some compact model responses have been observed to omit exactly the closing
-    brace of a relation object between source_plan and the top-level omissions
-    array (``}}],\"omissions\"`` instead of ``}}}],...``).  We only apply
-    this deterministic repair after normal JSON parsing fails; no semantic fields
-    are invented or changed.
+    R59 selector responses occasionally omit one or more closing delimiters while
+    preserving every semantic key/value.  This scanner never edits text inside a
+    JSON string and never invents keys, values, commas, or quotes.  It only inserts
+    the minimum closing delimiter needed when the next existing delimiter proves
+    that an inner container was left open.
     """
+    out=[]; stack=[]; in_string=False; esc=False
+    pairs={'}':'{',']':'['}; closer={'{':'}','[':']'}
+    for ch in raw:
+        if in_string:
+            out.append(ch)
+            if esc: esc=False
+            elif ch=='\\': esc=True
+            elif ch=='"': in_string=False
+            continue
+        if ch=='"': in_string=True; out.append(ch); continue
+        if ch in '[{': stack.append(ch); out.append(ch); continue
+        if ch in ']}':
+            need=pairs[ch]
+            while stack and stack[-1]!=need:
+                out.append(closer[stack.pop()])
+            if stack and stack[-1]==need:
+                stack.pop(); out.append(ch)
+            else:
+                out.append(ch)
+            continue
+        out.append(ch)
+    while stack: out.append(closer[stack.pop()])
+    return ''.join(out)
+
+def _recover_selector_sections(raw):
+    """Recover relation objects independently when the outer JSON is malformed.
+
+    Only existing substrings are used.  Each relation segment is closed with the
+    minimum missing delimiters; omissions are parsed from their existing array.
+    This handles repeated missing relation-closing braces without fabricating any
+    semantic field.
+    """
+    rkey=raw.find('\"relations\"'); okey=raw.find('\"omissions\"')
+    if rkey<0 or okey<0 or okey<=rkey: raise ValueError('SELECTOR_SECTIONS_REQUIRED')
+    astart=raw.find('[',rkey)
+    if astart<0: raise ValueError('RELATIONS_ARRAY_REQUIRED')
+    body=raw[astart+1:okey]
+    body=re.sub(r'\]\s*,?\s*$','',body.strip())
+    parts=re.split(r'(?<=})\s*,\s*(?=\{\"anchor_ids\")',body) if body else []
+    def close_segment(seg):
+        seg=seg.strip().rstrip(','); stack=[]; ins=False; esc=False
+        pairs={'}':'{',']':'['}; closer={'{':'}','[':']'}
+        for ch in seg:
+            if ins:
+                if esc: esc=False
+                elif ch=='\\': esc=True
+                elif ch=='\"': ins=False
+                continue
+            if ch=='\"': ins=True; continue
+            if ch in '[{': stack.append(ch)
+            elif ch in ']}':
+                need=pairs[ch]
+                if stack and stack[-1]==need: stack.pop()
+        return seg+''.join(closer[x] for x in reversed(stack))
+    relations=[]
+    for part in parts:
+        if not part.strip(): continue
+        obj=json.loads(close_segment(part))
+        if not isinstance(obj,dict) or 'anchor_ids' not in obj: raise ValueError('BAD_RECOVERED_RELATION')
+        relations.append(obj)
+    colon=raw.find(':',okey)
+    tail=raw[colon+1:].strip() if colon>=0 else '[]'
+    if tail.endswith('}'): tail=tail[:-1].rstrip()
+    omissions=json.loads(tail)
+    if not isinstance(omissions,list): raise ValueError('OMISSIONS_ARRAY_REQUIRED')
+    return {'relations':relations,'omissions':omissions}
+
+def _load_r59_selector_json(text):
+    """Parse selector JSON; on failure repair structural closers only."""
     raw=_strip_json(text)
     try:
         return json.loads(raw)
     except json.JSONDecodeError as first:
-        repaired=raw
-        # Observed compact-model defect: a relation object may miss exactly one
-        # closing brace before the next relation OR before top-level omissions.
-        # Repair only these structural separators; never invent semantic fields.
-        repaired=re.sub(r'}}\s*,\s*{(?="anchor_ids")', r'}}},{', repaired)
+        # Keep the two historically observed fast-path repairs, then apply the
+        # generic delimiter-only repair.  No semantic field is created or changed.
+        repaired=re.sub(r'}}\s*,\s*{(?="anchor_ids")', r'}}},{', raw)
         repaired=re.sub(r'}}\s*]\s*,\s*"omissions"', r'}}}],"omissions"', repaired)
-        if repaired==raw:
-            raise first
-        return json.loads(repaired)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            repaired2=_repair_json_closers(raw)
+            if repaired2!=raw:
+                try:
+                    return json.loads(repaired2)
+                except json.JSONDecodeError:
+                    pass
+            return _recover_selector_sections(raw)
 
 
 def _existing_digest(existing):
@@ -1408,7 +1482,9 @@ def _r59_prompt(domain,bundles,official):
 정의를 가리고 명칭을 맞히게 하거나, 근거 단서가 그대로 정답표가 되는 문항은 만들지 않는다.
 학생의 판단은 반드시 source_plan의 한 기준을 잘못 적용한 '실제 오류'여야 한다. 정답 정의를 긍정문으로 다시 말하는 것은 금지한다.
 가능하면 한 anchor의 성질/조건을 다른 대상에 잘못 적용하거나, 두 대비 기준 중 하나를 잘못 선택한 주장으로 만든다.
+오류는 문장 안에서 검토 가능한 형태로 드러나야 한다. 단순히 정답 명칭을 숨긴 정의 재진술은 금지하고, 관찰된 절차·조건·현상 중 최소 두 단서를 결합해 잘못된 결론을 내리게 한다.
 추가 상황은 ①의 결과를 단순 재진술하지 말고, ①에서 바로잡은 대상/기준을 사용해야만 후속 판단이 가능하도록 조건을 바꾼다.
+②가 단지 '추가 조건 한 줄을 보고 하위 명칭 맞히기'가 되면 작성하지 않는다. ②에는 ①의 결과를 전제로 효과·조건·원리·수치·적용 여부 중 하나를 판단하는 실제 전이를 우선한다.
 source_plan의 binding quote를 12자 이상 연속 복사하지 않는다. 정답 명칭뿐 아니라 근거 문장 전체를 그대로 옮기는 것도 금지한다.
 ①은 오류 판단+수정+근거를 요구한다. ②는 ①의 수정 결과를 입력으로 사용하여 다른 조건에서 후속 결과+근거를 요구한다.
 고정된 task1.result와 task2.result의 정답 문자열은 intro·clues·student_claim·transfer_case·tasks 어디에도 그대로 쓰지 않는다.
@@ -1510,158 +1586,114 @@ def _r59_span_bridge(anchors):
                         break
     return bool(bridge),span,sorted(bridge,key=lambda x:(-len(x),x))[:12]
 
-def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
-    from openai import OpenAI
-    from question_plans import validate_plan,PLAN_SCHEMA
-    out=GenerationPool();diag=out.diagnostics
-    anchors=_anchor_rows(db_path,domain,limit=96);diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R59-SELECTOR-TRACE-1'
-    diag['selector_model']=model
-    diag['selector_anchors']=copy.deepcopy(anchors)
-    if len(anchors)<2:
-        _generation_reject(diag,'retrieval',['INSUFFICIENT_ANCHORS']);return out
-    # Python narrows the combinatorial search to local/source-coherent pairs first.
-    # The AI judges whether a reasoning dependency exists; it no longer has to invent
-    # arbitrary pairings from a flat anchor list.
-    pair_candidates=[]
+def _r60_relation_kind(a,b,direct_ab,direct_ba):
+    """Deterministic relation label. This ranks provenance, not semantic truth."""
+    text=_norm(' '.join([a.get('evidence') or '',b.get('evidence') or '']))
+    if re.search(r'반면|반대|비교|차이|달리|오류|잘못|아니',text): return 'contrast','contrastive_error_transfer'
+    if re.search(r'경우|조건|이면|하면|때|이상|이하|초과|미만|따라',text): return 'conditional_choice','criterion_conflict_resolution'
+    return 'dependent_sequence','criterion_conflict_resolution'
+
+
+def _r60_python_relation_candidates(db_path,domain,limit=96,max_candidates=48):
+    """Mine source-coherent relation candidates without an AI selector.
+
+    Python only proposes evidence-grounded pairs/orientations. Writer and Judge still
+    decide whether a real exam-quality reasoning item can be produced. No domain or
+    concept names are hard-coded here.
+    """
+    from question_plans import validate_plan, PLAN_SCHEMA
+    anchors=_anchor_rows(db_path,domain,limit=limit)
+    rows=[]
     for i,a in enumerate(anchors):
         for b in anchors[i+1:]:
             if a.get('source_name')!=b.get('source_name'): continue
-            span=abs(int(a.get('page_no') or 0)-int(b.get('page_no') or 0))
-            bridge,_,terms=_r59_span_bridge([a,b])
-            if not bridge: continue
-            shared=len(_r59_terms((a.get('topic') or '')+' '+(a.get('evidence') or '')) & _r59_terms((b.get('topic') or '')+' '+(b.get('evidence') or '')))
-            # Direct cross-reference is much stronger than mere page proximity.  This
-            # promotes pairs such as "method -> its category/property/application"
-            # and avoids flooding the selector with unrelated same-page headings.
+            bridge,span,terms=_r59_span_bridge([a,b])
             ae=_norm(a.get('evidence') or ''); be=_norm(b.get('evidence') or '')
             aa=_norm(a.get('answer') or ''); ba=_norm(b.get('answer') or '')
-            direct=0
-            if len(aa)>=3 and aa in be: direct += 7
-            if len(ba)>=3 and ba in ae: direct += 7
             at=_norm(a.get('topic') or ''); bt=_norm(b.get('topic') or '')
-            if len(at)>=4 and at in be: direct += 3
-            if len(bt)>=4 and bt in ae: direct += 3
-            score=direct+(8 if span<=1 else 5 if span<=3 else 3 if span<=R59_MAX_PAGE_SPAN else 1)+min(shared,4)
-            pair_candidates.append((score,direct,-span,a,b,terms))
-    pair_candidates.sort(key=lambda x:(-x[0],-x[1],-x[2],int(x[3]['id']),int(x[4]['id'])))
-    # Diversify across source pages.  Diagnostics 7 showed that a raw top-28 list can
-    # be monopolized by many headings on one page, starving stronger relations elsewhere.
-    chosen=[]; page_counts={}
-    for row in pair_candidates:
-        _,direct,__,a,b,terms=row
-        pk=(a.get('source_name'),min(int(a.get('page_no') or 0),int(b.get('page_no') or 0)),
-            max(int(a.get('page_no') or 0),int(b.get('page_no') or 0)))
-        cap=4 if direct>0 else 2
-        if page_counts.get(pk,0)>=cap: continue
-        page_counts[pk]=page_counts.get(pk,0)+1; chosen.append(row)
-        if len(chosen)>=28: break
-    pair_payload=[{'anchor_ids':[int(a['id']),int(b['id'])],'page_span':abs(int(a.get('page_no') or 0)-int(b.get('page_no') or 0)),
-                   'direct_crossref_score':direct,'bridge_terms':terms,'anchors':[a,b]} for _,direct,__,a,b,terms in chosen]
-    diag['selector_pair_candidates']=copy.deepcopy(pair_payload)
-    prompt=f"""기술 임용 4점 출제용 관계와 채점 계획을 선별한다. 문제 문장은 쓰지 않는다.
-영역:{domain}
-Python이 source/page/개념 연결성으로 미리 좁힌 후보 pair:{json.dumps(pair_payload,ensure_ascii=False)}
-최대 {wanted}개를 고른다. 반드시 제시된 candidate pair의 anchor_ids 중 하나를 그대로 사용한다.
-같은 페이지/단어/주제라는 이유만으로 묶지 않는다. 정의 두 개를 명칭으로 답하는 관계는 제외한다.
-①의 결과가 ②의 조회 대상을 특정하는 관계를 우선 고른다. 원문에 ‘① 다음 ②’라는 절차 문장이 직접 있을 필요는 없다.
-특히 한 anchor의 evidence가 다른 anchor의 개념을 직접 언급하면서 그 개념의 분류·속성·조건·효과·적용 대상을 제시하면, 이는 유효한 조회 관계다. 예: 기법을 먼저 식별한 뒤 그 기법이 속한 유형을 판정하거나, 재료를 식별한 뒤 그 재료의 성질 인자를 찾는 구조. 별도의 ‘선택 조건’ 문장이 없다는 이유만으로 버리지 않는다.
-분류형 관계도 유효하다. A의 evidence가 A가 속하는 범주 C를 직접 밝히고, B의 evidence가 C가 포함된 분류체계를 제시한다면 ①에서 A를 식별하고 ②에서 그 분류 C를 답하게 할 수 있다. 이때 ②에 별도의 상황 선택 조건은 필요하지 않다. 동일 대상의 '정의→속성/용도/조건/효과' 조회도 evidence가 직접 연결하면 유효하다.
-반대로 서로의 개념을 전혀 참조하지 않는 단순 병렬 정의·목록·같은 페이지 조합은 관계로 만들지 않는다.
-각 task의 정답 결과와 채점 근거를 원문 evidence의 연속 구절로 선택한다.
-명칭만 뽑거나 정의 두 개를 이어 붙이지 않는다. 기술적 판단 기준/올바른 수정내용/적용 결과가 실제 evidence에 있어야 한다.
-모든 binding은 {{"anchor_id":정수,"quote":"evidence의 정확한 연속 구절"}} 형태다.
-result는 길이 제한 없이 정확한 판단 결과만 선택한다. 글자 수를 채우려고 주변 목록을 붙이지 않는다.
-criterion, transfer_condition, reason은 12자 이상의 근거 구절을 사용한다. result와 reason은 다른 내용을 담아야 한다.
-conditional_choice의 criterion은 어떤 조건에서 무엇을 선택하는지 뒷받침해야 한다. 가능한 항목의 목록만 있으면 선택 기준이 아니므로 OMIT한다.
-①에서 한 대안을 선택한다면 task1.result에는 그 대안만 넣는다. 여러 선택지를 그대로 정답으로 복사하지 않는다.
-dependency.required_result는 task1.result binding을 그대로 사용한다. task2.result를 넣지 않는다.
-transfer_condition은 task2.result를 미리 알려주는 정답 문장이 아니어야 한다.
-간접 지식이나 기출 정답을 사용하지 않는다. 서로 맞물리는 계획이 없으면 relations=[]를 반환한다.
-생략한 관계는 omissions에 anchor_ids, reason, missing_evidence를 기록한다.
-relations가 비어 있으면 가장 유력했던 1~3개 관계가 왜 성립하지 않았는지 반드시 기록한다.
-reason에는 충족하지 못한 조건, missing_evidence에는 원문에 추가로 필요한 판단 근거를 설명한다.
-진단을 위해 억지로 관계나 계획을 만들지 않는다.
-JSON:
-{{"relations":[{{"anchor_ids":[1,2],"relation_type":"contrast|conditional_choice|error_transfer|dependent_sequence",
-"contract_type":"contrastive_error_transfer|criterion_conflict_resolution","master_relation":"관계 설명",
-"source_plan":{{"schema":"{PLAN_SCHEMA}",
-"criterion":{{"text":"판단 기준 설명","binding":{{"anchor_id":1,"quote":"원문 연속 구절"}}}},
-"transfer_condition":{{"text":"후속 적용 조건 설명","binding":{{"anchor_id":2,"quote":"원문 연속 구절"}}}},
-"task1":{{"result":{{"value":"판단 결과","binding":{{"anchor_id":1,"quote":"원문 결과 구절"}}}},"reason":{{"text":"근거 설명","binding":{{"anchor_id":1,"quote":"원문 근거 구절"}}}}}},
-"task2":{{"result":{{"value":"후속 결과","binding":{{"anchor_id":2,"quote":"원문 결과 구절"}}}},"reason":{{"text":"근거 설명","binding":{{"anchor_id":2,"quote":"원문 근거 구절"}}}}}},
-"dependency":{{"input":"task1.result","output":"task2.result","required_result":{{"anchor_id":1,"quote":"task1.result와 같은 원문 결과 구절"}},
-"why_required":"① 결과를 빼면 ②의 어느 판단이 불가능해지는지 구체적으로 설명"}}}}}}],
-"omissions":[{{"anchor_ids":[1,2],"reason":"성립하지 않는 이유","missing_evidence":"부족한 원문 근거"}}]}}
-"""
-    diag['selector_calls']=1
-    try:
-        client=OpenAI(api_key=api_key,timeout=90,max_retries=0)
-        try:
-            rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
-        except Exception as first_ex:
-            # One bounded retry only for transport/timeout failures. A semantic empty
-            # selection is never retried merely to force a relation.
-            if type(first_ex).__name__ not in ('APITimeoutError','APIConnectionError'):
-                raise
-            diag['selector_retry_reason']=type(first_ex).__name__
-            rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'medium'})
-        diag['selector_response_text']=str(rr.output_text or '')[:60000]
-        obj=_load_r59_selector_json(rr.output_text)
-        if not isinstance(obj,dict) or not isinstance(obj.get('relations'),list): raise ValueError('RELATIONS_ARRAY_REQUIRED')
-        rels=obj['relations']
-        omissions=obj.get('omissions',[])
-        # One global reconsideration pass for semantic false negatives.  It does not
-        # relax provenance or create a relation itself; it only asks the selector to
-        # re-evaluate explicit classification/property cross-references that R59's old
-        # '② needs a separate choice condition' interpretation repeatedly discarded.
-        if not rels:
-            diag['selector_calls']=2
-            reconsider=prompt+"\n\n[재검토 규칙] 첫 판정에서 relations=[]였다. omissions를 다시 보되, A의 원문이 특정 범주/속성을 직접 밝히고 B의 원문이 그 범주 체계나 동일 대상의 속성·용도·효과를 직접 제시하면 dependent_sequence로 인정할 수 있다. ②에 별도의 선택 상황 문장을 요구하지 않는다. 단순 병렬 정의면 여전히 제외한다. 첫 omissions: "+json.dumps(omissions,ensure_ascii=False)
-            try:
-                rr2=client.responses.create(model=model,input=reconsider,reasoning={'effort':'medium'})
-                diag['selector_reconsider_response_text']=str(rr2.output_text or '')[:60000]
-                obj2=_load_r59_selector_json(rr2.output_text)
-                if isinstance(obj2,dict) and isinstance(obj2.get('relations'),list) and obj2.get('relations'):
-                    rels=obj2['relations']; omissions=obj2.get('omissions',omissions)
-            except Exception as ex2:
-                diag['selector_reconsider_error']=type(ex2).__name__
-        diag['selector_omissions']=copy.deepcopy(omissions) if isinstance(omissions,list) else []
-        for omission in diag['selector_omissions'][:24]:
-            diag['omissions'].append({'stage':'selector','detail':copy.deepcopy(omission)})
-        if not rels and not diag['selector_omissions']:
-            _generation_reject(diag,'selector',['EMPTY_SELECTION_WITHOUT_EXPLANATION'])
-    except Exception as ex:
-        _generation_reject(diag,'selector_call',[type(ex).__name__]);return out
-    diag['selector_returned']=len(rels)
-    amap={int(a['id']):a for a in anchors};seen=set()
-    if not rels: _generation_reject(diag,'selector',['NO_RELATION_SELECTED'])
-    for r in rels:
-        if not isinstance(r,dict): _generation_reject(diag,'selector',['BAD_RELATION_OBJECT']);continue
-        ids=r.get('anchor_ids')
-        if not isinstance(ids,list) or not 2<=len(ids)<=3 or any(type(z) is not int or z not in amap for z in ids) or len(set(ids))!=len(ids):
-            _generation_reject(diag,'selector',['INVALID_ANCHOR_IDS'],r);continue
-        aa=[amap[z] for z in ids]
-        if len({x['source_name'] for x in aa})!=1 or len({_norm(x['answer']) for x in aa})!=len(aa):
-            _generation_reject(diag,'selector',['UNRELATED_OR_DUPLICATE_SOURCE'],r);continue
-        span_ok,page_span,bridge_terms=_r59_span_bridge(aa)
-        if not span_ok:
-            _generation_reject(diag,'selector',['SOURCE_SPAN_TOO_WIDE'],r,
-                               [{'code':'SOURCE_SPAN_TOO_WIDE','path':'anchor_ids',
-                                 'page_span':page_span,'max_local_page_span':R59_MAX_PAGE_SPAN,
-                                 'hard_page_span':18,'bridge_terms':bridge_terms}]);continue
-        if page_span>R59_MAX_PAGE_SPAN:
-            diag.setdefault('span_bridge_accepts',[]).append({'anchor_ids':ids,'page_span':page_span,'bridge_terms':bridge_terms})
-        if r.get('contract_type') not in R59_ALLOWED_TYPES or r.get('relation_type') not in ('contrast','conditional_choice','error_transfer','dependent_sequence'):
-            _generation_reject(diag,'selector',['INVALID_RELATION_TYPE'],r);continue
-        ok,plan=validate_plan(r.get('source_plan'),aa,relation_type=r.get('relation_type'))
-        if not ok: _generation_reject(diag,'plan',plan['errors'],r,plan.get('error_details'));continue
-        key=tuple(sorted(ids))
-        if key in seen: continue
-        seen.add(key)
-        out.append({'anchors':aa,'selector_relation':r,'source_plan':copy.deepcopy(r['source_plan']),
-                    'fixed_answers':plan['answers'],'contract_type':r['contract_type']})
-        if len(out)>=wanted:break
+            ab=(7 if len(aa)>=3 and aa in be else 0)+(3 if len(at)>=4 and at in be else 0)
+            ba_ref=(7 if len(ba)>=3 and ba in ae else 0)+(3 if len(bt)>=4 and bt in ae else 0)
+            shared=len(_r59_terms((a.get('topic') or '')+' '+(a.get('evidence') or '')) & _r59_terms((b.get('topic') or '')+' '+(b.get('evidence') or '')))
+            # A direct source cross-reference is itself a semantic bridge. For very
+            # local material, two shared technical terms are also sufficient.
+            if not bridge and not (ab>0 or ba_ref>0 or (span<=2 and shared>=2)): continue
+            local=8 if span<=1 else 5 if span<=3 else 3 if span<=R59_MAX_PAGE_SPAN else 1
+            # Try the stronger cross-reference orientation first, but retain both when
+            # evidence supports them. This is deterministic and cheap.
+            orientations=[(a,b,ab,ba_ref),(b,a,ba_ref,ab)]
+            for first,second,direct_forward,direct_reverse in orientations:
+                if direct_forward<=0 and shared<2: continue
+                rtype,ctype=_r60_relation_kind(first,second,direct_forward,direct_reverse)
+                f_ans=_clean(first.get('answer')); s_ans=_clean(second.get('answer'))
+                if not f_ans or not s_ans or _norm(f_ans)==_norm(s_ans): continue
+                # Penalize the exact low-inference family already rejected live:
+                # short-label -> short-label dependent lookup.
+                both_labels=(len(_norm(f_ans))<=18 and len(_norm(s_ans))<=18)
+                if rtype=='dependent_sequence' and both_labels and direct_forward<=0: continue
+                fev=_clean(first.get('evidence')); sev=_clean(second.get('evidence'))
+                if len(_norm(fev))<8 or len(_norm(sev))<8: continue
+                plan={'schema':PLAN_SCHEMA,
+                      'criterion':{'text':fev,'binding':{'anchor_id':int(first['id']),'quote':fev}},
+                      'transfer_condition':{'text':sev,'binding':{'anchor_id':int(second['id']),'quote':sev}},
+                      'task1':{'result':{'value':f_ans,'binding':{'anchor_id':int(first['id']),'quote':fev}},
+                               'reason':{'text':fev,'binding':{'anchor_id':int(first['id']),'quote':fev}}},
+                      'task2':{'result':{'value':s_ans,'binding':{'anchor_id':int(second['id']),'quote':sev}},
+                               'reason':{'text':sev,'binding':{'anchor_id':int(second['id']),'quote':sev}}},
+                      'dependency':{'input':'task1.result','output':'task2.result',
+                                    'required_result':{'anchor_id':int(first['id']),'quote':fev},
+                                    'why_required':'①에서 판별한 결과를 후속 상황의 판단 대상으로 사용해야 ②의 적용 결과를 결정할 수 있다.'}}
+                ok,validated=validate_plan(plan,[first,second],relation_type=rtype)
+                if not ok: continue
+                # Relation-miner score rewards direct cross-reference, semantic bridge,
+                # local provenance, and a richer second scored result.
+                richness=min(6,max(0,len(_norm(s_ans))//8))+min(4,max(0,len(_norm(sev))//30))
+                score=direct_forward*4+shared*2+local+richness+(4 if direct_forward>direct_reverse else 0)
+                rows.append({'score':score,'anchors':[first,second],'anchor_ids':[int(first['id']),int(second['id'])],
+                             'page_span':span,'bridge_terms':terms,'direct_crossref_score':direct_forward,
+                             'relation_type':rtype,'contract_type':ctype,'source_plan':plan,
+                             'fixed_answers':validated['answers'],
+                             'master_relation':'Python source-grounded relation candidate'})
+    rows.sort(key=lambda x:(-x['score'],x['page_span'],x['anchor_ids']))
+    # Diversity prevents one page or one answer family from monopolizing the Writer budget.
+    out=[]; page_counts={}; answer_counts={}
+    for r in rows:
+        a,b=r['anchors']; pk=(a.get('source_name'),min(int(a.get('page_no') or 0),int(b.get('page_no') or 0)),max(int(a.get('page_no') or 0),int(b.get('page_no') or 0)))
+        ak=(_norm(a.get('answer')),_norm(b.get('answer')))
+        if page_counts.get(pk,0)>=2 or answer_counts.get(ak,0)>=1: continue
+        page_counts[pk]=page_counts.get(pk,0)+1; answer_counts[ak]=1; out.append(r)
+        if len(out)>=max_candidates: break
+    return anchors,out
+
+
+def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
+    """R60 fast path: Python relation miner replaces the AI selector entirely."""
+    out=GenerationPool(); diag=out.diagnostics
+    anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=160,max_candidates=max(24,wanted*8))
+    diag['retrieved_anchors']=len(anchors)
+    diag['selector_diagnostic_version']='R60-PYTHON-RELATION-MINER-1'
+    diag['selector_model']='PYTHON_DETERMINISTIC'
+    diag['selector_calls']=0
+    diag['selector_pair_candidates']=[{k:copy.deepcopy(v) for k,v in r.items() if k not in ('anchors','source_plan','fixed_answers')} for r in candidates[:48]]
+    diag['python_relation_candidates']=len(candidates)
+    if not candidates:
+        _generation_reject(diag,'python_relation_miner',['NO_RELATION_CANDIDATE'])
+        return out
+    # Spend Writer budget only on the highest-ranked, page-diverse candidates.
+    selected=candidates[:max(wanted, min(len(candidates), wanted*2))]
+    diag['selector_returned']=len(selected)
+    seen=set()
+    for r in selected:
+        ids=tuple(r['anchor_ids'])
+        if ids in seen: continue
+        seen.add(ids)
+        out.append({'anchors':copy.deepcopy(r['anchors']),
+                    'selector_relation':{'anchor_ids':list(ids),'relation_type':r['relation_type'],
+                                         'contract_type':r['contract_type'],'master_relation':r['master_relation'],
+                                         'source_plan':copy.deepcopy(r['source_plan']),'miner_score':r['score']},
+                    'source_plan':copy.deepcopy(r['source_plan']),
+                    'fixed_answers':copy.deepcopy(r['fixed_answers']),
+                    'contract_type':r['contract_type']})
+        if len(out)>=wanted: break
     diag['selector_accepted']=len(out)
     return out
 
@@ -1678,7 +1710,14 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
     for start in range(0,len(bundles),2):
         chunk=bundles[start:start+2];diag['writer_calls']+=1
         try:
-            rr=client.responses.create(model=model,input=_r59_prompt(domain,chunk,official),reasoning={'effort':'high'})
+            prompt=_r59_prompt(domain,chunk,official)
+            try:
+                rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
+            except Exception as first_ex:
+                if type(first_ex).__name__ not in ('APITimeoutError','APIConnectionError'):
+                    raise
+                diag.setdefault('writer_retry_reasons',[]).append(type(first_ex).__name__)
+                rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'medium'})
             raw=json.loads(_strip_json(rr.output_text))
             if not isinstance(raw,dict) or not isinstance(raw.get('contracts'),list):raise ValueError('CONTRACTS_ARRAY_REQUIRED')
             arr=raw['contracts']
@@ -1765,9 +1804,14 @@ def r59_prejudge_errors(c,q):
             from difflib import SequenceMatcher
             if SequenceMatcher(None,_norm(r0.get('reason')),_norm(r1.get('reason'))).ratio()>=0.72:
                 errors.append('DUPLICATE_SEMANTIC_TASKS')
-    # Writer must present an actual questionable/incorrect application, not a
-    # correct definition paraphrase decorated with the words '학생의 판단'.
+    # The old gate equated "actual error" with a short list of negation words.
+    # Diagnostics 9 showed genuine misclassification claims (e.g. A-process judged
+    # as B-process) being rejected before Judge simply because they used a positive
+    # "...로 판단하였다" sentence.  Python should require a real judgment act,
+    # while Judge remains responsible for deciding whether that judgment is truly
+    # wrong and sufficiently demanding.
     claim=_clean(c.get('student_claim'))
-    if not re.search(r'아니|않|잘못|오류|충분|만으로|무관|반대|바뀌|부적절|타당',claim):
-        errors.append('NO_ACTUAL_ERROR_CLAIM')
+    judgment_markers=r'판단|주장|분류|보았다|간주|해당|충분|옳|타당|적절|잘못|오류|아니|않'
+    if not claim or not re.search(judgment_markers,claim):
+        errors.append('CLAIM_LACKS_JUDGMENT')
     return list(dict.fromkeys(errors))
