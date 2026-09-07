@@ -23,7 +23,8 @@ class Diagnostics11Regression(unittest.TestCase):
             ["기술교육론","발명","제조기술","건설기술","생명기술","전기·전자","통신기술","재료역학","수송기술"],
             exam_builder.FORMULA_DOMAINS,
         )
-        self.assertEqual(inv["verified_slots"],7)
+        self.assertEqual(inv["verified_slots"],5)
+        self.assertEqual(len(inv.get("quarantined_verified",[])),2)
 
     def test_judgment_marker_accepts_panjeong(self):
         c={
@@ -84,7 +85,7 @@ class Diagnostics11Regression(unittest.TestCase):
         pairs=[tuple(b["selector_relation"]["anchor_ids"]) for b in bundles]
         unordered=[frozenset(x) for x in pairs]
         self.assertEqual(len(unordered),len(set(unordered)))
-        self.assertEqual(bundles.diagnostics.get("selection_strategy"),"R67_STRICT_SEMANTIC_GATE_NO_REJECTED_FALLBACK")
+        self.assertEqual(bundles.diagnostics.get("selection_strategy"),"R68_COVERAGE_AWARE_PAIR_PLUS_MULTI_ANCHOR_NO_REJECTED_FALLBACK")
 
     def test_archive_state_uses_hidden_row_without_schema_change(self):
         calls=[]

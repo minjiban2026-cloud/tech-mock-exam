@@ -36,7 +36,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: R67 · 최대 18후보 배치 semantic 4점 gate · rejected fallback 금지 · source-bound pre-Judge 강화 · durable Judge-PASS certification state")
+st.caption("배포 버전: R68 · coverage-aware contract type · pair+multi-anchor semantic gate · broken PASS quarantine · rejected fallback 금지 · durable Judge-PASS state")
 
 def secret(name, default=""):
     try:

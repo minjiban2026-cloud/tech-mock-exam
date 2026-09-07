@@ -4754,7 +4754,8 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
         if need<=0:
             logs.append({'domain':d,'need_before':0,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'skipped':'already_verified'}); continue
         try:
-            pool=synthesize_r59_pool(api_key,model,db_path,d,need,pool_size=(3 if need==1 else 4))
+            preferred_types=[t for t in ('contrastive_error_transfer','criterion_conflict_resolution') if t not in set(inv['domains'][d].get('r59_ai_verified_contract_types',[]) or [])]
+            pool=synthesize_r59_pool(api_key,model,db_path,d,need,pool_size=(4 if need==1 else 6),preferred_types=preferred_types)
         except Exception as ex:
             logs.append({'domain':d,'need_before':need,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'missing_after':need,'generation_error':str(ex)})
             continue
@@ -4790,6 +4791,6 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
     for r in reviews:
         if r.get('pass') is False:
             for z in r.get('failure_signals',[]): fc[z]=fc.get(z,0)+1
-    return {'mode':'R67_STRICT_SEMANTIC_4PT_GATE','builder_api_version':'ACTUAL-EXAM-TRANSFER-R67-20260907','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
+    return {'mode':'R68_MULTI_ANCHOR_COVERAGE_AWARE_GATE','builder_api_version':'ACTUAL-EXAM-TRANSFER-R68-20260907','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
 
-BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R67-20260907'
+BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R68-20260907'

@@ -1506,9 +1506,9 @@ anchors에는 채점용 2개 anchor 외에 같은 원자료의 인접 support an
 가능하면 한 anchor의 성질/조건을 다른 대상에 잘못 적용하거나, 두 대비 기준 중 하나를 잘못 선택한 주장으로 만든다.
 오류는 문장 안에서 검토 가능한 형태로 드러나야 한다. 단순히 정답 명칭을 숨긴 정의 재진술은 금지하고, 관찰된 절차·조건·현상 중 최소 두 단서를 결합해 잘못된 결론을 내리게 한다.
 추가 상황은 ①의 결과를 단순 재진술하지 말고, ①에서 바로잡은 대상/기준을 사용해야만 후속 판단이 가능하도록 조건을 바꾼다.
-②가 단지 '추가 조건 한 줄을 보고 하위 명칭 맞히기'가 되면 작성하지 않는다. ②에는 ①의 결과를 전제로 효과·조건·원리·수치·적용 여부 중 하나를 판단하는 실제 전이를 우선한다.
+②가 단지 '추가 조건 한 줄을 보고 하위 명칭 맞히기'가 되면 작성하지 않는다. contract_type이 contrastive_error_transfer이면 ①에서 두 기준/대상을 대조해 오류를 판별하고, ②에서는 그 대조 기준을 조건이 바뀐 사례에 전이한다. criterion_conflict_resolution이면 서로 충돌하는 기준 중 적용 기준을 ①에서 결정하고 ②에서 다른 조건에 재적용한다. ②에는 ①의 결과를 전제로 효과·조건·원리·수치·적용 여부 중 하나를 판단하는 실제 전이를 우선한다.
 두 소문항 모두 '정의의 특징을 그대로 주고 명칭을 쓰기' 형태면 해당 bundle을 생략한다. 최소 한 소문항은 서로 경쟁하는 두 기준·두 조건·두 해석 중 무엇을 적용할지 판단해야 한다.
-selector_relation의 semantic_assessment가 있으면 그것이 4점 가치의 최소 조건이다. source_support·dependency·inferential_distance·transferability를 실제 공개 문항에서도 유지하고 rote_risk를 다시 높이는 단순 정의 변환을 하지 않는다.
+selector_relation의 semantic_assessment가 있으면 그것이 4점 가치의 최소 조건이다. R68에서는 semantic_assessment가 inferential_distance 4 이상이어도 공개 문항을 너무 직접적으로 쓰면 Judge에서 3점으로 떨어질 수 있으므로, 정답을 가리기만 하는 것이 아니라 source 안의 경쟁 단서·조건 차이·원인/결과 중 최소 하나를 함께 제시하여 한 단계 이상의 판별을 거치게 한다. source_support·dependency·inferential_distance·transferability를 실제 공개 문항에서도 유지하고 rote_risk를 다시 높이는 단순 정의 변환을 하지 않는다.
 selector_relation의 operation_score/reasoning_viability를 높게 만든 조건·인과·절차·관계 단서를 실제 판단에 사용한다. 단순 명칭 A와 명칭 B를 각각 맞히는 문항으로 바꾸지 않는다.
 ①과 ② 중 적어도 하나는 정답 명칭 외에 조건 변화, 원인-결과, 절차 순서, 수치/관계 해석 중 하나를 실제로 조작해야 한다. source가 그런 조작을 지원하지 않으면 omissions로 보낸다.
 작성 요구에 근거·이유·설명을 넣었다면 고정 source_plan에 그 설명을 채점할 구체적 근거가 있어야 한다. 명칭만 고정되어 있는데 장문의 설명을 요구하지 않는다.
@@ -1538,21 +1538,70 @@ clues는 비워 둔다. 학생에게 보일 source clue는 Python이 검증된 s
 
 
 
+
+# R68 persisted-contract source integrity. Historical Judge PASS evidence is never
+# deleted here; structurally broken contracts are only quarantined from usable
+# coverage / exam selection until a clean replacement is certified.
+def r68_contract_source_integrity(db_path, domain, contract):
+    ok, detail = validate_r59_contract(db_path, domain, contract)
+    errors=list(detail.get('errors') or [])
+    anchors=detail.get('anchors') or []
+    if ok:
+        for i,ans in enumerate(contract.get('exact_answers') or [],1):
+            head=_r64_result_head(ans)
+            if _obviously_incomplete_answer(head) or _r64_fragment_answer(head):
+                errors.append(f'R68_PERSISTED_TRUNCATED_ANSWER_{i}')
+        scored=set()
+        plan=contract.get('source_plan') or {}
+        for task in ('task1','task2'):
+            row=(plan.get(task) or {}).get('result') or {}
+            b=row.get('binding') if isinstance(row,dict) else None
+            if isinstance(b,dict) and type(b.get('anchor_id')) is int:
+                scored.add(int(b['anchor_id']))
+        amap={int(a['id']):a for a in anchors if type(a.get('id')) is int}
+        for aid in scored:
+            a=amap.get(aid)
+            if not a:
+                errors.append('R68_SCORED_ANCHOR_NOT_FOUND')
+                continue
+            if _obviously_incomplete_answer(a.get('answer')) or _r64_fragment_answer(a.get('answer')):
+                errors.append(f'R68_SCORED_ANCHOR_TRUNCATED_ANSWER:{aid}')
+            if _obviously_incomplete_evidence(a.get('evidence')):
+                errors.append(f'R68_SCORED_ANCHOR_TRUNCATED_EVIDENCE:{aid}')
+    return (not errors, {'errors':list(dict.fromkeys(errors)), 'anchors':anchors})
+
+
+def _r68_preferred_contract_types(domain_info):
+    """Return R59 types that can add a genuinely new coverage slot."""
+    current=set(str(x) for x in (domain_info or {}).get('r59_ai_verified_contract_types',[]) if x)
+    missing=[t for t in R59_ALLOWED_TYPES if t not in current]
+    return missing or list(R59_ALLOWED_TYPES)
+
 # Final R59 coverage override: only historical Judge PASS + R59 real Judge PASS.
 def combined_coverage_inventory(db_path, contracts, domains, formula_domains=None):
     base=historical_verified_types(db_path,domains,formula_domains); rows={}; total=0
+    quarantined=[]
     for d in domains:
-        hist=sorted(set(base.get(d,[]) or [])); verified=[]
+        hist=sorted(set(base.get(d,[]) or [])); verified=[]; qrows=[]
         for x in contracts or []:
-            if not isinstance(x,dict) or x.get('domain')!=d or not verified_contract_receipt(x) or x.get('contract_type') not in R59_ALLOWED_TYPES: continue
-            ok,_=validate_r59_contract(db_path,d,x)
-            if ok: verified.append(x)
+            if not isinstance(x,dict) or x.get('domain')!=d or not verified_contract_receipt(x) or x.get('contract_type') not in R59_ALLOWED_TYPES:
+                continue
+            ok,detail=r68_contract_source_integrity(db_path,d,x)
+            if ok:
+                verified.append(x)
+            else:
+                q={'contract_id':x.get('contract_id'),'domain':d,'contract_type':x.get('contract_type'),'errors':detail.get('errors',[])}
+                quarantined.append(q); qrows.append(q)
         ctypes=sorted(set(str(x.get('contract_type')) for x in verified))
         count=min(2,len(set(hist+['contract:'+t for t in ctypes]))); total+=count
-        rows[d]={'historical_ai_verified_types':hist,'r59_ai_verified_contract_types':ctypes,'verified_slots':count,'target_met':count>=2,'missing':max(0,2-count)}
+        rows[d]={'historical_ai_verified_types':hist,'r59_ai_verified_contract_types':ctypes,
+                 'verified_slots':count,'target_met':count>=2,'missing':max(0,2-count),
+                 'quarantined_verified_count':len(qrows),
+                 'quarantined_contract_ids':[x.get('contract_id') for x in qrows]}
     return {'domains':rows,'verified_slots':total,'target':2*len(domains),'all_domains_two':total>=2*len(domains),
             'missing_domains':[d for d,v in rows.items() if not v['target_met']],
-            'note':'R59: historical Judge PASS + actual-exam-transfer R59 real Judge PASS only.'}
+            'quarantined_verified':quarantined,
+            'note':'R68: historical Judge PASS + source-integrity-clean R59 real Judge PASS only; broken PASS history is quarantined, never silently deleted.'}
 
 # R59 relation-first selector override. The selector chooses the reasoning relation before the writer sees a bundle.
 class GenerationPool(list):
@@ -1903,7 +1952,87 @@ def _r67_support_candidates(all_anchors,row,limit=4):
     return [copy.deepcopy(a) for _,a in support[:limit]]
 
 
-def _r67_selector_prompt(domain,candidates,wanted):
+
+def _r68_cluster_packets(anchors,max_clusters=8,max_anchors=8):
+    """Build compact same-source page-window packets for semantic plan composition.
+
+    Unlike R67 pair recall, this does not decide a relation in Python. Luna may choose
+    any two scored anchors from a packet and use the remaining anchors only as source-
+    grounded support. This is essential for domains whose useful dependency emerges
+    only after comparing three or more neighboring facts.
+    """
+    by_source={}
+    for a in anchors:
+        by_source.setdefault(a.get('source_name',''),[]).append(a)
+    packets=[]; seen=set()
+    for src,rows in by_source.items():
+        rows=sorted(rows,key=lambda a:(int(a.get('page_no') or 0),int(a.get('id') or 0)))
+        for i,a in enumerate(rows):
+            p=int(a.get('page_no') or 0)
+            window=[x for x in rows if abs(int(x.get('page_no') or 0)-p)<=2]
+            window=sorted(window,key=lambda x:(-_structural_score(x.get('answer'),x.get('evidence'),x.get('confidence',0)),abs(int(x.get('page_no') or 0)-p),int(x.get('id') or 0)))[:max_anchors]
+            if len(window)<3: continue
+            ids=tuple(sorted(int(x['id']) for x in window))
+            if ids in seen: continue
+            seen.add(ids)
+            profiles=[_r62_operation_profile(x) for x in window]
+            op=sum(sum(int(pr.get(k,0)) for k in ('conditional','causal','procedural','relational')) for pr in profiles)
+            richness=sum(int(pr.get('richness',0)) for pr in profiles)
+            catalog=sum(int(pr.get('catalog_penalty',0)) for pr in profiles)
+            score=op*3+richness-catalog
+            packets.append({'score':score,'source_name':src,'page_min':min(int(x.get('page_no') or 0) for x in window),
+                            'page_max':max(int(x.get('page_no') or 0) for x in window),'anchors':copy.deepcopy(window)})
+    packets.sort(key=lambda r:(-r['score'],r['page_max']-r['page_min'],r['page_min']))
+    return packets[:max_clusters]
+
+
+def _r68_build_composed_relation(plan, cluster):
+    if not isinstance(plan,dict) or str(plan.get('verdict','')).upper()!='SELECT': return None
+    try:
+        if not (float(plan.get('source_support',0))>=4 and float(plan.get('dependency',0))>=4 and
+                float(plan.get('inferential_distance',0))>=4 and float(plan.get('transferability',0))>=4 and
+                float(plan.get('rote_risk',9))<=1): return None
+    except (TypeError,ValueError): return None
+    amap={int(a['id']):a for a in cluster.get('anchors',[]) if type(a.get('id')) is int}
+    a1=plan.get('task1_anchor_id'); a2=plan.get('task2_anchor_id')
+    if type(a1) is not int or type(a2) is not int or a1==a2 or a1 not in amap or a2 not in amap: return None
+    typ=str(plan.get('contract_type') or '')
+    if typ not in R59_ALLOWED_TYPES: return None
+    first,second=amap[a1],amap[a2]
+    if any(_obviously_incomplete_evidence(a.get('evidence')) or _obviously_incomplete_answer(a.get('answer')) or _r64_fragment_answer(a.get('answer')) for a in (first,second)):
+        return None
+    # Number-prefixed answer labels are unsafe unless a public numbered structure is
+    # source-grounded; the R59 public form intentionally hides raw source lists.
+    if any(re.match(r'^\s*\d{1,2}\s*[.)]', _clean(a.get('answer'))) for a in (first,second)):
+        return None
+    rtype=str(plan.get('relation_type') or ('contrast' if typ=='contrastive_error_transfer' else 'conditional_choice'))
+    fev=_clean(first.get('evidence')); sev=_clean(second.get('evidence'))
+    source_plan={'schema':'SOURCE_BOUND_TASK_PLAN_V1',
+      'criterion':{'text':fev,'binding':{'anchor_id':a1,'quote':fev}},
+      'transfer_condition':{'text':sev,'binding':{'anchor_id':a2,'quote':sev}},
+      'task1':{'result':{'value':_clean(first.get('answer')),'binding':{'anchor_id':a1,'quote':fev}},'reason':{'text':fev,'binding':{'anchor_id':a1,'quote':fev}}},
+      'task2':{'result':{'value':_clean(second.get('answer')),'binding':{'anchor_id':a2,'quote':sev}},'reason':{'text':sev,'binding':{'anchor_id':a2,'quote':sev}}},
+      'dependency':{'input':'task1.result','output':'task2.result','required_result':{'anchor_id':a1,'quote':fev},
+                    'why_required':(_clean(plan.get('dependency_reason')) if len(_norm(plan.get('dependency_reason') or ''))>=12 else '①에서 판별한 기준을 적용해야 ②의 조건 변화에 따른 결과를 결정할 수 있다.')}}
+    from question_plans import validate_plan
+    ok,val=validate_plan(source_plan,[first,second],relation_type=rtype)
+    if not ok: return None
+    support=[]; used={a1,a2}
+    for sid in plan.get('support_anchor_ids') or []:
+        if type(sid) is int and sid in amap and sid not in used:
+            a=amap[sid]
+            if not _obviously_incomplete_evidence(a.get('evidence')) and not _obviously_incomplete_answer(a.get('answer')):
+                support.append(copy.deepcopy(a)); used.add(sid)
+            if len(support)>=4: break
+    assessment={k:copy.deepcopy(plan.get(k)) for k in ('source_support','dependency','inferential_distance','transferability','rote_risk','verdict','reason')}
+    return {'score':int(cluster.get('score',0)),'anchors':[copy.deepcopy(first),copy.deepcopy(second)],'anchor_ids':[a1,a2],
+            'page_span':abs(int(first.get('page_no') or 0)-int(second.get('page_no') or 0)), 'bridge_terms':[], 'direct_crossref_score':0,
+            'operation_score':sum(_r62_pair_quality(first,second,0,0,0)[0:1]),
+            'operation_profiles':list(_r62_pair_quality(first,second,0,0,0)[1:]),
+            'relation_type':rtype,'contract_type':typ,'source_plan':source_plan,'fixed_answers':val['answers'],
+            'master_relation':'R68 semantic multi-anchor composed relation','selector_support_anchors':support,'semantic_assessment':assessment}
+
+def _r67_selector_prompt(domain,candidates,wanted,preferred_types=None,clusters=None):
     """Batch semantic quality gate over Python-grounded candidates.
 
     The model is a selector/critic only. It may score and return candidate ids but
@@ -1926,6 +2055,10 @@ def _r67_selector_prompt(domain,candidates,wanted):
             'support_context':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))}
                                for a in (r.get('selector_support_anchors') or [])]
         })
+    cluster_payload=[]
+    for ci,c in enumerate(clusters or []):
+        cluster_payload.append({'cluster_id':ci,'anchors':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence')),'page_no':a.get('page_no')} for a in c.get('anchors',[])]})
+    preferred_types=list(preferred_types or R59_ALLOWED_TYPES)
     return f"""중등 기술 임용 4점 문항용 source-relation 후보를 전수 평가하는 품질 선별자다. 영역: {domain}
 Python이 제공한 후보의 기술 사실·정답·anchor 순서·source_plan은 절대 수정하지 않는다. candidate_id와 평가만 반환한다. support_context는 같은 원자료의 인접 근거이며 문항 상황의 보조 근거로만 사용할 수 있고, 채점 정답을 바꾸는 데 사용할 수 없다.
 
@@ -1945,11 +2078,16 @@ SELECT 기준은 엄격하다: source_support>=4, dependency>=4, inferential_dis
 5) source 밖 원리·효과·사례를 발명해야 난도를 올릴 수 있는 구조.
 좋은 예는 한 관측 조건에서 소거되는 오차를 판정한 뒤 다른 관측 절차로 범위를 확장하거나, 한 분류 기준으로 장치를 판별한 뒤 상위 분류 기준으로 전환하는 것처럼 ①의 기준을 실제로 재사용하는 구조다.
 
-최대 {wanted}개의 selected_ids와 추가 예비 reserve_ids 최대 2개를 반환한다. reserve도 SELECT 기준을 모두 만족해야 한다.
-적합한 후보가 하나도 없으면 selected_ids와 reserve_ids를 모두 빈 배열로 반환한다. 이것은 정상 결과이며 억지 대체 후보를 넣지 않는다.
+현재 coverage에서 우선 필요한 contract_type: {json.dumps(preferred_types,ensure_ascii=False)}. 가능하면 이 유형부터 채운다. 기존에 이미 인증된 유형을 다시 선택해 coverage를 낭비하지 않는다.
+
+R68 추가 규칙: 아래 cluster_packet에서는 Python이 관계를 미리 정하지 않았다. 같은 cluster 안에서 실제로 ①→② 의존성이 성립하는 두 scored anchor를 직접 선택할 수 있다. 나머지는 support_anchor_ids로만 사용한다. source 밖 사실을 만들 수 없고, task1_anchor_id와 task2_anchor_id는 반드시 같은 cluster에 실제 존재해야 한다. 두 정답 anchor만으로 약해도 support가 경쟁 기준·원인·조건을 제공하여 ①의 판단을 만들고 그 판단이 ②의 필수 입력이 된다면 composed_plans로 SELECT할 수 있다. 반대로 support를 장식으로만 붙이는 것은 REJECT한다.
+
+최대 {wanted}개의 selected_ids와 추가 예비 reserve_ids 최대 2개를 반환한다. reserve도 SELECT 기준을 모두 만족해야 한다. pair 후보만으로 부족하면 composed_plans를 사용해 전체 SELECT 수를 보충한다. 동일 scored anchor쌍의 중복 plan은 만들지 않는다.
+적합한 후보가 하나도 없으면 selected_ids, reserve_ids, composed_plans를 모두 빈 배열로 반환한다. 이것은 정상 결과이며 억지 대체 후보를 넣지 않는다.
 후보: {json.dumps(payload,ensure_ascii=False)}
+cluster_packet: {json.dumps(cluster_payload,ensure_ascii=False)}
 JSON 객체만 출력:
-{{"assessments":[{{"candidate_id":0,"source_support":5,"dependency":4,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","reason":"짧은 이유"}}],"selected_ids":[0],"reserve_ids":[2],"rejected":{{"1":"짧은 이유"}}}}"""
+{{"assessments":[{{"candidate_id":0,"source_support":5,"dependency":4,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","reason":"짧은 이유"}}],"selected_ids":[0],"reserve_ids":[2],"composed_plans":[{{"cluster_id":0,"task1_anchor_id":1,"task2_anchor_id":2,"support_anchor_ids":[3],"contract_type":"contrastive_error_transfer","relation_type":"contrast","source_support":5,"dependency":5,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","dependency_reason":"①에서 판별한 기준이 ②의 달라진 조건에서 어떤 판단을 내려야 하는지 결정하는 데 반드시 필요한 이유","reason":"짧은 이유"}}],"rejected":{{"1":"짧은 이유"}}}}"""
 
 
 def _r67_assessment_pass(row):
@@ -1969,7 +2107,7 @@ def _r67_assessment_pass(row):
 _r65_selector_prompt = _r67_selector_prompt
 
 
-def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
+def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=None):
     """R67 full-path selector: broad Python recall -> strict batched semantic quality gate.
 
     R64 proved that a strict lexical/operation threshold both missed usable relations
@@ -1980,15 +2118,14 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=180,max_candidates=max(48,wanted*12))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R67-BATCH-SEMANTIC-QUALITY-GATE-1'
+    diag['selector_diagnostic_version']='R68-MULTI-ANCHOR-COVERAGE-AWARE-GATE-1'
+    diag['preferred_contract_types']=list(preferred_types or R59_ALLOWED_TYPES)
     diag['selector_model']=model if api_key else 'PYTHON_FALLBACK_NO_KEY'
     diag['selector_calls']=0
     diag['selector_pair_candidates']=[{k:copy.deepcopy(v) for k,v in r.items() if k not in ('anchors','source_plan','fixed_answers')} for r in candidates[:48]]
     diag['python_relation_candidates']=len(candidates)
-    if not candidates:
-        _generation_reject(diag,'python_relation_miner',['NO_RELATION_CANDIDATE'])
-        return out
-
+    # R68 can still compose a grounded relation from a multi-anchor cluster even
+    # when the legacy pair miner finds no explicit pair.
     ranked=sorted(candidates,key=lambda r:(-r.get('reasoning_viability',-999),-r.get('operation_score',-999),-r.get('score',0),r.get('page_span',999)))
     # Only hard-veto source fragments and clearly information-poor pairs. Semantic
     # quality is intentionally NOT decided by these numeric proxies anymore.
@@ -2021,19 +2158,26 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
             if r in shortlist: continue
             shortlist.append(r)
             if len(shortlist)>=18: break
-    if not shortlist:
-        _generation_reject(diag,'python_relation_quality',['NO_4PT_SOURCE_USABLE_PAIR'])
+    clusters=_r68_cluster_packets(anchors,max_clusters=8,max_anchors=8)
+    if not shortlist and not clusters:
+        if not candidates:
+            _generation_reject(diag,'python_relation_miner',['NO_RELATION_CANDIDATE'])
+        else:
+            _generation_reject(diag,'python_relation_quality',['NO_4PT_SOURCE_USABLE_MATERIAL'])
         return out
     for r in shortlist:
         r['selector_support_anchors']=_r67_support_candidates(anchors,r,limit=4)
 
+
+    diag['semantic_cluster_count']=len(clusters)
+    diag['semantic_cluster_anchor_ids']=[[int(a['id']) for a in c.get('anchors',[])] for c in clusters]
     selected=[]; assessment_by_id={}; selector_completed=False
     if api_key:
         try:
             from openai import OpenAI
             diag['selector_calls']=1
             client=OpenAI(api_key=api_key,timeout=45,max_retries=0)
-            rr=client.responses.create(model=model,input=_r67_selector_prompt(domain,shortlist,wanted),reasoning={'effort':'low'})
+            rr=client.responses.create(model=model,input=_r67_selector_prompt(domain,shortlist,wanted,preferred_types=preferred_types,clusters=clusters),reasoning={'effort':'low'})
             raw=json.loads(_strip_json(rr.output_text))
             ids=raw.get('selected_ids') if isinstance(raw,dict) else None
             if not isinstance(ids,list): raise ValueError('SELECTED_IDS_REQUIRED')
@@ -2046,7 +2190,8 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
             seen=set(); primary_count=0
             for x in ids:
                 if (type(x) is int and 0<=x<len(shortlist) and x not in seen and
-                        _r67_assessment_pass(assessment_by_id.get(x))):
+                        _r67_assessment_pass(assessment_by_id.get(x)) and
+                        (not preferred_types or shortlist[x].get('contract_type') in preferred_types)):
                     seen.add(x); r=copy.deepcopy(shortlist[x]); r['semantic_assessment']=copy.deepcopy(assessment_by_id[x]); selected.append(r); primary_count+=1
                     if primary_count>=wanted: break
             reserves=raw.get('reserve_ids') if isinstance(raw,dict) else []
@@ -2054,9 +2199,23 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
             if primary_count>0 and isinstance(reserves,list):
                 for x in reserves:
                     if (type(x) is int and 0<=x<len(shortlist) and x not in seen and
-                            _r67_assessment_pass(assessment_by_id.get(x))):
+                            _r67_assessment_pass(assessment_by_id.get(x)) and
+                            (not preferred_types or shortlist[x].get('contract_type') in preferred_types)):
                         seen.add(x); r=copy.deepcopy(shortlist[x]); r['semantic_assessment']=copy.deepcopy(assessment_by_id[x]); selected.append(r); reserve_count+=1
                         if reserve_count>=2: break
+            composed_count=0
+            if len(selected)<wanted and isinstance(raw.get('composed_plans'),list):
+                used_pairs={tuple(r.get('anchor_ids') or []) for r in selected}
+                for cp in raw.get('composed_plans'):
+                    if len(selected)>=wanted+2: break
+                    if not isinstance(cp,dict) or type(cp.get('cluster_id')) is not int or not 0<=cp['cluster_id']<len(clusters): continue
+                    row=_r68_build_composed_relation(cp,clusters[cp['cluster_id']])
+                    if not row: continue
+                    pair=tuple(row.get('anchor_ids') or [])
+                    if pair in used_pairs: continue
+                    if preferred_types and row.get('contract_type') not in preferred_types: continue
+                    used_pairs.add(pair); selected.append(row); composed_count+=1
+            diag['semantic_composed_selected']=composed_count
             diag['semantic_selector_assessments']=copy.deepcopy(assessments[:24])
             diag['semantic_selector_rejected']=copy.deepcopy(raw.get('rejected',{})) if isinstance(raw,dict) else {}
             diag['semantic_selector_reserve_count']=reserve_count
@@ -2076,7 +2235,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     if api_key and not selector_completed:
         diag['selector_technical_failure']=True
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R67_STRICT_SEMANTIC_GATE_NO_REJECTED_FALLBACK'
+    diag['selection_strategy']='R68_COVERAGE_AWARE_PAIR_PLUS_MULTI_ANCHOR_NO_REJECTED_FALLBACK'
 
     seen=set()
     for r in selected:
@@ -2102,9 +2261,9 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
 
 
 # Override pool synthesis: relation selector -> actual-exam guided writer -> Python hard gate. No low-quality deterministic fallback.
-def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
+def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None,preferred_types=None):
     size=int(pool_size or (4 if need<=1 else 6))
-    bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size)
+    bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size,preferred_types=preferred_types)
     out=GenerationPool(diagnostics=getattr(bundles,'diagnostics',None));diag=out.diagnostics
     if not bundles:return out
     from openai import OpenAI
@@ -2241,5 +2400,14 @@ def r59_prejudge_errors(c,q):
     judgment_markers=r'판단|판정|주장|분류|기록|결론|해석|보았다|간주|해당|충분|옳|타당|적절|잘못|오류|아니|않'
     if not claim or not re.search(judgment_markers,claim):
         errors.append('CLAIM_LACKS_JUDGMENT')
+    # R68 public-form difficulty veto: if both tasks explicitly name the exact
+    # binary distinction embodied by the two short answers, the semantic plan may be
+    # good but the public question still collapses to a one-step label lookup.
+    heads=[_r64_result_head(x) for x in (q.get('answer') or [])]
+    if len(heads)==2 and all(0<len(_norm(h))<=10 for h in heads):
+        tasktxt=_norm(' '.join(q.get('tasks') or [])); claimtxt=_norm(_clean(c.get('student_claim'))+' '+_clean(c.get('transfer_case')))
+        conceptual_tokens=set(_r64_answer_tokens(heads[0])+_r64_answer_tokens(heads[1]))
+        if conceptual_tokens and sum(1 for t in conceptual_tokens if _norm(t) in tasktxt+claimtxt)>=max(1,len(conceptual_tokens)-1):
+            errors.append('R68_PUBLIC_BINARY_LABEL_TOO_DIRECT')
     errors.extend(_r64_public_quality_errors(c,q))
     return list(dict.fromkeys(errors))
