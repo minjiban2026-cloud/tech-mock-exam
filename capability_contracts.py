@@ -1375,7 +1375,7 @@ def validate_r59_contract(db_path,domain,c):
         try: ids.append(int(x))
         except: pass
     ids=list(dict.fromkeys(ids))
-    if len(ids)<2 or len(ids)>3: errs.append('R59_NEED_2_TO_3_ANCHORS')
+    if len(ids)<2 or len(ids)>6: errs.append('R59_NEED_2_TO_6_ANCHORS')
     con=sqlite3.connect(Path(db_path).resolve().as_uri()+"?mode=ro",uri=True); con.row_factory=sqlite3.Row
     anchors=[]
     if ids:
@@ -1477,7 +1477,7 @@ def _r59_prompt(domain,bundles,official):
 영역: {domain}
 실제 기출 구조 참고 (기술 사실/정답 복사 금지): {json.dumps(official,ensure_ascii=False)[:5200]}
 검증한 고정 계획: {json.dumps(payload,ensure_ascii=False)}
-각 bundle에서 계획의 task1.result와 task2.result를 채점할 수 있는 문항 하나만 작성한다.
+anchors에는 채점용 2개 anchor 외에 같은 원자료의 인접 support anchor가 포함될 수 있다. support anchor의 기술 사실은 상황 구성의 근거로 사용할 수 있지만, fixed_answers를 바꾸거나 새 채점 정답으로 만들 수 없다. source에 없는 작동 원리·조건·효과를 상식으로 보충하지 않는다.\n각 bundle에서 계획의 task1.result와 task2.result를 채점할 수 있는 문항 하나만 작성한다.
 정답/근거/관계/추가 조건은 이미 고정되어 있다. fixed_answers와 source_plan을 수정하거나 새 기술 조건을 추가하지 않는다.
 정의를 가리고 명칭을 맞히게 하거나, 근거 단서가 그대로 정답표가 되는 문항은 만들지 않는다.
 학생의 판단은 반드시 source_plan의 한 기준을 잘못 적용한 '실제 오류'여야 한다. 정답 정의를 긍정문으로 다시 말하는 것은 금지한다.
@@ -1686,10 +1686,31 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
         ids=tuple(r['anchor_ids'])
         if ids in seen: continue
         seen.add(ids)
-        out.append({'anchors':copy.deepcopy(r['anchors']),
+        # R61: a two-anchor pair is often enough to identify an answer but not enough
+        # to write a grounded 4-point reasoning situation.  Add a small same-source,
+        # local source window as *hidden support evidence*.  It cannot change the two
+        # fixed answers or the scored source_plan; it only gives Writer/Judge enough
+        # source-backed conditions/procedures to avoid inventing textbook facts.
+        pair=list(r['anchors'])
+        pair_ids={int(a['id']) for a in pair}
+        pages=[int(a.get('page_no') or 0) for a in pair]
+        src=pair[0].get('source_name') if pair else None
+        support=[]
+        for a in anchors:
+            if int(a.get('id') or -1) in pair_ids or a.get('source_name')!=src: continue
+            pg=int(a.get('page_no') or 0)
+            if pages and min(abs(pg-x) for x in pages)>1: continue
+            ev=_norm(a.get('evidence') or '')
+            if len(ev)<18: continue
+            support.append(a)
+        support.sort(key=lambda a:(min(abs(int(a.get('page_no') or 0)-x) for x in pages),-len(_norm(a.get('evidence') or '')),int(a['id'])))
+        context_anchors=pair+support[:4]
+        out.append({'anchors':copy.deepcopy(context_anchors),
+                    'scored_anchor_ids':list(ids),
                     'selector_relation':{'anchor_ids':list(ids),'relation_type':r['relation_type'],
                                          'contract_type':r['contract_type'],'master_relation':r['master_relation'],
-                                         'source_plan':copy.deepcopy(r['source_plan']),'miner_score':r['score']},
+                                         'source_plan':copy.deepcopy(r['source_plan']),'miner_score':r['score'],
+                                         'support_anchor_ids':[int(a['id']) for a in support[:4]]},
                     'source_plan':copy.deepcopy(r['source_plan']),
                     'fixed_answers':copy.deepcopy(r['fixed_answers']),
                     'contract_type':r['contract_type']})
@@ -1800,10 +1821,19 @@ def r59_prejudge_errors(c,q):
             formal_lookup=bool(re.search(r'(?:조회|찾|분류|대입|확인).{0,18}(?:수 있다|가능|한다)',dep))
             if lookupish(r0) and lookupish(r1) and formal_lookup:
                 errors.append('ROTE_LOOKUP_PLAN')
-            # Same-fact two-part questions are not distinct 4-point tasks.
+            # R61: do not infer task duplication from hidden source/rubric prose.
+            # Diagnostics 10 showed this rejected entire domains before Judge even
+            # though Writer had produced two different public operations.  Distinctness
+            # must be measured on the examinee-facing tasks/operations.  Reject only
+            # when the two task texts are near-duplicates *and* ask for the same action.
             from difflib import SequenceMatcher
-            if SequenceMatcher(None,_norm(r0.get('reason')),_norm(r1.get('reason'))).ratio()>=0.72:
-                errors.append('DUPLICATE_SEMANTIC_TASKS')
+            tasks_public=list(q.get('tasks') or [])
+            if len(tasks_public)==2:
+                t0,t1=map(_norm,tasks_public)
+                a0=set(_action_signature(tasks_public[0])); a1=set(_action_signature(tasks_public[1]))
+                same_action=bool(a0 and a1 and (a0==a1 or len(a0 & a1)>=min(len(a0),len(a1))))
+                if same_action and SequenceMatcher(None,t0,t1).ratio()>=0.78:
+                    errors.append('DUPLICATE_SEMANTIC_TASKS')
     # The old gate equated "actual error" with a short list of negation words.
     # Diagnostics 9 showed genuine misclassification claims (e.g. A-process judged
     # as B-process) being rejected before Judge simply because they used a positive
