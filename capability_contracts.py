@@ -37,6 +37,20 @@ def _obviously_incomplete_evidence(text):
         return True
     if t.count('(') > t.count(')') or t.count('[') > t.count(']'):
         return True
+    # Common PDF cuts that end inside a predicate rather than at a valid note end.
+    if re.search(r'(?:더\s+[가-힣]|수\s*있|하지\s*않|하는\s*것으|인\s*경우에|이므로\s*[가-힣]?)\s*$',t):
+        return True
+    return False
+
+
+def _obviously_incomplete_answer(text):
+    t=_clean(text)
+    if not t:
+        return True
+    if t.count('(')>t.count(')') or t.count('[')>t.count(']'):
+        return True
+    if re.search(r'(?:및|와|과|또는|에서|으로|로|따라|경우|때|보다|이상|이하|초과|미만)$',t):
+        return True
     return False
 
 
@@ -88,6 +102,8 @@ def _anchor_rows(db_path, domain, limit=72):
     for rid,a,e,s,p,c,topic in rows:
         a=_clean(a); e=_clean(e)
         if not (2<=len(a)<=100 and 20<=len(e)<=950):
+            continue
+        if _obviously_incomplete_answer(a):
             continue
         if _obviously_incomplete_evidence(e):
             continue
@@ -1492,9 +1508,12 @@ anchors에는 채점용 2개 anchor 외에 같은 원자료의 인접 support an
 추가 상황은 ①의 결과를 단순 재진술하지 말고, ①에서 바로잡은 대상/기준을 사용해야만 후속 판단이 가능하도록 조건을 바꾼다.
 ②가 단지 '추가 조건 한 줄을 보고 하위 명칭 맞히기'가 되면 작성하지 않는다. ②에는 ①의 결과를 전제로 효과·조건·원리·수치·적용 여부 중 하나를 판단하는 실제 전이를 우선한다.
 두 소문항 모두 '정의의 특징을 그대로 주고 명칭을 쓰기' 형태면 해당 bundle을 생략한다. 최소 한 소문항은 서로 경쟁하는 두 기준·두 조건·두 해석 중 무엇을 적용할지 판단해야 한다.
+selector_relation의 semantic_assessment가 있으면 그것이 4점 가치의 최소 조건이다. source_support·dependency·inferential_distance·transferability를 실제 공개 문항에서도 유지하고 rote_risk를 다시 높이는 단순 정의 변환을 하지 않는다.
 selector_relation의 operation_score/reasoning_viability를 높게 만든 조건·인과·절차·관계 단서를 실제 판단에 사용한다. 단순 명칭 A와 명칭 B를 각각 맞히는 문항으로 바꾸지 않는다.
 ①과 ② 중 적어도 하나는 정답 명칭 외에 조건 변화, 원인-결과, 절차 순서, 수치/관계 해석 중 하나를 실제로 조작해야 한다. source가 그런 조작을 지원하지 않으면 omissions로 보낸다.
 작성 요구에 근거·이유·설명을 넣었다면 고정 source_plan에 그 설명을 채점할 구체적 근거가 있어야 한다. 명칭만 고정되어 있는데 장문의 설명을 요구하지 않는다.
+원자료에 존재하지 않는 '번호', '목록', '표의 항목', '보기', '자료의 번호'를 새로 만들거나 답안에 요구하지 않는다. 특히 fixed answer에 1), 2), 4) 같은 표식이 있더라도 공개 자료에 실제 대응 목록이 없으면 번호를 채점요소로 쓰지 않는다.
+학생의 오류를 만들기 위해 source가 보장하지 않는 관찰 결과·인과·기능을 추가하지 않는다. source에서 확정할 수 없는 사례라면 omissions로 보낸다.
 ①의 공개 자료에는 정답을 강하게 암시하는 특징만 나열하지 말고, source에 있는 관련 단서 중 판단에 필요한 단서와 오개념을 유발하는 경쟁 단서를 함께 배치한다.
 ②는 ①의 정답을 모르면 풀 수 없어야 한다. 단순히 두 번째 anchor의 정의를 새 상황으로 다시 말하면 안 된다.
 정답이 '분류/종류/기준/…에 따라' 같은 짧은 분류명인 경우, 그 분류명을 사실상 번역한 표현을 자료에 쓰지 말고 실제 사례의 관찰값·조건·결과로 우회한다.
@@ -1790,6 +1809,56 @@ def _r60_python_relation_candidates(db_path,domain,limit=96,max_candidates=48):
                              'relation_type':rtype,'contract_type':ctype,'source_plan':plan,
                              'fixed_answers':validated['answers'],
                              'master_relation':'Python source-grounded relation candidate'})
+    # R67 recall expansion: direct lexical cross-reference is not required for
+    # every useful 4-point relation. Diagnostics 16 showed biology had only three
+    # candidates although the source contains local condition/process/effect groups.
+    # Add operationally rich, same-source local pairs to the semantic selector's
+    # recall set. These are only candidates; the strict Luna gate still decides
+    # whether they have real dependency/transfer value.
+    existing_pairs={frozenset(r.get('anchor_ids') or []) for r in rows}
+    for i,first in enumerate(anchors):
+        for second in anchors[i+1:]:
+            ids=frozenset((int(first['id']),int(second['id'])))
+            if ids in existing_pairs or first.get('source_name')!=second.get('source_name'):
+                continue
+            span=abs(int(first.get('page_no') or 0)-int(second.get('page_no') or 0))
+            if span>2:
+                continue
+            f_ans=_clean(first.get('answer')); s_ans=_clean(second.get('answer'))
+            fev=_clean(first.get('evidence')); sev=_clean(second.get('evidence'))
+            if not f_ans or not s_ans or _norm(f_ans)==_norm(s_ans):
+                continue
+            if any(_obviously_incomplete_evidence(x) for x in (fev,sev)):
+                continue
+            if any(_r64_fragment_answer(x) for x in (f_ans,s_ans)):
+                continue
+            op,p1,p2=_r62_pair_quality(first,second,0,0,span)
+            operational=sum(int(p.get(k,0)) for p in (p1,p2) for k in ('conditional','causal','procedural','relational'))
+            richness=sum(int(p.get('richness',0)) for p in (p1,p2))
+            if richness<7 or operational<3 or any(int(p.get('fragment_penalty',0))>0 for p in (p1,p2)):
+                continue
+            rtype='conditional_choice' if (int(p1.get('conditional',0))+int(p2.get('conditional',0))+int(p1.get('numeric',0))+int(p2.get('numeric',0)))>0 else 'dependent_sequence'
+            ctype='criterion_conflict_resolution'
+            plan={'schema':PLAN_SCHEMA,
+                  'criterion':{'text':fev,'binding':{'anchor_id':int(first['id']),'quote':fev}},
+                  'transfer_condition':{'text':sev,'binding':{'anchor_id':int(second['id']),'quote':sev}},
+                  'task1':{'result':{'value':f_ans,'binding':{'anchor_id':int(first['id']),'quote':fev}},
+                           'reason':{'text':fev,'binding':{'anchor_id':int(first['id']),'quote':fev}}},
+                  'task2':{'result':{'value':s_ans,'binding':{'anchor_id':int(second['id']),'quote':sev}},
+                           'reason':{'text':sev,'binding':{'anchor_id':int(second['id']),'quote':sev}}},
+                  'dependency':{'input':'task1.result','output':'task2.result',
+                                'required_result':{'anchor_id':int(first['id']),'quote':fev},
+                                'why_required':'①에서 판별한 결과를 후속 상황의 판단 대상으로 사용해야 ②의 적용 결과를 결정할 수 있다.'}}
+            ok,validated=validate_plan(plan,[first,second],relation_type=rtype)
+            if not ok:
+                continue
+            rows.append({'score':op+(8 if span<=1 else 5),'anchors':[first,second],
+                         'anchor_ids':[int(first['id']),int(second['id'])],'page_span':span,
+                         'bridge_terms':[],'direct_crossref_score':0,'operation_score':op,
+                         'operation_profiles':[p1,p2],'relation_type':rtype,'contract_type':ctype,
+                         'source_plan':plan,'fixed_answers':validated['answers'],
+                         'master_relation':'R67 operational local recall candidate'})
+            existing_pairs.add(ids)
     for _r in rows:
         _r['reasoning_viability']=_r63_reasoning_viability(_r)
     rows.sort(key=lambda x:(-x['reasoning_viability'],-x['operation_score'],-x['score'],x['page_span'],x['anchor_ids']))
@@ -1808,11 +1877,37 @@ def _r60_python_relation_candidates(db_path,domain,limit=96,max_candidates=48):
     return anchors,out
 
 
-def _r65_selector_prompt(domain,candidates,wanted):
-    """One cheap semantic ranking call over a Python-grounded shortlist.
+def _r67_support_candidates(all_anchors,row,limit=4):
+    pair=list(row.get('anchors') or [])
+    if not pair:
+        return []
+    pair_ids={int(a.get('id')) for a in pair if a.get('id') is not None}
+    pages=[int(a.get('page_no') or 0) for a in pair]
+    src=pair[0].get('source_name')
+    support=[]
+    for a in all_anchors:
+        if int(a.get('id') or -1) in pair_ids or a.get('source_name')!=src:
+            continue
+        pg=int(a.get('page_no') or 0)
+        if pages and min(abs(pg-x) for x in pages)>2:
+            continue
+        if _obviously_incomplete_evidence(a.get('evidence') or '') or _obviously_incomplete_answer(a.get('answer') or ''):
+            continue
+        if len(_norm(a.get('evidence') or ''))<18:
+            continue
+        rel=_r62_support_score(a,pair)
+        if rel<3:
+            continue
+        support.append((rel,a))
+    support.sort(key=lambda x:(-x[0],min(abs(int(x[1].get('page_no') or 0)-p) for p in pages),int(x[1]['id'])))
+    return [copy.deepcopy(a) for _,a in support[:limit]]
 
-    The selector may only return candidate indices. It cannot rewrite anchors,
-    fixed answers, source plans, or technical facts.
+
+def _r67_selector_prompt(domain,candidates,wanted):
+    """Batch semantic quality gate over Python-grounded candidates.
+
+    The model is a selector/critic only. It may score and return candidate ids but
+    may never rewrite source facts, fixed answers, anchor order, or source plans.
     """
     payload=[]
     for i,r in enumerate(candidates):
@@ -1827,23 +1922,55 @@ def _r65_selector_prompt(domain,candidates,wanted):
             'anchors':[{
                 'id':a.get('id'),'answer':_clean(a.get('answer')),
                 'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))
-            } for a in pair]
+            } for a in pair],
+            'support_context':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))}
+                               for a in (r.get('selector_support_anchors') or [])]
         })
-    return f"""중등 기술 임용 4점 문항의 '관계 후보 선별자'다. 영역: {domain}
-Python이 원문에서 찾은 후보만 평가한다. 기술 사실, 정답, anchor 순서, source_plan은 절대 수정하지 말고 candidate_id만 고른다.
-좋은 후보는 ①에서 기준/관계/오류를 판단한 결과가 ②의 조건 변화·원인 진단·절차 교정·수치/관계 적용에 실제 입력으로 쓰일 수 있어야 한다.
-두 anchor가 각각 정의/수치목록→명칭 대응에 그치거나, 두 짧은 명칭을 병렬로 맞히거나, 두 번째 anchor만 읽어 ②를 독립적으로 풀 수 있으면 낮게 평가한다.
-특히 ‘순시값/최댓값’처럼 기초 정의 두 개를 상황 문장으로 바꾼 것뿐인 후보는 4점 추론거리와 난도가 부족하므로 우선 선택하지 않는다. 관찰값 두 개만 비교하면 곧바로 용어가 정해지는 후보도 낮게 평가한다.
-원자료가 실제 비교, 조건, 인과, 절차, 관계를 제공하는 후보를 우선한다. 단순히 같은 페이지/공통 단어/상호 언급이 있다는 이유로 선택하지 않는다.
-source에 없는 새 사례·효과·조건을 발명해야만 4점 문항이 되는 후보는 제외한다.
-최대 {wanted}개를 좋은 순서대로 선택한다. 적합한 것이 없으면 빈 배열을 반환한다.
+    return f"""중등 기술 임용 4점 문항용 source-relation 후보를 전수 평가하는 품질 선별자다. 영역: {domain}
+Python이 제공한 후보의 기술 사실·정답·anchor 순서·source_plan은 절대 수정하지 않는다. candidate_id와 평가만 반환한다. support_context는 같은 원자료의 인접 근거이며 문항 상황의 보조 근거로만 사용할 수 있고, 채점 정답을 바꾸는 데 사용할 수 없다.
+
+각 후보를 아래 5축으로 0~5점 평가한다.
+- source_support: 두 정답과 후속 판단을 source만으로 충분히 뒷받침하는가.
+- dependency: ①에서 얻은 판단/기준이 ②의 필수 입력인가. ②를 두 번째 anchor만 읽고 독립적으로 풀 수 있으면 2 이하.
+- inferential_distance: 정의/목록→명칭 회상을 넘어 조건 비교, 원인 진단, 절차 교정, 수치·관계 적용이 필요한가.
+- transferability: ①의 기준을 조건이 달라진 후속 상황에 실제로 적용할 수 있는가.
+- rote_risk: 0이 최상, 5가 최악. 두 정의를 각각 이름 맞히기, 인접 분류표 두 칸 대응, 특징을 거의 그대로 재진술하면 4~5.
+
+SELECT 기준은 엄격하다: source_support>=4, dependency>=4, inferential_distance>=4, transferability>=4, rote_risk<=1을 모두 만족해야 한다.
+특히 다음은 REJECT한다.
+1) 소모성/비소모성, LCD/LED, 절연형/비절연형처럼 두 정의를 상황 문장으로 바꾼 뒤 각각 명칭만 맞히는 구조.
+2) 숫자·조건이 source의 분류표와 일대일 대응하여 명칭만 찾는 구조.
+3) 번호/목록/표가 source에 실제로 없는데 Writer가 새 목록이나 번호를 만들어야 성립하는 구조.
+4) ① 없이도 ②의 anchor 정의만으로 답이 정해지는 구조.
+5) source 밖 원리·효과·사례를 발명해야 난도를 올릴 수 있는 구조.
+좋은 예는 한 관측 조건에서 소거되는 오차를 판정한 뒤 다른 관측 절차로 범위를 확장하거나, 한 분류 기준으로 장치를 판별한 뒤 상위 분류 기준으로 전환하는 것처럼 ①의 기준을 실제로 재사용하는 구조다.
+
+최대 {wanted}개의 selected_ids와 추가 예비 reserve_ids 최대 2개를 반환한다. reserve도 SELECT 기준을 모두 만족해야 한다.
+적합한 후보가 하나도 없으면 selected_ids와 reserve_ids를 모두 빈 배열로 반환한다. 이것은 정상 결과이며 억지 대체 후보를 넣지 않는다.
 후보: {json.dumps(payload,ensure_ascii=False)}
-선택 후보가 Writer에서 원문 절단 등으로 생략될 수 있으므로, selected_ids 뒤에 품질이 그 다음인 예비 후보를 최대 2개 reserve_ids로 반환한다. reserve_ids는 selected_ids와 중복하지 않는다.
-JSON 객체만 출력: {{"selected_ids":[0,2],"reserve_ids":[3,5],"rejected":{{"1":"짧은 이유"}}}}"""
+JSON 객체만 출력:
+{{"assessments":[{{"candidate_id":0,"source_support":5,"dependency":4,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","reason":"짧은 이유"}}],"selected_ids":[0],"reserve_ids":[2],"rejected":{{"1":"짧은 이유"}}}}"""
+
+
+def _r67_assessment_pass(row):
+    if not isinstance(row,dict) or str(row.get('verdict','')).upper()!='SELECT':
+        return False
+    try:
+        return (float(row.get('source_support',0))>=4 and
+                float(row.get('dependency',0))>=4 and
+                float(row.get('inferential_distance',0))>=4 and
+                float(row.get('transferability',0))>=4 and
+                float(row.get('rote_risk',9))<=1)
+    except (TypeError,ValueError):
+        return False
+
+
+# Compatibility name retained for older regression/import callers.
+_r65_selector_prompt = _r67_selector_prompt
 
 
 def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
-    """R66 hybrid selector: Python recall shortlist -> one batched Luna semantic rank.
+    """R67 full-path selector: broad Python recall -> strict batched semantic quality gate.
 
     R64 proved that a strict lexical/operation threshold both missed usable relations
     and still admitted rote pairs. R66 keeps the semantic selector but vetoes incomplete fixed source before it
@@ -1851,9 +1978,9 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     domain. Writer/Judge remain unchanged and fixed answers stay Python-owned.
     """
     out=GenerationPool(); diag=out.diagnostics
-    anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=160,max_candidates=max(32,wanted*10))
+    anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=180,max_candidates=max(48,wanted*12))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R66-BATCH-SEMANTIC-RELATION-2'
+    diag['selector_diagnostic_version']='R67-BATCH-SEMANTIC-QUALITY-GATE-1'
     diag['selector_model']=model if api_key else 'PYTHON_FALLBACK_NO_KEY'
     diag['selector_calls']=0
     diag['selector_pair_candidates']=[{k:copy.deepcopy(v) for k,v in r.items() if k not in ('anchors','source_plan','fixed_answers')} for r in candidates[:48]]
@@ -1865,60 +1992,91 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     ranked=sorted(candidates,key=lambda r:(-r.get('reasoning_viability',-999),-r.get('operation_score',-999),-r.get('score',0),r.get('page_span',999)))
     # Only hard-veto source fragments and clearly information-poor pairs. Semantic
     # quality is intentionally NOT decided by these numeric proxies anymore.
-    shortlist=[]
+    eligible=[]
     for r in ranked:
         prof=r.get('operation_profiles') or []
         pair=r.get('anchors') or []
         if any(_obviously_incomplete_evidence(a.get('evidence') or '') for a in pair):
             continue
-        if any(_r64_fragment_answer(a.get('answer') or '') for a in pair):
+        if any(_r64_fragment_answer(a.get('answer') or '') or _obviously_incomplete_answer(a.get('answer') or '') for a in pair):
             continue
         if any(int(p.get('fragment_penalty',0))>0 for p in prof):
             continue
         if sum(int(p.get('richness',0)) for p in prof)<3:
             continue
-        if int(r.get('operation_score',-999)) < -12 or int(r.get('reasoning_viability',-999)) < -18:
+        if int(r.get('operation_score',-999)) < -24 or int(r.get('reasoning_viability',-999)) < -30:
             continue
+        eligible.append(r)
+    # Preserve recall diversity. Operational-local expansion must not crowd out
+    # direct/cross-reference candidates such as the clutch pair that already earned
+    # a real Judge PASS in diagnostics 16.
+    core=[r for r in eligible if r.get('master_relation')!='R67 operational local recall candidate']
+    local=[r for r in eligible if r.get('master_relation')=='R67 operational local recall candidate']
+    shortlist=core[:10]
+    for r in local:
+        if len(shortlist)>=18: break
         shortlist.append(r)
-        if len(shortlist)>=min(18,max(10,wanted*3)):
-            break
+    if len(shortlist)<18:
+        for r in eligible:
+            if r in shortlist: continue
+            shortlist.append(r)
+            if len(shortlist)>=18: break
     if not shortlist:
         _generation_reject(diag,'python_relation_quality',['NO_4PT_SOURCE_USABLE_PAIR'])
         return out
+    for r in shortlist:
+        r['selector_support_anchors']=_r67_support_candidates(anchors,r,limit=4)
 
-    selected=[]
+    selected=[]; assessment_by_id={}; selector_completed=False
     if api_key:
         try:
             from openai import OpenAI
             diag['selector_calls']=1
             client=OpenAI(api_key=api_key,timeout=45,max_retries=0)
-            rr=client.responses.create(model=model,input=_r65_selector_prompt(domain,shortlist,wanted),reasoning={'effort':'low'})
+            rr=client.responses.create(model=model,input=_r67_selector_prompt(domain,shortlist,wanted),reasoning={'effort':'low'})
             raw=json.loads(_strip_json(rr.output_text))
             ids=raw.get('selected_ids') if isinstance(raw,dict) else None
             if not isinstance(ids,list): raise ValueError('SELECTED_IDS_REQUIRED')
-            seen=set()
+            assessments=raw.get('assessments') if isinstance(raw,dict) else None
+            if not isinstance(assessments,list): raise ValueError('ASSESSMENTS_REQUIRED')
+            for row in assessments:
+                if isinstance(row,dict) and type(row.get('candidate_id')) is int and 0<=row['candidate_id']<len(shortlist):
+                    assessment_by_id[row['candidate_id']]=copy.deepcopy(row)
+            selector_completed=True
+            seen=set(); primary_count=0
             for x in ids:
-                if type(x) is int and 0<=x<len(shortlist) and x not in seen:
-                    seen.add(x); selected.append(shortlist[x])
-                    if len(selected)>=wanted: break
+                if (type(x) is int and 0<=x<len(shortlist) and x not in seen and
+                        _r67_assessment_pass(assessment_by_id.get(x))):
+                    seen.add(x); r=copy.deepcopy(shortlist[x]); r['semantic_assessment']=copy.deepcopy(assessment_by_id[x]); selected.append(r); primary_count+=1
+                    if primary_count>=wanted: break
             reserves=raw.get('reserve_ids') if isinstance(raw,dict) else []
-            if isinstance(reserves,list):
+            reserve_count=0
+            if primary_count>0 and isinstance(reserves,list):
                 for x in reserves:
-                    if type(x) is int and 0<=x<len(shortlist) and x not in seen:
-                        seen.add(x); selected.append(shortlist[x])
-                        if len(selected)>=wanted+2: break
+                    if (type(x) is int and 0<=x<len(shortlist) and x not in seen and
+                            _r67_assessment_pass(assessment_by_id.get(x))):
+                        seen.add(x); r=copy.deepcopy(shortlist[x]); r['semantic_assessment']=copy.deepcopy(assessment_by_id[x]); selected.append(r); reserve_count+=1
+                        if reserve_count>=2: break
+            diag['semantic_selector_assessments']=copy.deepcopy(assessments[:24])
             diag['semantic_selector_rejected']=copy.deepcopy(raw.get('rejected',{})) if isinstance(raw,dict) else {}
-            diag['semantic_selector_reserve_count']=max(0,len(selected)-min(len(ids),wanted))
+            diag['semantic_selector_reserve_count']=reserve_count
+            diag['semantic_selector_valid_primary']=primary_count
+            if not selected:
+                diag['selector_empty_reason']='SEMANTICALLY_NO_4PT_WORTHY_PAIR'
+                _generation_reject(diag,'semantic_selector',['NO_4PT_WORTHY_PAIR'])
         except Exception as ex:
             diag.setdefault('selector_retry_reasons',[]).append(type(ex).__name__)
             _generation_reject(diag,'semantic_selector',[type(ex).__name__])
-    # API failure must not recreate the R64 zero-candidate dead end. This fallback
-    # is deliberately broader than R64, but Writer can omit and pre-Judge/Judge veto.
-    if not selected:
-        selected=shortlist[:wanted]
-        diag['selector_fallback']='PYTHON_BROAD_SHORTLIST'
+    else:
+        # Local/offline regression path only. Production certification requires api_key.
+        selected=[copy.deepcopy(r) for r in shortlist[:wanted]]
+        diag['selector_fallback']='PYTHON_OFFLINE_TEST_ONLY'
+    # Critical R67 rule: a successful semantic empty result is NOT an API failure
+    # and must never be repopulated with rejected Python candidates.
+    if api_key and not selector_completed:
+        diag['selector_technical_failure']=True
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R66_COMPLETE_SOURCE_THEN_BATCH_LUNA_BACKFILL'
+    diag['selection_strategy']='R67_STRICT_SEMANTIC_GATE_NO_REJECTED_FALLBACK'
 
     seen=set()
     for r in selected:
@@ -1926,20 +2084,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
         if ids in seen: continue
         seen.add(ids)
         pair=list(r['anchors']); pair_ids={int(a['id']) for a in pair}
-        pages=[int(a.get('page_no') or 0) for a in pair]
-        src=pair[0].get('source_name') if pair else None
-        support=[]
-        for a in anchors:
-            if int(a.get('id') or -1) in pair_ids or a.get('source_name')!=src: continue
-            pg=int(a.get('page_no') or 0)
-            if pages and min(abs(pg-x) for x in pages)>2: continue
-            ev=_norm(a.get('evidence') or '')
-            if len(ev)<18: continue
-            rel=_r62_support_score(a,pair)
-            if rel<3: continue
-            support.append((rel,a))
-        support.sort(key=lambda x:(-x[0],min(abs(int(x[1].get('page_no') or 0)-p) for p in pages),int(x[1]['id'])))
-        support_rows=[a for _,a in support[:4]]
+        support_rows=copy.deepcopy(r.get('selector_support_anchors') or _r67_support_candidates(anchors,r,limit=4))
         context_anchors=pair+support_rows
         out.append({'anchors':copy.deepcopy(context_anchors),'scored_anchor_ids':list(ids),
                     'selector_relation':{'anchor_ids':list(ids),'relation_type':r['relation_type'],
@@ -1947,6 +2092,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
                                          'source_plan':copy.deepcopy(r['source_plan']),'miner_score':r['score'],
                                          'operation_score':r.get('operation_score'),'reasoning_viability':r.get('reasoning_viability'),
                                          'operation_profiles':copy.deepcopy(r.get('operation_profiles')),
+                                         'semantic_assessment':copy.deepcopy(r.get('semantic_assessment')),
                                          'support_anchor_ids':[int(a['id']) for a in support_rows]},
                     'source_plan':copy.deepcopy(r['source_plan']),'fixed_answers':copy.deepcopy(r['fixed_answers']),
                     'contract_type':r['contract_type']})
@@ -1957,11 +2103,11 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
 
 # Override pool synthesis: relation selector -> actual-exam guided writer -> Python hard gate. No low-quality deterministic fallback.
 def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None):
-    from openai import OpenAI
     size=int(pool_size or (4 if need<=1 else 6))
     bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size)
     out=GenerationPool(diagnostics=getattr(bundles,'diagnostics',None));diag=out.diagnostics
     if not bundles:return out
+    from openai import OpenAI
     official=_r59_official_examples(db_path,2)
     client=OpenAI(api_key=api_key,timeout=75,max_retries=0)
     for start in range(0,len(bundles),2):
@@ -2019,6 +2165,21 @@ def r59_prejudge_errors(c,q):
     """Reject known definition/label failures before spending Judge calls."""
     from validators import _max_copy_similarity,_simple_answer_label,_action_signature
     errors=[]
+    # R67: a production semantic selector is an explicit precondition for spending
+    # Writer/Judge budget. Offline regression candidates may omit this field.
+    sem=(c.get('selector_relation') or {}).get('semantic_assessment')
+    if sem is not None and not _r67_assessment_pass(sem):
+        errors.append('R67_SEMANTIC_GATE_NOT_MET')
+    # R67: Writer must not invent a numbered/listed public structure that the
+    # source-bound plan never supplied. Diagnostics 16 produced a biology item
+    # asking for a microorganism number although no numbered list was presented.
+    passage=_clean(q.get('passage','')) if q else ''
+    public=' '.join([passage]+[_clean(x) for x in (q.get('tasks') or [])]) if q else ''
+    has_public_numbered_list=bool(re.search(r'(?:^|[\s\n])[①-⑳]|(?:^|[\s\n])\d{1,2}[.)]', passage))
+    answer_has_number=any(re.match(r'^\s*\d{1,2}\s*[.)]', _clean(a)) for a in (q.get('answer') or [])) if q else False
+    asks_number=bool(re.search(r'(?:번호|몇\s*번|목록에서\s*(?:번호|항목))', public))
+    if (answer_has_number or asks_number) and not has_public_numbered_list:
+        errors.append('R67_UNSUPPORTED_PUBLIC_NUMBERING')
     if not q:return ['QUESTION_CONVERSION_FAILED']
     anchors=(c.get('validation') or {}).get('anchors',[])
     if not c.get('source_plan'):errors.append('SOURCE_BOUND_PLAN_REQUIRED')

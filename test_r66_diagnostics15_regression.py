@@ -22,6 +22,7 @@ def test_r66_anchor_rows_remove_diagnostics15_cut_anchors():
 
 
 def test_r66_selector_prompt_has_reserve_backfill_and_difficulty_rule():
-    p=cc._r65_selector_prompt('전기·전자', [], 3)
+    p=cc._r67_selector_prompt('전기·전자', [], 3)
     assert 'reserve_ids' in p
-    assert '추론거리와 난도가 부족' in p
+    assert 'inferential_distance>=4' in p
+    assert 'rote_risk<=1' in p

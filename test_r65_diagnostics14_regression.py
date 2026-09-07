@@ -10,8 +10,8 @@ class R65Diagnostics14Regression(unittest.TestCase):
             pool=cc._r59_select_bundles('', 'gpt-5.6-luna', DB, domain, wanted=4)
             self.assertGreater(len(pool),0,domain)
             self.assertEqual(pool.diagnostics.get('selector_calls'),0)
-            self.assertEqual(pool.diagnostics.get('selector_fallback'),'PYTHON_BROAD_SHORTLIST')
-            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R66_COMPLETE_SOURCE_THEN_BATCH_LUNA_BACKFILL')
+            self.assertEqual(pool.diagnostics.get('selector_fallback'),'PYTHON_OFFLINE_TEST_ONLY')
+            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R67_STRICT_SEMANTIC_GATE_NO_REJECTED_FALLBACK')
 
     def test_fixed_answers_and_source_plan_remain_python_owned(self):
         pool=cc._r59_select_bundles('', 'gpt-5.6-luna', DB, '건설기술', wanted=3)

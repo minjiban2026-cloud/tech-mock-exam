@@ -73,19 +73,18 @@ class Diagnostics11Regression(unittest.TestCase):
             self.assertGreaterEqual(len(rows),2,d)
             self.assertIn("operation_score",rows[0])
 
-    def test_support_is_semantically_ranked(self):
-        bundles=cc._r59_select_bundles("","",DB,"통신기술",wanted=3)
-        target=next(b for b in bundles if b["selector_relation"]["anchor_ids"]==[162,166])
-        support=target["selector_relation"]["support_anchor_ids"]
-        self.assertIn(163,support)  # LRC comparison is relevant support
-        self.assertNotIn(8,support) # unrelated distant anchor
+    def test_truncated_answer_is_removed_before_support_ranking(self):
+        bundles=cc._r59_select_bundles("","",DB,"통신기술",wanted=6)
+        pairs=[b["selector_relation"]["anchor_ids"] for b in bundles]
+        self.assertFalse(any(162 in pair for pair in pairs))  # "수직 중복 검사(VRC" is truncated
+        self.assertTrue(all(8 not in b["selector_relation"]["support_anchor_ids"] for b in bundles))
 
     def test_writer_budget_is_not_wasted_on_mirrored_pairs(self):
         bundles=cc._r59_select_bundles("","",DB,"기술교육론",wanted=3)
         pairs=[tuple(b["selector_relation"]["anchor_ids"]) for b in bundles]
         unordered=[frozenset(x) for x in pairs]
         self.assertEqual(len(unordered),len(set(unordered)))
-        self.assertEqual(bundles.diagnostics.get("selection_strategy"),"R66_COMPLETE_SOURCE_THEN_BATCH_LUNA_BACKFILL")
+        self.assertEqual(bundles.diagnostics.get("selection_strategy"),"R67_STRICT_SEMANTIC_GATE_NO_REJECTED_FALLBACK")
 
     def test_archive_state_uses_hidden_row_without_schema_change(self):
         calls=[]

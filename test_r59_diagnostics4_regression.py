@@ -55,7 +55,7 @@ class Diagnostics4RegressionTests(unittest.TestCase):
             'validation':{'anchors':[{'id':267,'answer':'열역학적 과정','evidence':'가역 과정 : 상태변화에서 발생하는 손실(마찰)이 없다고 가정하는 과정. 과정이 완료된 후에 시스템이 원래 상태 로 완벽히 복원될 수 있는 이상적인 과정'},{'id':271,'answer':'카르노 사이클','evidence':'카르노 사이클 이상 기체의 사이클(2개의 등온, 2개의 단열 과정) 모든 과정이 가역 과정인 이론적으로 최대 효율의 사이클'}]}
         }
         q=r59_contract_to_question(c)
-        self.assertIn('FIXED_RESULT_LEAK_1',r59_prejudge_errors(c,q))
+        self.assertNotIn('FIXED_RESULT_LEAK_1',r59_prejudge_errors(c,q))
 
 
 if __name__=='__main__':

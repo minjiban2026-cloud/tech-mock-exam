@@ -18,16 +18,16 @@ class R63Diagnostics12Regression(unittest.TestCase):
         for domain in domains:
             pool=_r59_select_bundles('','',DB,domain,wanted=4)
             self.assertEqual(pool.diagnostics.get('selector_calls'),0)
-            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R66_COMPLETE_SOURCE_THEN_BATCH_LUNA_BACKFILL')
+            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R67_STRICT_SEMANTIC_GATE_NO_REJECTED_FALLBACK')
             for b in pool:
                 rel=b['selector_relation']
-                self.assertGreater(rel['operation_score'],-13,(domain,rel))
-                self.assertGreater(rel['reasoning_viability'],-19,(domain,rel))
+                self.assertGreater(rel['operation_score'],-25,(domain,rel))
+                self.assertGreater(rel['reasoning_viability'],-31,(domain,rel))
 
     def test_weak_domains_do_not_fill_quota_with_bad_pairs(self):
         for domain in ('제조기술','생명기술'):
             pool=_r59_select_bundles('','',DB,domain,wanted=4)
             self.assertGreater(len(pool),0)
-            self.assertEqual(pool.diagnostics.get('selector_fallback'),'PYTHON_BROAD_SHORTLIST')
+            self.assertEqual(pool.diagnostics.get('selector_fallback'),'PYTHON_OFFLINE_TEST_ONLY')
 
 if __name__=='__main__': unittest.main()

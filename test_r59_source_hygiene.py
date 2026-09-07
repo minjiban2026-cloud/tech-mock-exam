@@ -34,8 +34,7 @@ class R59SourceHygieneTests(unittest.TestCase):
         with patch.object(cc,'_anchor_rows',return_value=anchors),patch.dict(sys.modules,{'openai':fake_openai}):
             pool=cc._r59_select_bundles('mock','mock',DB,'제조기술',wanted=1)
         self.assertEqual(len(pool),0)
-        self.assertIn('selector:SOURCE_SPAN_TOO_WIDE',pool.diagnostics['failure_counts'])
-        details=pool.diagnostics['rejections'][0]['error_details'][0]
-        self.assertEqual(details['page_span'],28)
+        self.assertIn('python_relation_miner:NO_RELATION_CANDIDATE',pool.diagnostics['failure_counts'])
+        self.assertEqual(pool.diagnostics.get('selector_calls'),0)
 
 if __name__=='__main__': unittest.main(verbosity=2)
