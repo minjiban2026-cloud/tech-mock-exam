@@ -85,7 +85,7 @@ class Diagnostics11Regression(unittest.TestCase):
         pairs=[tuple(b["selector_relation"]["anchor_ids"]) for b in bundles]
         unordered=[frozenset(x) for x in pairs]
         self.assertEqual(len(unordered),len(set(unordered)))
-        self.assertEqual(bundles.diagnostics.get("selection_strategy"),"R62_SCORE_OPERATION_CROSS_CONTEXT")
+        self.assertEqual(bundles.diagnostics.get("selection_strategy"),"R63_REASONING_VIABILITY_FIRST")
 
     def test_archive_state_uses_hidden_row_without_schema_change(self):
         calls=[]
@@ -106,7 +106,7 @@ class Diagnostics11Regression(unittest.TestCase):
         text=(ROOT/"app.py").read_text(encoding="utf-8")
         self.assertNotIn("R59 contract JSON 불러오기",text)
         self.assertNotIn("R59 contract JSON 저장",text)
-        self.assertIn("R62 실제기출 기반 생성 + Judge 인증",text)
+        self.assertIn("실제기출 기반 생성 + Judge 인증",text)
 
 
 if __name__=="__main__":

@@ -1486,6 +1486,9 @@ anchors에는 채점용 2개 anchor 외에 같은 원자료의 인접 support an
 추가 상황은 ①의 결과를 단순 재진술하지 말고, ①에서 바로잡은 대상/기준을 사용해야만 후속 판단이 가능하도록 조건을 바꾼다.
 ②가 단지 '추가 조건 한 줄을 보고 하위 명칭 맞히기'가 되면 작성하지 않는다. ②에는 ①의 결과를 전제로 효과·조건·원리·수치·적용 여부 중 하나를 판단하는 실제 전이를 우선한다.
 두 소문항 모두 '정의의 특징을 그대로 주고 명칭을 쓰기' 형태면 해당 bundle을 생략한다. 최소 한 소문항은 서로 경쟁하는 두 기준·두 조건·두 해석 중 무엇을 적용할지 판단해야 한다.
+selector_relation의 operation_score/reasoning_viability를 높게 만든 조건·인과·절차·관계 단서를 실제 판단에 사용한다. 단순 명칭 A와 명칭 B를 각각 맞히는 문항으로 바꾸지 않는다.
+①과 ② 중 적어도 하나는 정답 명칭 외에 조건 변화, 원인-결과, 절차 순서, 수치/관계 해석 중 하나를 실제로 조작해야 한다. source가 그런 조작을 지원하지 않으면 omissions로 보낸다.
+작성 요구에 근거·이유·설명을 넣었다면 고정 source_plan에 그 설명을 채점할 구체적 근거가 있어야 한다. 명칭만 고정되어 있는데 장문의 설명을 요구하지 않는다.
 ①의 공개 자료에는 정답을 강하게 암시하는 특징만 나열하지 말고, source에 있는 관련 단서 중 판단에 필요한 단서와 오개념을 유발하는 경쟁 단서를 함께 배치한다.
 ②는 ①의 정답을 모르면 풀 수 없어야 한다. 단순히 두 번째 anchor의 정의를 새 상황으로 다시 말하면 안 된다.
 정답이 '분류/종류/기준/…에 따라' 같은 짧은 분류명인 경우, 그 분류명을 사실상 번역한 표현을 자료에 쓰지 말고 실제 사례의 관찰값·조건·결과로 우회한다.
@@ -1629,9 +1632,23 @@ def _r62_pair_quality(first,second,direct_forward,shared,span):
     op_bonus=p1['richness']+p2['richness']+min(p1['richness'],p2['richness'])
     catalog_penalty=p1['catalog_penalty']+p2['catalog_penalty']
     both_short=len(_norm(first.get('answer') or ''))<=18 and len(_norm(second.get('answer') or ''))<=18
-    short_penalty=5 if both_short and op_bonus<8 else 0
+    short_penalty=8 if both_short and op_bonus<10 else (3 if both_short and op_bonus<14 else 0)
     distance_penalty=0 if span<=3 else min(8,max(0,span-3)//3)
     return op_bonus-catalog_penalty-short_penalty-distance_penalty, p1, p2
+
+
+def _r63_reasoning_viability(row):
+    """Cheap pre-Writer proxy; candidate filter, never a PASS predictor."""
+    p=(row.get('operation_profiles') or [{},{}])
+    p1,p2=(p+[{},{}])[:2]
+    r1=int(p1.get('richness',0)); r2=int(p2.get('richness',0))
+    op=int(row.get('operation_score',-999)); direct=int(row.get('direct_crossref_score',0))
+    span=int(row.get('page_span',999)); balanced=min(r1,r2)
+    axes=sum(1 for k in ('conditional','causal','procedural','relational') if int(p1.get(k,0))+int(p2.get(k,0))>0)
+    score=op+balanced*2+axes*3+min(4,direct//3)
+    if span>12: score-=6
+    if r1<=2 and r2<=2: score-=8
+    return score
 
 
 def _r62_support_score(anchor,pair):
@@ -1715,7 +1732,9 @@ def _r60_python_relation_candidates(db_path,domain,limit=96,max_candidates=48):
                              'relation_type':rtype,'contract_type':ctype,'source_plan':plan,
                              'fixed_answers':validated['answers'],
                              'master_relation':'Python source-grounded relation candidate'})
-    rows.sort(key=lambda x:(-x['score'],x['page_span'],x['anchor_ids']))
+    for _r in rows:
+        _r['reasoning_viability']=_r63_reasoning_viability(_r)
+    rows.sort(key=lambda x:(-x['reasoning_viability'],-x['operation_score'],-x['score'],x['page_span'],x['anchor_ids']))
     # Diversity prevents one page or one answer family from monopolizing the Writer budget.
     out=[]; page_counts={}; answer_counts={}; unordered_pairs=set()
     for r in rows:
@@ -1736,7 +1755,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=160,max_candidates=max(24,wanted*8))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R62-PYTHON-RELATION-MINER-2'
+    diag['selector_diagnostic_version']='R63-PYTHON-RELATION-MINER-3'
     diag['selector_model']='PYTHON_DETERMINISTIC'
     diag['selector_calls']=0
     diag['selector_pair_candidates']=[{k:copy.deepcopy(v) for k,v in r.items() if k not in ('anchors','source_plan','fixed_answers')} for r in candidates[:48]]
@@ -1744,33 +1763,17 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     if not candidates:
         _generation_reject(diag,'python_relation_miner',['NO_RELATION_CANDIDATE'])
         return out
-    # R62 selection blends three generic signals instead of taking only the
-    # highest direct-crossref scores: overall score, operation richness, and one
-    # moderate cross-context transfer. This keeps taxonomy headings from
-    # monopolizing the very small Writer budget.
-    selected=[]
-    def add_row(r):
-        if r is not None and r not in selected:
-            selected.append(r)
-    by_score=list(candidates)
-    by_operation=sorted(candidates,key=lambda r:(-r.get('operation_score',-999),-r.get('score',0),r.get('page_span',999)))
-    cross=[r for r in candidates if 4<=int(r.get('page_span',0))<=24 and int(r.get('direct_crossref_score',0))>0 and r.get('operation_score',-999)>=-8]
-    cross.sort(key=lambda r:(-int(r.get('page_span',0)),-r.get('operation_score',-999),-r.get('score',0)))
-    streams=[by_score,by_operation,cross]
-    indices=[0,0,0]
-    while len(selected)<wanted and any(indices[i]<len(streams[i]) for i in range(len(streams))):
-        for i,stream in enumerate(streams):
-            while indices[i]<len(stream) and stream[indices[i]] in selected:
-                indices[i]+=1
-            if indices[i]<len(stream):
-                add_row(stream[indices[i]]); indices[i]+=1
-                if len(selected)>=wanted: break
-    if len(selected)<wanted:
-        for r in candidates:
-            add_row(r)
-            if len(selected)>=wanted: break
+    # R63: quality-first selection. Negative/near-zero operational pairs are
+    # not sent merely to fill Writer quota; diagnostics 12 showed those calls were
+    # overwhelmingly ROTE_ONLY/TOO_EASY.
+    ranked=sorted(candidates,key=lambda r:(-r.get('reasoning_viability',-999),-r.get('operation_score',-999),-r.get('score',0),r.get('page_span',999)))
+    strong=[r for r in ranked if r.get('operation_score',-999)>=8 and r.get('reasoning_viability',-999)>=20]
+    moderate=[r for r in ranked if r not in strong and r.get('operation_score',-999)>=4 and r.get('reasoning_viability',-999)>=16]
+    selected=(strong+moderate)[:wanted]
+    if not selected:
+        _generation_reject(diag,'python_relation_quality',['NO_4PT_REASONING_VIABLE_PAIR'])
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R62_SCORE_OPERATION_CROSS_CONTEXT'
+    diag['selection_strategy']='R63_REASONING_VIABILITY_FIRST'
     seen=set()
     for r in selected:
         ids=tuple(r['anchor_ids'])
@@ -1803,6 +1806,9 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
                     'selector_relation':{'anchor_ids':list(ids),'relation_type':r['relation_type'],
                                          'contract_type':r['contract_type'],'master_relation':r['master_relation'],
                                          'source_plan':copy.deepcopy(r['source_plan']),'miner_score':r['score'],
+                                         'operation_score':r.get('operation_score'),
+                                         'reasoning_viability':r.get('reasoning_viability'),
+                                         'operation_profiles':copy.deepcopy(r.get('operation_profiles')),
                                          'support_anchor_ids':[int(a['id']) for a in support_rows]},
                     'source_plan':copy.deepcopy(r['source_plan']),
                     'fixed_answers':copy.deepcopy(r['fixed_answers']),

@@ -36,7 +36,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: R62 · Python relation miner · durable Judge-PASS certification state")
+st.caption("배포 버전: R63 · 추론가능성 우선 relation miner · durable Judge-PASS certification state")
 
 def secret(name, default=""):
     try:
@@ -309,9 +309,9 @@ with tabs[2]:
         from capability_contracts import merge_contracts, combined_coverage_inventory
     except Exception as _ce:
         merge_contracts=combined_coverage_inventory=None
-        st.error("R59 capability_contracts 로드 실패: "+str(_ce))
+        st.error("capability_contracts 로드 실패: "+str(_ce))
 
-    st.markdown("##### ✅ R62 부족 슬롯 생성 + Judge 인증")
+    st.markdown("##### ✅ 부족 슬롯 생성 + Judge 인증")
     st.caption("Python 관계 후보 → AI Writer → Python hard gate → 실제 Judge 순서로 검증합니다. PASS 계약은 Supabase 보관소의 숨김 상태 행에 자동 보존되어 배포 후에도 누적됩니다.")
 
     if "R59_CONTRACTS" not in st.session_state:
@@ -346,14 +346,14 @@ with tabs[2]:
     else:
         st.warning("SUPABASE_SERVICE_ROLE_KEY가 없어 Judge-PASS 누적 상태가 배포 후 유지되지 않을 수 있습니다.")
     _r57_inv=combined_coverage_inventory(DB,_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())) if combined_coverage_inventory else {"all_domains_two":False,"domains":{},"verified_slots":0,"target":18}
-    st.caption(f"R62 실제 AI_VERIFIED coverage: {_r57_inv.get('verified_slots',0)}/{_r57_inv.get('target',18)} · Python 통과만으로는 점수를 올리지 않습니다.")
-    with st.expander("R62 verified coverage inventory", expanded=True): st.json(_r57_inv)
+    st.caption(f"실제 AI_VERIFIED coverage: {_r57_inv.get('verified_slots',0)}/{_r57_inv.get('target',18)} · Python 통과만으로는 점수를 올리지 않습니다.")
+    with st.expander("verified coverage inventory", expanded=True): st.json(_r57_inv)
     _missing=[d for d,v in (_r57_inv.get("domains") or {}).items() if not v.get("target_met")]
     if _missing:
         st.warning("현재 실제 부족 영역: "+", ".join(f"{d}(-{(_r57_inv.get('domains') or {}).get(d,{}).get('missing',0)})" for d in _missing))
-    if st.button("R62 실제기출 기반 생성 + Judge 인증", type="primary", use_container_width=True, disabled=(certify_r59_missing_slots is None or not _missing)):
+    if st.button("실제기출 기반 생성 + Judge 인증", type="primary", use_container_width=True, disabled=(certify_r59_missing_slots is None or not _missing)):
         if not (use_ai and use_ai_judge and key):
-            st.error("R62 인증에는 AI Writer, AI Judge, OPENAI_API_KEY가 모두 필요합니다.")
+            st.error("인증에는 AI Writer, AI Judge, OPENAI_API_KEY가 모두 필요합니다.")
         else:
             with st.spinner("실제 기출 구조 참조 → 고정 후보 풀 생성 → Python hard gate → source context 포함 Judge 인증 중..."):
                 try:
@@ -367,10 +367,10 @@ with tabs[2]:
                             st.warning("Judge-PASS 상태의 Supabase 저장 실패: "+str(_persist_ex))
                     st.rerun()
                 except Exception as _ex:
-                    st.error("R62 인증 실패: "+str(_ex))
+                    st.error("인증 실패: "+str(_ex))
     if "R59_CERT_RUN" in st.session_state:
         _rr=st.session_state["R59_CERT_RUN"]; _sm=_rr.get("summary",{})
-        st.markdown("### 🧪 R62 실제기출 기반 인증 결과")
+        st.markdown("### 🧪 실제기출 기반 인증 결과")
         st.caption(f"시작 {_sm.get('before_verified',0)}/18 → 현재 {_sm.get('after_verified',0)}/18 · Judge {_sm.get('judge_tested',0)}회 · PASS {_sm.get('judge_pass',0)} · REJECT {_sm.get('judge_reject',0)}")
         with st.expander("영역별 생성/검증 로그", expanded=True): st.json(_rr.get("domain_logs",[]))
         with st.expander("Judge 실패 유형", expanded=True): st.json(_rr.get("failure_class_counts",{}))
@@ -393,7 +393,7 @@ with tabs[2]:
             st.success("선택 영역의 인증 슬롯을 충족했습니다. 최종 A/B 편성의 품질·중복 검증은 별도로 필요합니다.")
         else:
             st.warning("이번 고정 후보 풀 안에서 통과하지 못한 슬롯이 남았습니다. 아래 로그가 원인 진단용으로 보존됩니다.")
-    st.info("R59 핵심: 관계선별 → 실제 기출 구조 참조 → 오류수정·전이형 Writer → Python hard gate → Judge 순서로만 진행합니다. 단어 겹침만으로 묶거나 가린 정의를 다시 맞히는 fallback은 폐기했습니다.")
+    st.info("현재 핵심: Python이 추론가능성이 높은 관계만 선별 → 실제 기출 구조 참조 → 오류수정·전이형 Writer → Python hard gate → Judge 순서입니다. 낮은 추론가능성 후보는 Writer/Judge 호출 전에 중단합니다.")
 
     st.divider()
     st.caption("아래 SAMPLE6은 개별 확인용 보조 기능입니다. 18 capability 최종 coverage 판정에는 사용하지 않습니다.")
@@ -520,7 +520,7 @@ with tabs[2]:
 
     st.divider()
     st.markdown("#### 최종 A/B 생성")
-    st.caption("현재 A/B 생성은 인증 계약을 재사용하지 않는 기존 편성 경로입니다. R59 인증 결과와 연결된 최종 편성은 아직 구현되지 않았습니다.")
+    st.caption("현재 A/B 생성은 인증 계약을 재사용하지 않는 기존 편성 경로입니다. 인증 결과와 연결된 최종 편성은 아직 구현되지 않았습니다.")
 
     if st.button("기존 경로 A + B 생성 (별도 검증)",type="primary",use_container_width=True):
         with st.spinner("정답 고정 → 문항 생성 → 근거 대조 → 중복 검사 → A/B 편성 → 보관 중..."):
