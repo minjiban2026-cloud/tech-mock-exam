@@ -1,4 +1,4 @@
-from certification_state import import_contract_upload
+from certification_state import upsert_contracts
 import os, json, sqlite3, copy, hashlib
 from pathlib import Path
 from datetime import datetime
@@ -26,7 +26,8 @@ from retrieval import search_pages
 from archive_store import (
     is_configured as archive_is_configured,
     ping as archive_ping,
-    list_exams, get_exam, create_exam, update_exam, delete_exam
+    list_exams, get_exam, create_exam, update_exam, delete_exam,
+    load_certification_state, save_certification_state
 )
 
 ROOT=Path(__file__).parent
@@ -35,7 +36,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: FINAL-STABLE-20260831 · ACTUAL-EXAM-TRANSFER-R59-20260904 · SOURCE-PLAN-DIAGNOSTICS")
+st.caption("배포 버전: R62 · Python relation miner · durable Judge-PASS certification state")
 
 def secret(name, default=""):
     try:
@@ -310,43 +311,66 @@ with tabs[2]:
         merge_contracts=combined_coverage_inventory=None
         st.error("R59 capability_contracts 로드 실패: "+str(_ce))
 
-    st.markdown("##### ✅ R59 한 번에 부족 슬롯 생성 + Judge 인증")
-    st.caption("한 번의 버튼으로 각 부족 영역의 고정 후보 풀을 먼저 생성하고, Python hard gate를 통과한 후보만 실제 Judge에 1회씩 보냅니다. PASS한 유형만 coverage에 저장됩니다. Judge REJECT를 본 뒤 새 문항을 다시 쓰는 적응형 재시도는 하지 않습니다.")
-    _uploaded_contracts=st.file_uploader("R59 contract JSON 불러오기", type=["json"], key="R59_CONTRACT_UPLOAD")
-    if _uploaded_contracts is not None:
-        try:
-            _count=import_contract_upload(st.session_state,_uploaded_contracts.getvalue())
-            if _count is not None:
-                st.success(f"contract {_count}개를 병합했습니다. 같은 업로드는 rerun 때 다시 적용하지 않습니다.")
-        except Exception as _ex:
-            st.error("contract JSON 불러오기 실패: "+str(_ex))
+    st.markdown("##### ✅ R62 부족 슬롯 생성 + Judge 인증")
+    st.caption("Python 관계 후보 → AI Writer → Python hard gate → 실제 Judge 순서로 검증합니다. PASS 계약은 Supabase 보관소의 숨김 상태 행에 자동 보존되어 배포 후에도 누적됩니다.")
+
     if "R59_CONTRACTS" not in st.session_state:
-        # Preserve old session artifacts only as archive data; they are not counted until R57 Judge PASS.
-        st.session_state["R59_CONTRACTS"]=list(st.session_state.get("R57_CONTRACTS",st.session_state.get("R56_CONTRACTS",st.session_state.get("R54_CONTRACTS",[]))))
+        _bootstrap=[]
+        _bootstrap_path=ROOT/"certified_contracts_bootstrap.json"
+        if _bootstrap_path.exists():
+            try:
+                _obj=json.loads(_bootstrap_path.read_text(encoding="utf-8"))
+                if isinstance(_obj,dict) and isinstance(_obj.get("contracts"),list):
+                    _bootstrap=list(_obj["contracts"])
+            except Exception:
+                _bootstrap=[]
+        _persisted=[]
+        if archive_is_configured(url,skey) and has_service:
+            try:
+                _persisted=list(load_certification_state(url,skey).get("contracts") or [])
+            except Exception as _ex:
+                st.warning("Judge-PASS 누적 상태를 Supabase에서 읽지 못했습니다: "+str(_ex))
+        _legacy=list(st.session_state.get("R57_CONTRACTS",st.session_state.get("R56_CONTRACTS",st.session_state.get("R54_CONTRACTS",[]))))
+        st.session_state["R59_CONTRACTS"]=upsert_contracts(upsert_contracts(_legacy,_bootstrap),_persisted)
+        # First deployment of R62 bootstraps already proven PASS contracts into
+        # durable storage so prior live evidence is not lost after code deploys.
+        if archive_is_configured(url,skey) and has_service and not _persisted and st.session_state["R59_CONTRACTS"]:
+            try:
+                save_certification_state(url,skey,st.session_state["R59_CONTRACTS"],{})
+            except Exception as _ex:
+                st.warning("기존 Judge-PASS 상태의 최초 영구 저장에 실패했습니다: "+str(_ex))
+
     _contracts=list(st.session_state.get("R59_CONTRACTS",[]))
-    if _contracts:
-        st.download_button("R59 contract JSON 저장", data=json.dumps({"schema_version":"R59-ACTUAL-EXAM-TRANSFER-V1","contracts":_contracts},ensure_ascii=False,indent=2), file_name="capability_contracts.json", mime="application/json", use_container_width=True)
+    if archive_is_configured(url,skey) and has_service:
+        st.caption("Judge-PASS 누적 상태: Supabase 자동 저장 사용 중")
+    else:
+        st.warning("SUPABASE_SERVICE_ROLE_KEY가 없어 Judge-PASS 누적 상태가 배포 후 유지되지 않을 수 있습니다.")
     _r57_inv=combined_coverage_inventory(DB,_contracts,domains,getattr(exam_builder_module,"FORMULA_DOMAINS",set())) if combined_coverage_inventory else {"all_domains_two":False,"domains":{},"verified_slots":0,"target":18}
-    st.caption(f"R59 실제 AI_VERIFIED coverage: {_r57_inv.get('verified_slots',0)}/{_r57_inv.get('target',18)} · Python 통과만으로는 점수를 올리지 않습니다.")
-    with st.expander("R59 verified coverage inventory", expanded=True): st.json(_r57_inv)
+    st.caption(f"R62 실제 AI_VERIFIED coverage: {_r57_inv.get('verified_slots',0)}/{_r57_inv.get('target',18)} · Python 통과만으로는 점수를 올리지 않습니다.")
+    with st.expander("R62 verified coverage inventory", expanded=True): st.json(_r57_inv)
     _missing=[d for d,v in (_r57_inv.get("domains") or {}).items() if not v.get("target_met")]
     if _missing:
         st.warning("현재 실제 부족 영역: "+", ".join(f"{d}(-{(_r57_inv.get('domains') or {}).get(d,{}).get('missing',0)})" for d in _missing))
-    if st.button("R59 실제기출 전이형 생성 + Judge 인증", type="primary", use_container_width=True, disabled=(certify_r59_missing_slots is None or not _missing)):
+    if st.button("R62 실제기출 기반 생성 + Judge 인증", type="primary", use_container_width=True, disabled=(certify_r59_missing_slots is None or not _missing)):
         if not (use_ai and use_ai_judge and key):
-            st.error("R59 인증에는 AI Writer, AI Judge, OPENAI_API_KEY가 모두 필요합니다.")
+            st.error("R62 인증에는 AI Writer, AI Judge, OPENAI_API_KEY가 모두 필요합니다.")
         else:
             with st.spinner("실제 기출 구조 참조 → 고정 후보 풀 생성 → Python hard gate → source context 포함 Judge 인증 중..."):
                 try:
                     _run=certify_r59_missing_slots(DB,_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed))
                     st.session_state["R59_CONTRACTS"]=_run.get("contracts",_contracts)
                     st.session_state["R59_CERT_RUN"]=_run
+                    if archive_is_configured(url,skey) and has_service:
+                        try:
+                            save_certification_state(url,skey,st.session_state["R59_CONTRACTS"],_run.get("after_inventory",{}))
+                        except Exception as _persist_ex:
+                            st.warning("Judge-PASS 상태의 Supabase 저장 실패: "+str(_persist_ex))
                     st.rerun()
                 except Exception as _ex:
-                    st.error("R59 인증 실패: "+str(_ex))
+                    st.error("R62 인증 실패: "+str(_ex))
     if "R59_CERT_RUN" in st.session_state:
         _rr=st.session_state["R59_CERT_RUN"]; _sm=_rr.get("summary",{})
-        st.markdown("### 🧪 R59 실제기출 전이형 인증 결과")
+        st.markdown("### 🧪 R62 실제기출 기반 인증 결과")
         st.caption(f"시작 {_sm.get('before_verified',0)}/18 → 현재 {_sm.get('after_verified',0)}/18 · Judge {_sm.get('judge_tested',0)}회 · PASS {_sm.get('judge_pass',0)} · REJECT {_sm.get('judge_reject',0)}")
         with st.expander("영역별 생성/검증 로그", expanded=True): st.json(_rr.get("domain_logs",[]))
         with st.expander("Judge 실패 유형", expanded=True): st.json(_rr.get("failure_class_counts",{}))
@@ -361,16 +385,9 @@ with tabs[2]:
                     st.write("작성 방법",_question.get("tasks",[]))
                     st.write("고정 정답",_question.get("answer",[]))
                     st.write("채점 근거",_question.get("rubric",[]))
-                    _plan=_review.get("source_plan") or _question.get("source_plan")
-                    if _plan:
-                        with st.expander("Writer 이전 고정 source plan", expanded=False):
-                            st.json(_plan)
                 else:
                     st.caption("이전 실행에는 문항 원문이 저장되지 않았습니다.")
-                st.write("Judge reason",_review.get("reason",""))
-                _weak=_review.get("weakest_point") or (_review.get("judge_review") or {}).get("weakest_point","")
-                if _weak:
-                    st.write("Judge weakest_point",_weak)
+                st.write(_review.get("reason",""))
 
         if _sm.get("coverage_ready"):
             st.success("선택 영역의 인증 슬롯을 충족했습니다. 최종 A/B 편성의 품질·중복 검증은 별도로 필요합니다.")

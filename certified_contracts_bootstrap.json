@@ -1,0 +1,474 @@
+{
+  "schema_version": "R62-CERTIFICATION-BOOTSTRAP-V1",
+  "contracts": [
+    {
+      "bundle_id": 0,
+      "topic": "검사 비트 방식의 기능 범주 판단과 후속 적용",
+      "clues": [],
+      "student_claim": "학생 A는 송신 자료의 각 전송 단위에 검사 비트 하나를 덧붙이고, 수신 측에서 정해진 비트 수와 일치하는지만 확인하는 절차를 보고, 수신된 자료에서 잘못된 비트를 자동으로 찾아 원래 값으로 바꾸는 오류 정정 방식이라고 판단하였다.",
+      "transfer_case": "①에서 판별하여 바로잡은 방식을 적용한 통신 상황에서, 수신 측은 검사 결과가 송신 시의 조건과 맞지 않는다는 신호를 받았다. 그러나 현재 수신한 비트열만으로 오류가 발생한 위치를 특정하여 원자료로 바꾸는 별도의 절차는 사용하지 않는다. 학생 B는 불일치가 확인되었으므로 수신기가 오류 위치를 알아내 자료를 복원할 수 있다고 주장하였다.",
+      "tasks": [
+        "① 학생 A의 판단이 옳은지 판단하고, 송신 측의 처리와 수신 측의 확인 절차를 근거로 해당 통신 기법의 정확한 명칭과 그 판단 근거를 쓰시오.",
+        "② ①에서 판별한 방식을 적용한 상황에서 학생 B의 복원 주장이 옳은지 판단하고, 이 방식이 수행하는 코드의 역할을 ①의 결과와 수신 측의 처리 범위를 근거로 쓰시오."
+      ],
+      "reasoning_chain": [
+        "자료 분석: 송신 자료에 검사 비트를 덧붙이는 처리와 수신 측에서 일치 여부만 확인하는 처리를 구분한다.",
+        "중간 판단: 학생 A는 오류의 존재를 확인하는 절차를 오류가 난 자료를 수정하는 기능으로 잘못 확대하였다.",
+        "후속 적용: ①에서 바로잡은 방식은 불일치 여부를 판단할 수 있지만, 수신된 자료만으로 오류 위치를 찾아 복원하지는 않으므로 학생 B의 주장을 부정한다."
+      ],
+      "task2_uses_task1": true,
+      "domain": "통신기술",
+      "cited_anchor_ids": [
+        162,
+        166
+      ],
+      "source_plan": {
+        "schema": "SOURCE_BOUND_TASK_PLAN_V1",
+        "criterion": {
+          "text": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사",
+          "binding": {
+            "anchor_id": 162,
+            "quote": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+          }
+        },
+        "transfer_condition": {
+          "text": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사",
+          "binding": {
+            "anchor_id": 166,
+            "quote": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사"
+          }
+        },
+        "task1": {
+          "result": {
+            "value": "수직 중복 검사(VRC",
+            "binding": {
+              "anchor_id": 162,
+              "quote": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+            }
+          },
+          "reason": {
+            "text": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사",
+            "binding": {
+              "anchor_id": 162,
+              "quote": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+            }
+          }
+        },
+        "task2": {
+          "result": {
+            "value": "오류 검출 코드",
+            "binding": {
+              "anchor_id": 166,
+              "quote": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사"
+            }
+          },
+          "reason": {
+            "text": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사",
+            "binding": {
+              "anchor_id": 166,
+              "quote": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사"
+            }
+          }
+        },
+        "dependency": {
+          "input": "task1.result",
+          "output": "task2.result",
+          "required_result": {
+            "anchor_id": 162,
+            "quote": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+          },
+          "why_required": "①에서 판별한 결과를 후속 상황의 판단 대상으로 사용해야 ②의 적용 결과를 결정할 수 있다."
+        }
+      },
+      "exact_answers": [
+        "수직 중복 검사(VRC\n근거: - 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사",
+        "오류 검출 코드\n근거: ● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사"
+      ],
+      "selector_relation": {
+        "anchor_ids": [
+          162,
+          166
+        ],
+        "relation_type": "contrast",
+        "contract_type": "contrastive_error_transfer",
+        "master_relation": "Python source-grounded relation candidate",
+        "source_plan": {
+          "schema": "SOURCE_BOUND_TASK_PLAN_V1",
+          "criterion": {
+            "text": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사",
+            "binding": {
+              "anchor_id": 162,
+              "quote": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+            }
+          },
+          "transfer_condition": {
+            "text": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사",
+            "binding": {
+              "anchor_id": 166,
+              "quote": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사"
+            }
+          },
+          "task1": {
+            "result": {
+              "value": "수직 중복 검사(VRC",
+              "binding": {
+                "anchor_id": 162,
+                "quote": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+              }
+            },
+            "reason": {
+              "text": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사",
+              "binding": {
+                "anchor_id": 162,
+                "quote": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+              }
+            }
+          },
+          "task2": {
+            "result": {
+              "value": "오류 검출 코드",
+              "binding": {
+                "anchor_id": 166,
+                "quote": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사"
+              }
+            },
+            "reason": {
+              "text": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사",
+              "binding": {
+                "anchor_id": 166,
+                "quote": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사"
+              }
+            }
+          },
+          "dependency": {
+            "input": "task1.result",
+            "output": "task2.result",
+            "required_result": {
+              "anchor_id": 162,
+              "quote": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사"
+            },
+            "why_required": "①에서 판별한 결과를 후속 상황의 판단 대상으로 사용해야 ②의 적용 결과를 결정할 수 있다."
+          }
+        },
+        "miner_score": 56
+      },
+      "contract_type": "contrastive_error_transfer",
+      "status": "R59_AI_VERIFIED",
+      "schema_version": "R59-ACTUAL-EXAM-TRANSFER-V1",
+      "public_clues": false,
+      "validation": {
+        "errors": [],
+        "anchors": [
+          {
+            "id": 162,
+            "domain": "통신기술",
+            "topic": "수직 중복 검사(VRC",
+            "answer": "수직 중복 검사(VRC",
+            "evidence": "- 수직 중복 검사(VRC: Vertical Redundancy Check) = 패리티 검사",
+            "source_name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+            "page_no": 88
+          },
+          {
+            "id": 166,
+            "domain": "통신기술",
+            "topic": "오류 검출 코드",
+            "answer": "오류 검출 코드",
+            "evidence": "● 오류 검출 코드 수직 중복 검사(VRC) : 패리티 검사",
+            "source_name": "2026 기술임용 서브노트(통신기술)_이성민.pdf",
+            "page_no": 89
+          }
+        ]
+      },
+      "contract_id": "R59-36f8501cbfe333f721bfc242",
+      "ai_quality": {
+        "pass": true,
+        "review_stage": "integrated",
+        "scores": {
+          "grounding": 5.0,
+          "answer_leakage": 5.0,
+          "coherence": 5.0,
+          "inferential_distance": 4.0,
+          "task_distinctness": 4.0,
+          "exam_realism": 5.0,
+          "difficulty_fit": 4.0,
+          "ambiguity_control": 4.0
+        },
+        "average": 4.5,
+        "thinking_types": [
+          "자료해석",
+          "판단",
+          "근거설명",
+          "관계설명",
+          "적용"
+        ],
+        "fatal_flags": [],
+        "reason": "송신 시 검사 비트를 추가하고 수신 측에서 일치 여부를 확인하는 과정으로부터 VRC를 판별하게 하며, 오류를 자동으로 수정할 수 없다는 점을 통해 오류 검출 코드임을 단계적으로 설명하게 한다. ②의 추가 상황은 ①에서 판별한 방식의 기능적 한계를 직접 적용하도록 구성되어 두 소문항의 연계성이 확보된다. 정답 명칭이 자료에 직접 제시되지 않아 단순 복사형도 아니며, 4점의 2+2 배점 구조에도 대체로 부합한다.",
+        "weakest_point": "①의 근거와 ②의 오류 검출 기능 설명이 다소 유사하여 두 채점요소 간 변별성이 약간 낮다.",
+        "blind_verdict": "PASS",
+        "grounded_verdict": "PYTHON_GROUNDING"
+      },
+      "judge_model": "gpt-5.6-luna",
+      "certification": {
+        "schema": 1,
+        "content_sha256": "d165b0041c6ef54532497054021f0542feb8093122793494606ce7583dfd0cf7"
+      }
+    },
+    {
+      "bundle_id": 0,
+      "topic": "재료역학: 하중과 길이 변화의 관계를 나타낸 도표와 비례 구간",
+      "clues": [],
+      "student_claim": "인장 시험에서 하중을 단계적으로 변화시키며 각 단계의 두 물리량을 좌표로 나타내고, 초기 구간에서 두 값이 직선적으로 변하므로 이 자료 전체를 훅의 법칙이라고 판단하였다.",
+      "transfer_case": "①에서 판별하여 바로잡은 도표를 이용해 재료의 비례한도 안을 해석하려고 한다. 이때 학생은 세로축 값과 비례하여 변하는 가로축 물리량을 시편의 길이 변화량 자체라고 기록하였다.",
+      "tasks": [
+        "① 학생의 판단이 옳은지 판정하고, 옳지 않다면 해당 도표의 명칭을 쓰며 훅의 법칙과 혼동한 이유를 근거와 함께 설명하시오.",
+        "② ①에서 바로잡은 도표와 비례한도 안이라는 조건을 전제로, 학생이 기록한 가로축 물리량을 어떻게 수정해야 하는지 쓰고, 그 이유를 두 축의 비례 관계와 연결하여 설명하시오."
+      ],
+      "reasoning_chain": [
+        "하중 변화에 따라 두 물리량을 좌표로 나타낸 자료와 그 자료를 설명하는 법칙을 구분한다.",
+        "도표의 명칭과 법칙이 적용되는 조건을 구분하여 학생의 오류를 수정한다.",
+        "비례한도 안에서 두 축의 관계를 해석하여 가로축에 해당하는 물리량을 판단한다."
+      ],
+      "task2_uses_task1": true,
+      "domain": "재료역학",
+      "cited_anchor_ids": [
+        309,
+        308,
+        311,
+        310,
+        300,
+        297
+      ],
+      "source_plan": {
+        "schema": "SOURCE_BOUND_TASK_PLAN_V1",
+        "criterion": {
+          "text": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름",
+          "binding": {
+            "anchor_id": 309,
+            "quote": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름"
+          }
+        },
+        "transfer_condition": {
+          "text": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를",
+          "binding": {
+            "anchor_id": 308,
+            "quote": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를"
+          }
+        },
+        "task1": {
+          "result": {
+            "value": "응력 변형률 선도",
+            "binding": {
+              "anchor_id": 309,
+              "quote": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름"
+            }
+          },
+          "reason": {
+            "text": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름",
+            "binding": {
+              "anchor_id": 309,
+              "quote": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름"
+            }
+          }
+        },
+        "task2": {
+          "result": {
+            "value": "변형률",
+            "binding": {
+              "anchor_id": 308,
+              "quote": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를"
+            }
+          },
+          "reason": {
+            "text": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를",
+            "binding": {
+              "anchor_id": 308,
+              "quote": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를"
+            }
+          }
+        },
+        "dependency": {
+          "input": "task1.result",
+          "output": "task2.result",
+          "required_result": {
+            "anchor_id": 309,
+            "quote": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름"
+          },
+          "why_required": "①에서 판별한 결과를 후속 상황의 판단 대상으로 사용해야 ②의 적용 결과를 결정할 수 있다."
+        }
+      },
+      "exact_answers": [
+        "응력 변형률 선도\n근거: ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름",
+        "변형률\n근거: ▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를"
+      ],
+      "selector_relation": {
+        "anchor_ids": [
+          309,
+          308
+        ],
+        "relation_type": "dependent_sequence",
+        "contract_type": "criterion_conflict_resolution",
+        "master_relation": "Python source-grounded relation candidate",
+        "source_plan": {
+          "schema": "SOURCE_BOUND_TASK_PLAN_V1",
+          "criterion": {
+            "text": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름",
+            "binding": {
+              "anchor_id": 309,
+              "quote": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름"
+            }
+          },
+          "transfer_condition": {
+            "text": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를",
+            "binding": {
+              "anchor_id": 308,
+              "quote": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를"
+            }
+          },
+          "task1": {
+            "result": {
+              "value": "응력 변형률 선도",
+              "binding": {
+                "anchor_id": 309,
+                "quote": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름"
+              }
+            },
+            "reason": {
+              "text": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름",
+              "binding": {
+                "anchor_id": 309,
+                "quote": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름"
+              }
+            }
+          },
+          "task2": {
+            "result": {
+              "value": "변형률",
+              "binding": {
+                "anchor_id": 308,
+                "quote": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를"
+              }
+            },
+            "reason": {
+              "text": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를",
+              "binding": {
+                "anchor_id": 308,
+                "quote": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를"
+              }
+            }
+          },
+          "dependency": {
+            "input": "task1.result",
+            "output": "task2.result",
+            "required_result": {
+              "anchor_id": 309,
+              "quote": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름"
+            },
+            "why_required": "①에서 판별한 결과를 후속 상황의 판단 대상으로 사용해야 ②의 적용 결과를 결정할 수 있다."
+          }
+        },
+        "miner_score": 67,
+        "support_anchor_ids": [
+          311,
+          310,
+          300,
+          297
+        ]
+      },
+      "contract_type": "criterion_conflict_resolution",
+      "status": "R59_AI_VERIFIED",
+      "schema_version": "R59-ACTUAL-EXAM-TRANSFER-V1",
+      "public_clues": false,
+      "validation": {
+        "errors": [],
+        "anchors": [
+          {
+            "id": 297,
+            "domain": "재료역학",
+            "topic": "크기 관련 단위",
+            "answer": "크기 관련 단위",
+            "evidence": "▶ 크기 관련 단위 ▶ 힘 힘의 3요소 : 작용점, 힘의 방향, 힘의 크기 ※ 스칼라 : 크기만 가지며 방향이 없는 물리량 (ex 질량, 온도, 에너지)",
+            "source_name": "[역학] Part3 재료역학 (2).pdf",
+            "page_no": 1
+          },
+          {
+            "id": 300,
+            "domain": "재료역학",
+            "topic": "모멘트",
+            "answer": "모멘트",
+            "evidence": "▶ 모멘트 물체를 회전시키려는 힘의 작용. 힘과 거리의 곱 ※ 바리뇽의 정리 : 한 점에 대한 여러개의 힘이 만든 모멘트의 합은 그 점에 대한 합력의 모멘트와 같음",
+            "source_name": "[역학] Part3 재료역학 (2).pdf",
+            "page_no": 1
+          },
+          {
+            "id": 308,
+            "domain": "재료역학",
+            "topic": "변형률",
+            "answer": "변형률",
+            "evidence": "▶ 변형률 ▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를",
+            "source_name": "[역학] Part3 재료역학 (2).pdf",
+            "page_no": 2
+          },
+          {
+            "id": 309,
+            "domain": "재료역학",
+            "topic": "응력 변형률 선도",
+            "answer": "응력 변형률 선도",
+            "evidence": "▶ 응력 변형률 선도 ▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름",
+            "source_name": "[역학] Part3 재료역학 (2).pdf",
+            "page_no": 2
+          },
+          {
+            "id": 310,
+            "domain": "재료역학",
+            "topic": "훅의 법칙",
+            "answer": "훅의 법칙",
+            "evidence": "▶ 훅의 법칙 재료는 비례한도 내에서 응력과 변형률이 비례 관계를 따름 ※ 변형량",
+            "source_name": "[역학] Part3 재료역학 (2).pdf",
+            "page_no": 2
+          },
+          {
+            "id": 311,
+            "domain": "재료역학",
+            "topic": "응력 집중",
+            "answer": "응력 집중",
+            "evidence": "▶ 응력 집중 재료의 형상이 변하는 지점(ex 노치, 구멍, 홈)에서 응력 이 집중되는 현상 ※ 노치 효과 : 단면 형상이 변하는 노치 부분에 응력이 집중되는 효과",
+            "source_name": "[역학] Part3 재료역학 (2).pdf",
+            "page_no": 2
+          }
+        ]
+      },
+      "contract_id": "R59-57e6c47e306411fe4dc632e1",
+      "ai_quality": {
+        "pass": true,
+        "review_stage": "integrated",
+        "scores": {
+          "grounding": 5.0,
+          "answer_leakage": 4.0,
+          "coherence": 5.0,
+          "inferential_distance": 4.0,
+          "task_distinctness": 5.0,
+          "exam_realism": 5.0,
+          "difficulty_fit": 4.0,
+          "ambiguity_control": 4.0
+        },
+        "average": 4.5,
+        "thinking_types": [
+          "자료해석",
+          "판단",
+          "관계설명",
+          "적용"
+        ],
+        "fatal_flags": [],
+        "reason": "학생의 판단 오류를 응력-변형률 선도와 훅의 법칙의 적용 범위 차이로 판별하게 하고, 그 결과를 바탕으로 길이 변화량을 변형률로 수정하게 하므로 소문항 간 연결성이 확보되어 있다. 자료가 단순히 답을 직접 제시하지 않으며, 4점 문항으로서 개념 구분과 비례 관계의 적용을 요구한다. 다만 채점 기준에는 각 문항에서 요구한 근거 설명의 배점 요소가 명시적으로 세분화되어 있지 않다.",
+        "weakest_point": "작성 요구는 명칭뿐 아니라 근거 설명까지 포함하지만 고정 채점 기준은 핵심 용어만 제시하여 설명의 부분점수 기준이 다소 불충분하다.",
+        "blind_verdict": "PASS",
+        "grounded_verdict": "PYTHON_GROUNDING"
+      },
+      "judge_model": "gpt-5.6-luna",
+      "certification": {
+        "schema": 1,
+        "content_sha256": "72dba9348e91fc5c93a2292585291004d91643e84f186f1478cb310c794f62b5"
+      }
+    }
+  ]
+}

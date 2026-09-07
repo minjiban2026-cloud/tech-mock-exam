@@ -3,6 +3,7 @@ import json, urllib.request, urllib.parse, urllib.error
 from datetime import datetime, timezone
 
 TABLE = "generated_exams"
+CERT_STATE_TITLE = "__SYSTEM_CAPABILITY_CERTIFICATION_STATE__"
 
 def _clean_base(url):
     return (url or "").rstrip("/")
@@ -44,6 +45,7 @@ def list_exams(url,key,limit=100):
     base=_clean_base(url)
     q=urllib.parse.urlencode({
         "select":"id,title,note,model,seed,domains,created_at,updated_at,manually_edited",
+        "title":f"neq.{CERT_STATE_TITLE}",
         "order":"created_at.desc",
         "limit":str(limit)
     })
@@ -85,3 +87,50 @@ def delete_exam(url,key,exam_id):
         prefer="return=minimal"
     )
     return True
+
+
+def load_certification_state(url,key):
+    """Load durable Judge-PASS contracts from the existing archive table.
+
+    Uses one hidden system row so no Supabase schema migration is required.
+    """
+    base=_clean_base(url)
+    q=urllib.parse.urlencode({
+        "title":f"eq.{CERT_STATE_TITLE}",
+        "select":"id,exam_a,exam_b,updated_at",
+        "order":"updated_at.desc",
+        "limit":"1",
+    })
+    rows=_request(f"{base}/rest/v1/{TABLE}?{q}",key) or []
+    if not rows:
+        return {"contracts":[],"record_id":None}
+    row=rows[0]
+    payload=row.get("exam_a")
+    if not isinstance(payload,dict):
+        payload={}
+    contracts=payload.get("contracts")
+    if not isinstance(contracts,list):
+        contracts=[]
+    return {"contracts":contracts,"record_id":row.get("id"),"updated_at":row.get("updated_at")}
+
+
+def save_certification_state(url,key,contracts,inventory=None):
+    """Upsert the hidden durable certification row."""
+    base=_clean_base(url)
+    state=load_certification_state(url,key)
+    payload_a={"schema_version":"R62-CERTIFICATION-STATE-V1","contracts":list(contracts or [])}
+    payload_b={"inventory":inventory or {}}
+    record={
+        "title":CERT_STATE_TITLE,
+        "note":"Internal Judge-PASS capability certification state. Hidden from archive list.",
+        "model":"system-certification-state",
+        "seed":None,
+        "domains":[],
+        "exam_a":payload_a,
+        "exam_b":payload_b,
+        "manually_edited":False,
+    }
+    rid=state.get("record_id")
+    if rid:
+        return update_exam(url,key,rid,record)
+    return create_exam(url,key,record)

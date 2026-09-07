@@ -4790,6 +4790,6 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
     for r in reviews:
         if r.get('pass') is False:
             for z in r.get('failure_signals',[]): fc[z]=fc.get(z,0)+1
-    return {'mode':'R59_ACTUAL_EXAM_TRANSFER','builder_api_version':'ACTUAL-EXAM-TRANSFER-R59-20260904','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
+    return {'mode':'R62_ACTUAL_EXAM_TRANSFER','builder_api_version':'ACTUAL-EXAM-TRANSFER-R62-20260907','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
 
-BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R59-20260904'
+BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R62-20260907'

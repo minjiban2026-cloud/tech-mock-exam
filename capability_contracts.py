@@ -1410,7 +1410,7 @@ def validate_r59_contract(db_path,domain,c):
     if c.get('public_clues') is not False and any(per.get(aid,0)<1 for aid in ids): errs.append('R59_NEED_CLUE_FOR_EACH_ANCHOR')
     tasks=[_clean(x) for x in c.get('tasks') or [] if _clean(x)]
     if len(tasks)!=2: errs.append('R59_NEED_2_TASKS')
-    if len(tasks)==2 and not any(k in tasks[1] for k in ('①','판단 기준','고친','수정한','앞의')): errs.append('R59_TASK2_NOT_DEPENDENT')
+    if len(tasks)==2 and not (re.search(r'①|앞(?:선|의)|이전|첫\s*번째|바로잡|수정(?:한|된)|판별(?:한|된)|판정(?:한|된)|결과를\s*(?:전제로|바탕으로|사용|적용)', tasks[1])): errs.append('R59_TASK2_NOT_DEPENDENT')
     if len(tasks)==2 and re.search(r'(?:①|앞의|이전|첫\s*번째).{0,12}(?:무관|관계없이|사용하지|참고하지)|(?:독립적으로|별개로).{0,12}(?:판단|적용)',tasks[1]):
         errs.append('R59_TASK2_EXPLICITLY_INDEPENDENT')
     transfer_text=_clean(c.get('transfer_case'))
@@ -1426,7 +1426,7 @@ def validate_r59_contract(db_path,domain,c):
     if c.get('task2_uses_task1') is not True: errs.append('R59_DEPENDENCY_FALSE')
     # The public task must contain an explicit error/choice operation, not pure identification.
     optext=' '.join(tasks)+' '+_clean(c.get('student_claim'))
-    if not any(k in optext for k in ('잘못','오류','수정','적절','선택','판단')): errs.append('R59_NO_DECISION_OPERATION')
+    if not any(k in optext for k in ('잘못','오류','수정','적절','선택','판단','판정','분류','기록','해석','주장')): errs.append('R59_NO_DECISION_OPERATION')
     return (not errs,{'errors':errs,'anchors':anchors})
 
 def r59_contract_to_question(c):
@@ -1485,6 +1485,11 @@ anchors에는 채점용 2개 anchor 외에 같은 원자료의 인접 support an
 오류는 문장 안에서 검토 가능한 형태로 드러나야 한다. 단순히 정답 명칭을 숨긴 정의 재진술은 금지하고, 관찰된 절차·조건·현상 중 최소 두 단서를 결합해 잘못된 결론을 내리게 한다.
 추가 상황은 ①의 결과를 단순 재진술하지 말고, ①에서 바로잡은 대상/기준을 사용해야만 후속 판단이 가능하도록 조건을 바꾼다.
 ②가 단지 '추가 조건 한 줄을 보고 하위 명칭 맞히기'가 되면 작성하지 않는다. ②에는 ①의 결과를 전제로 효과·조건·원리·수치·적용 여부 중 하나를 판단하는 실제 전이를 우선한다.
+두 소문항 모두 '정의의 특징을 그대로 주고 명칭을 쓰기' 형태면 해당 bundle을 생략한다. 최소 한 소문항은 서로 경쟁하는 두 기준·두 조건·두 해석 중 무엇을 적용할지 판단해야 한다.
+①의 공개 자료에는 정답을 강하게 암시하는 특징만 나열하지 말고, source에 있는 관련 단서 중 판단에 필요한 단서와 오개념을 유발하는 경쟁 단서를 함께 배치한다.
+②는 ①의 정답을 모르면 풀 수 없어야 한다. 단순히 두 번째 anchor의 정의를 새 상황으로 다시 말하면 안 된다.
+정답이 '분류/종류/기준/…에 따라' 같은 짧은 분류명인 경우, 그 분류명을 사실상 번역한 표현을 자료에 쓰지 말고 실제 사례의 관찰값·조건·결과로 우회한다.
+기출 4점처럼 한 문장 안의 두 단서를 조합해 기준을 선택하거나, 조건 변화 전후를 비교하거나, 계산·수치·원인·결과 중 하나를 적용하도록 만든다. source가 이를 뒷받침하지 못하면 억지로 만들지 말고 omissions로 보낸다.
 source_plan의 binding quote를 12자 이상 연속 복사하지 않는다. 정답 명칭뿐 아니라 근거 문장 전체를 그대로 옮기는 것도 금지한다.
 ①은 오류 판단+수정+근거를 요구한다. ②는 ①의 수정 결과를 입력으로 사용하여 다른 조건에서 후속 결과+근거를 요구한다.
 고정된 task1.result와 task2.result의 정답 문자열은 intro·clues·student_claim·transfer_case·tasks 어디에도 그대로 쓰지 않는다.
@@ -1594,6 +1599,59 @@ def _r60_relation_kind(a,b,direct_ab,direct_ba):
     return 'dependent_sequence','criterion_conflict_resolution'
 
 
+
+def _r62_operation_profile(anchor):
+    """Generic evidence-shape features for 4-point reasoning potential."""
+    ev=_clean(anchor.get('evidence') or '')
+    ans=_clean(anchor.get('answer') or '')
+    nev=_norm(ev); nans=_norm(ans)
+    numeric=len(re.findall(r'\d+(?:\.\d+)?|[%℃°]|[:=<>≤≥±∑/×·]',ev))
+    conditional=len(re.findall(r'경우|조건|때|이면|하면|이상|이하|초과|미만|일정|따라|비교|대비|반면|보다',ev))
+    causal=len(re.findall(r'증가|감소|영향|효과|원인|결과|발생|변화|전달|저항|효율|강도|때문|따라서|위해',ev))
+    procedural=len(re.findall(r'단계|순서|먼저|후에|다음|과정|반복|투입|가열|압축|분해|결합|검사|측정|계산|적용',ev))
+    relational=len(re.findall(r'비례|반비례|같|다르|구분|분류|관계|곱|나누|합|차|일치|불일치|일정',ev))
+    richness=min(12,numeric+conditional+causal+procedural+relational)
+    catalog=0
+    list_marks=len(re.findall(r'[,，、❶❷❸①②③⓵⓶⓷]',ev))
+    # Penalize menus/headings, not every colon-bearing technical definition.
+    if len(nev)<=60 and list_marks>=2 and richness<=3:
+        catalog+=2
+    if nans and (nans.endswith('에따라') or nans.endswith('기준') or nans.endswith('분류') or nans.endswith('종류')):
+        catalog+=2
+    if nans and nev.startswith(nans) and len(nev)<=len(nans)+20 and richness<=2:
+        catalog+=2
+    return {'numeric':numeric,'conditional':conditional,'causal':causal,'procedural':procedural,
+            'relational':relational,'richness':richness,'catalog_penalty':catalog}
+
+
+def _r62_pair_quality(first,second,direct_forward,shared,span):
+    p1=_r62_operation_profile(first); p2=_r62_operation_profile(second)
+    op_bonus=p1['richness']+p2['richness']+min(p1['richness'],p2['richness'])
+    catalog_penalty=p1['catalog_penalty']+p2['catalog_penalty']
+    both_short=len(_norm(first.get('answer') or ''))<=18 and len(_norm(second.get('answer') or ''))<=18
+    short_penalty=5 if both_short and op_bonus<8 else 0
+    distance_penalty=0 if span<=3 else min(8,max(0,span-3)//3)
+    return op_bonus-catalog_penalty-short_penalty-distance_penalty, p1, p2
+
+
+def _r62_support_score(anchor,pair):
+    """Rank hidden support anchors by semantic relevance, not page proximity alone."""
+    atext=(anchor.get('answer') or '')+' '+(anchor.get('topic') or '')+' '+(anchor.get('evidence') or '')
+    aterms=_r59_terms(atext)
+    ptext=' '.join((x.get('answer') or '')+' '+(x.get('topic') or '')+' '+(x.get('evidence') or '') for x in pair)
+    pterms=_r59_terms(ptext)
+    shared=len(aterms & pterms)
+    direct=0
+    na=_norm(anchor.get('evidence') or '')
+    for x in pair:
+        for key in ('answer','topic'):
+            term=_norm(x.get(key) or '')
+            if len(term)>=3 and term in na:
+                direct+=2
+    prof=_r62_operation_profile(anchor)
+    return shared*3+direct+min(6,prof['richness'])-prof['catalog_penalty']
+
+
 def _r60_python_relation_candidates(db_path,domain,limit=96,max_candidates=48):
     """Mine source-coherent relation candidates without an AI selector.
 
@@ -1644,23 +1702,31 @@ def _r60_python_relation_candidates(db_path,domain,limit=96,max_candidates=48):
                                     'why_required':'①에서 판별한 결과를 후속 상황의 판단 대상으로 사용해야 ②의 적용 결과를 결정할 수 있다.'}}
                 ok,validated=validate_plan(plan,[first,second],relation_type=rtype)
                 if not ok: continue
-                # Relation-miner score rewards direct cross-reference, semantic bridge,
-                # local provenance, and a richer second scored result.
+                # R62: direct cross-reference alone often surfaced taxonomy/definition
+                # pairs that Judge rejected as ROTE_ONLY/TOO_EASY. Rank operational
+                # evidence (condition/effect/procedure/quantity/relation) explicitly.
+                operation_score,p1,p2=_r62_pair_quality(first,second,direct_forward,shared,span)
                 richness=min(6,max(0,len(_norm(s_ans))//8))+min(4,max(0,len(_norm(sev))//30))
-                score=direct_forward*4+shared*2+local+richness+(4 if direct_forward>direct_reverse else 0)
+                score=direct_forward*2+shared*2+local+richness+operation_score+(3 if direct_forward>direct_reverse else 0)
                 rows.append({'score':score,'anchors':[first,second],'anchor_ids':[int(first['id']),int(second['id'])],
                              'page_span':span,'bridge_terms':terms,'direct_crossref_score':direct_forward,
+                             'operation_score':operation_score,
+                             'operation_profiles':[p1,p2],
                              'relation_type':rtype,'contract_type':ctype,'source_plan':plan,
                              'fixed_answers':validated['answers'],
                              'master_relation':'Python source-grounded relation candidate'})
     rows.sort(key=lambda x:(-x['score'],x['page_span'],x['anchor_ids']))
     # Diversity prevents one page or one answer family from monopolizing the Writer budget.
-    out=[]; page_counts={}; answer_counts={}
+    out=[]; page_counts={}; answer_counts={}; unordered_pairs=set()
     for r in rows:
         a,b=r['anchors']; pk=(a.get('source_name'),min(int(a.get('page_no') or 0),int(b.get('page_no') or 0)),max(int(a.get('page_no') or 0),int(b.get('page_no') or 0)))
         ak=(_norm(a.get('answer')),_norm(b.get('answer')))
+        up=frozenset((int(a['id']),int(b['id'])))
+        # Do not spend separate Writer calls on the same two anchors in reverse
+        # order. Diagnostics 11 repeatedly consumed budget on mirrored pairs.
+        if up in unordered_pairs: continue
         if page_counts.get(pk,0)>=2 or answer_counts.get(ak,0)>=1: continue
-        page_counts[pk]=page_counts.get(pk,0)+1; answer_counts[ak]=1; out.append(r)
+        unordered_pairs.add(up); page_counts[pk]=page_counts.get(pk,0)+1; answer_counts[ak]=1; out.append(r)
         if len(out)>=max_candidates: break
     return anchors,out
 
@@ -1670,7 +1736,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=160,max_candidates=max(24,wanted*8))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R60-PYTHON-RELATION-MINER-1'
+    diag['selector_diagnostic_version']='R62-PYTHON-RELATION-MINER-2'
     diag['selector_model']='PYTHON_DETERMINISTIC'
     diag['selector_calls']=0
     diag['selector_pair_candidates']=[{k:copy.deepcopy(v) for k,v in r.items() if k not in ('anchors','source_plan','fixed_answers')} for r in candidates[:48]]
@@ -1678,9 +1744,33 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     if not candidates:
         _generation_reject(diag,'python_relation_miner',['NO_RELATION_CANDIDATE'])
         return out
-    # Spend Writer budget only on the highest-ranked, page-diverse candidates.
-    selected=candidates[:max(wanted, min(len(candidates), wanted*2))]
+    # R62 selection blends three generic signals instead of taking only the
+    # highest direct-crossref scores: overall score, operation richness, and one
+    # moderate cross-context transfer. This keeps taxonomy headings from
+    # monopolizing the very small Writer budget.
+    selected=[]
+    def add_row(r):
+        if r is not None and r not in selected:
+            selected.append(r)
+    by_score=list(candidates)
+    by_operation=sorted(candidates,key=lambda r:(-r.get('operation_score',-999),-r.get('score',0),r.get('page_span',999)))
+    cross=[r for r in candidates if 4<=int(r.get('page_span',0))<=24 and int(r.get('direct_crossref_score',0))>0 and r.get('operation_score',-999)>=-8]
+    cross.sort(key=lambda r:(-int(r.get('page_span',0)),-r.get('operation_score',-999),-r.get('score',0)))
+    streams=[by_score,by_operation,cross]
+    indices=[0,0,0]
+    while len(selected)<wanted and any(indices[i]<len(streams[i]) for i in range(len(streams))):
+        for i,stream in enumerate(streams):
+            while indices[i]<len(stream) and stream[indices[i]] in selected:
+                indices[i]+=1
+            if indices[i]<len(stream):
+                add_row(stream[indices[i]]); indices[i]+=1
+                if len(selected)>=wanted: break
+    if len(selected)<wanted:
+        for r in candidates:
+            add_row(r)
+            if len(selected)>=wanted: break
     diag['selector_returned']=len(selected)
+    diag['selection_strategy']='R62_SCORE_OPERATION_CROSS_CONTEXT'
     seen=set()
     for r in selected:
         ids=tuple(r['anchor_ids'])
@@ -1699,18 +1789,21 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
         for a in anchors:
             if int(a.get('id') or -1) in pair_ids or a.get('source_name')!=src: continue
             pg=int(a.get('page_no') or 0)
-            if pages and min(abs(pg-x) for x in pages)>1: continue
+            if pages and min(abs(pg-x) for x in pages)>2: continue
             ev=_norm(a.get('evidence') or '')
             if len(ev)<18: continue
-            support.append(a)
-        support.sort(key=lambda a:(min(abs(int(a.get('page_no') or 0)-x) for x in pages),-len(_norm(a.get('evidence') or '')),int(a['id'])))
-        context_anchors=pair+support[:4]
+            rel=_r62_support_score(a,pair)
+            if rel<3: continue
+            support.append((rel,a))
+        support.sort(key=lambda x:(-x[0],min(abs(int(x[1].get('page_no') or 0)-p) for p in pages),int(x[1]['id'])))
+        support_rows=[a for _,a in support[:4]]
+        context_anchors=pair+support_rows
         out.append({'anchors':copy.deepcopy(context_anchors),
                     'scored_anchor_ids':list(ids),
                     'selector_relation':{'anchor_ids':list(ids),'relation_type':r['relation_type'],
                                          'contract_type':r['contract_type'],'master_relation':r['master_relation'],
                                          'source_plan':copy.deepcopy(r['source_plan']),'miner_score':r['score'],
-                                         'support_anchor_ids':[int(a['id']) for a in support[:4]]},
+                                         'support_anchor_ids':[int(a['id']) for a in support_rows]},
                     'source_plan':copy.deepcopy(r['source_plan']),
                     'fixed_answers':copy.deepcopy(r['fixed_answers']),
                     'contract_type':r['contract_type']})
@@ -1841,7 +1934,7 @@ def r59_prejudge_errors(c,q):
     # while Judge remains responsible for deciding whether that judgment is truly
     # wrong and sufficiently demanding.
     claim=_clean(c.get('student_claim'))
-    judgment_markers=r'판단|주장|분류|보았다|간주|해당|충분|옳|타당|적절|잘못|오류|아니|않'
+    judgment_markers=r'판단|판정|주장|분류|기록|결론|해석|보았다|간주|해당|충분|옳|타당|적절|잘못|오류|아니|않'
     if not claim or not re.search(judgment_markers,claim):
         errors.append('CLAIM_LACKS_JUDGMENT')
     return list(dict.fromkeys(errors))
