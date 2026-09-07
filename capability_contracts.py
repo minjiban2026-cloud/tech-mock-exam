@@ -31,7 +31,13 @@ def _obviously_incomplete_evidence(text):
     t=_clean(text)
     if not t:
         return True
-    return bool(re.search(r'(?:하여|해서|하며|하면서|되어|되며|되면서|이고|이며|때문에|따라서|그러나|그리고|또는|및)\s*$',t))
+    # PDF extraction often cuts immediately after a connective/particle or leaves
+    # an unmatched opening delimiter. These are unsafe as fixed scoring evidence.
+    if re.search(r'(?:하여|해서|하며|하면서|되어|되며|되면서|이고|이며|때문에|따라서|그러나|그리고|또는|및|에서|부터|까지|대로|에게|보다|와|과|를|을)\s*$',t):
+        return True
+    if t.count('(') > t.count(')') or t.count('[') > t.count(']'):
+        return True
+    return False
 
 
 R59_MAX_PAGE_SPAN = 6
@@ -1827,25 +1833,27 @@ def _r65_selector_prompt(domain,candidates,wanted):
 Python이 원문에서 찾은 후보만 평가한다. 기술 사실, 정답, anchor 순서, source_plan은 절대 수정하지 말고 candidate_id만 고른다.
 좋은 후보는 ①에서 기준/관계/오류를 판단한 결과가 ②의 조건 변화·원인 진단·절차 교정·수치/관계 적용에 실제 입력으로 쓰일 수 있어야 한다.
 두 anchor가 각각 정의/수치목록→명칭 대응에 그치거나, 두 짧은 명칭을 병렬로 맞히거나, 두 번째 anchor만 읽어 ②를 독립적으로 풀 수 있으면 낮게 평가한다.
+특히 ‘순시값/최댓값’처럼 기초 정의 두 개를 상황 문장으로 바꾼 것뿐인 후보는 4점 추론거리와 난도가 부족하므로 우선 선택하지 않는다. 관찰값 두 개만 비교하면 곧바로 용어가 정해지는 후보도 낮게 평가한다.
 원자료가 실제 비교, 조건, 인과, 절차, 관계를 제공하는 후보를 우선한다. 단순히 같은 페이지/공통 단어/상호 언급이 있다는 이유로 선택하지 않는다.
 source에 없는 새 사례·효과·조건을 발명해야만 4점 문항이 되는 후보는 제외한다.
 최대 {wanted}개를 좋은 순서대로 선택한다. 적합한 것이 없으면 빈 배열을 반환한다.
 후보: {json.dumps(payload,ensure_ascii=False)}
-JSON 객체만 출력: {{"selected_ids":[0,2],"rejected":{{"1":"짧은 이유"}}}}"""
+선택 후보가 Writer에서 원문 절단 등으로 생략될 수 있으므로, selected_ids 뒤에 품질이 그 다음인 예비 후보를 최대 2개 reserve_ids로 반환한다. reserve_ids는 selected_ids와 중복하지 않는다.
+JSON 객체만 출력: {{"selected_ids":[0,2],"reserve_ids":[3,5],"rejected":{{"1":"짧은 이유"}}}}"""
 
 
 def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
-    """R65 hybrid selector: Python recall shortlist -> one batched Luna semantic rank.
+    """R66 hybrid selector: Python recall shortlist -> one batched Luna semantic rank.
 
     R64 proved that a strict lexical/operation threshold both missed usable relations
-    and still admitted rote pairs. R65 therefore lets Python veto only obvious
+    and still admitted rote pairs. R66 keeps the semantic selector but vetoes incomplete fixed source before it
     impossibilities, then spends at most one low-effort selector call per missing
     domain. Writer/Judge remain unchanged and fixed answers stay Python-owned.
     """
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=160,max_candidates=max(32,wanted*10))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R65-BATCH-SEMANTIC-RELATION-1'
+    diag['selector_diagnostic_version']='R66-BATCH-SEMANTIC-RELATION-2'
     diag['selector_model']=model if api_key else 'PYTHON_FALLBACK_NO_KEY'
     diag['selector_calls']=0
     diag['selector_pair_candidates']=[{k:copy.deepcopy(v) for k,v in r.items() if k not in ('anchors','source_plan','fixed_answers')} for r in candidates[:48]]
@@ -1860,6 +1868,11 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
     shortlist=[]
     for r in ranked:
         prof=r.get('operation_profiles') or []
+        pair=r.get('anchors') or []
+        if any(_obviously_incomplete_evidence(a.get('evidence') or '') for a in pair):
+            continue
+        if any(_r64_fragment_answer(a.get('answer') or '') for a in pair):
+            continue
         if any(int(p.get('fragment_penalty',0))>0 for p in prof):
             continue
         if sum(int(p.get('richness',0)) for p in prof)<3:
@@ -1888,7 +1901,14 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
                 if type(x) is int and 0<=x<len(shortlist) and x not in seen:
                     seen.add(x); selected.append(shortlist[x])
                     if len(selected)>=wanted: break
+            reserves=raw.get('reserve_ids') if isinstance(raw,dict) else []
+            if isinstance(reserves,list):
+                for x in reserves:
+                    if type(x) is int and 0<=x<len(shortlist) and x not in seen:
+                        seen.add(x); selected.append(shortlist[x])
+                        if len(selected)>=wanted+2: break
             diag['semantic_selector_rejected']=copy.deepcopy(raw.get('rejected',{})) if isinstance(raw,dict) else {}
+            diag['semantic_selector_reserve_count']=max(0,len(selected)-min(len(ids),wanted))
         except Exception as ex:
             diag.setdefault('selector_retry_reasons',[]).append(type(ex).__name__)
             _generation_reject(diag,'semantic_selector',[type(ex).__name__])
@@ -1898,7 +1918,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6):
         selected=shortlist[:wanted]
         diag['selector_fallback']='PYTHON_BROAD_SHORTLIST'
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R65_PYTHON_RECALL_THEN_BATCH_LUNA'
+    diag['selection_strategy']='R66_COMPLETE_SOURCE_THEN_BATCH_LUNA_BACKFILL'
 
     seen=set()
     for r in selected:

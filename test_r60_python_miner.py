@@ -24,6 +24,6 @@ class R60PythonMinerTests(unittest.TestCase):
                 self.assertGreaterEqual(len(rows),0)
                 self.assertEqual(rows.diagnostics.get('selector_calls'),0)
                 self.assertEqual(rows.diagnostics.get('selector_model'),'PYTHON_FALLBACK_NO_KEY')
-                self.assertEqual(rows.diagnostics.get('selection_strategy'),'R65_PYTHON_RECALL_THEN_BATCH_LUNA')
+                self.assertEqual(rows.diagnostics.get('selection_strategy'),'R66_COMPLETE_SOURCE_THEN_BATCH_LUNA_BACKFILL')
 
 if __name__=='__main__': unittest.main()

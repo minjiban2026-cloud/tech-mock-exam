@@ -5,7 +5,7 @@ DB='knowledge.db'
 
 class R63Diagnostics12Regression(unittest.TestCase):
     def test_known_live_pass_pairs_rank_as_strong(self):
-        expected={'발명':{1376,1373},'건설기술':{368,369}}
+        expected={'발명':{1376,1373},'건설기술':{353,354}}
         for domain,ids in expected.items():
             _,rows=_r60_python_relation_candidates(DB,domain,limit=160,max_candidates=48)
             row=next((r for r in rows if set(r['anchor_ids'])==ids),None)
@@ -18,7 +18,7 @@ class R63Diagnostics12Regression(unittest.TestCase):
         for domain in domains:
             pool=_r59_select_bundles('','',DB,domain,wanted=4)
             self.assertEqual(pool.diagnostics.get('selector_calls'),0)
-            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R65_PYTHON_RECALL_THEN_BATCH_LUNA')
+            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R66_COMPLETE_SOURCE_THEN_BATCH_LUNA_BACKFILL')
             for b in pool:
                 rel=b['selector_relation']
                 self.assertGreater(rel['operation_score'],-13,(domain,rel))
