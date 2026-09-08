@@ -1492,51 +1492,17 @@ def r59_contract_to_question(c):
 def _r59_prompt(domain,bundles,official):
     payload=[]
     for i,b in enumerate(bundles):
-        payload.append({'bundle_id':i,'selector_relation':b.get('selector_relation'),
-                        'source_plan':b['source_plan'],'fixed_answers':b['fixed_answers'],
-                        'anchors':b['anchors']})
-    return f"""대한민국 중등 기술 임용 4점 문항의 문장 편집자다.
-영역: {domain}
-실제 기출 구조 참고 (기술 사실/정답 복사 금지): {json.dumps(official,ensure_ascii=False)[:5200]}
-검증한 고정 계획: {json.dumps(payload,ensure_ascii=False)}
-anchors에는 채점용 2개 anchor 외에 같은 원자료의 인접 support anchor가 포함될 수 있다. support anchor의 기술 사실은 상황 구성의 근거로 사용할 수 있지만, fixed_answers를 바꾸거나 새 채점 정답으로 만들 수 없다. source에 없는 작동 원리·조건·효과를 상식으로 보충하지 않는다.\n각 bundle에서 계획의 task1.result와 task2.result를 채점할 수 있는 문항 하나만 작성한다.
-정답/근거/관계/추가 조건은 이미 고정되어 있다. fixed_answers와 source_plan을 수정하거나 새 기술 조건을 추가하지 않는다.
-정의를 가리고 명칭을 맞히게 하거나, 근거 단서가 그대로 정답표가 되는 문항은 만들지 않는다.
-학생의 판단은 반드시 source_plan의 한 기준을 잘못 적용한 '실제 오류'여야 한다. 정답 정의를 긍정문으로 다시 말하는 것은 금지한다.
-가능하면 한 anchor의 성질/조건을 다른 대상에 잘못 적용하거나, 두 대비 기준 중 하나를 잘못 선택한 주장으로 만든다.
-오류는 문장 안에서 검토 가능한 형태로 드러나야 한다. 단순히 정답 명칭을 숨긴 정의 재진술은 금지하고, 관찰된 절차·조건·현상 중 최소 두 단서를 결합해 잘못된 결론을 내리게 한다.
-추가 상황은 ①의 결과를 단순 재진술하지 말고, ①에서 바로잡은 대상/기준을 사용해야만 후속 판단이 가능하도록 조건을 바꾼다.
-②가 단지 '추가 조건 한 줄을 보고 하위 명칭 맞히기'가 되면 작성하지 않는다. contract_type이 contrastive_error_transfer이면 ①에서 두 기준/대상을 대조해 오류를 판별하고, ②에서는 그 대조 기준을 조건이 바뀐 사례에 전이한다. criterion_conflict_resolution이면 서로 충돌하는 기준 중 적용 기준을 ①에서 결정하고 ②에서 다른 조건에 재적용한다. ②에는 ①의 결과를 전제로 효과·조건·원리·수치·적용 여부 중 하나를 판단하는 실제 전이를 우선한다.
-두 소문항 모두 '정의의 특징을 그대로 주고 명칭을 쓰기' 형태면 해당 bundle을 생략한다. 최소 한 소문항은 서로 경쟁하는 두 기준·두 조건·두 해석 중 무엇을 적용할지 판단해야 한다.
-selector_relation의 semantic_assessment가 있으면 그것이 4점 가치의 최소 조건이다. R69에서는 semantic_assessment가 inferential_distance 4 이상이어도 공개 문항을 너무 직접적으로 쓰면 Judge에서 3점으로 떨어질 수 있으므로, 정답을 가리기만 하는 것이 아니라 source 안의 경쟁 단서·조건 차이·원인/결과 중 최소 하나를 함께 제시하여 한 단계 이상의 판별을 거치게 한다. source_support·dependency·inferential_distance·transferability를 실제 공개 문항에서도 유지하고 rote_risk를 다시 높이는 단순 정의 변환을 하지 않는다.
-selector_relation의 operation_score/reasoning_viability를 높게 만든 조건·인과·절차·관계 단서를 실제 판단에 사용한다. 단순 명칭 A와 명칭 B를 각각 맞히는 문항으로 바꾸지 않는다.
-①과 ② 중 적어도 하나는 정답 명칭 외에 조건 변화, 원인-결과, 절차 순서, 수치/관계 해석 중 하나를 실제로 조작해야 한다. source가 그런 조작을 지원하지 않으면 omissions로 보낸다.
-작성 요구에 근거·이유·설명을 넣었다면 고정 source_plan에 그 설명을 채점할 구체적 근거가 있어야 한다. 명칭만 고정되어 있는데 장문의 설명을 요구하지 않는다.
-원자료에 존재하지 않는 '번호', '목록', '표의 항목', '보기', '자료의 번호'를 새로 만들거나 답안에 요구하지 않는다. 특히 fixed answer에 1), 2), 4) 같은 표식이 있더라도 공개 자료에 실제 대응 목록이 없으면 번호를 채점요소로 쓰지 않는다.
-학생의 오류를 만들기 위해 source가 보장하지 않는 관찰 결과·인과·기능을 추가하지 않는다. source에서 확정할 수 없는 사례라면 omissions로 보낸다.
-①의 공개 자료에는 정답을 강하게 암시하는 특징만 나열하지 말고, source에 있는 관련 단서 중 판단에 필요한 단서와 오개념을 유발하는 경쟁 단서를 함께 배치한다.
-②는 ①의 정답을 모르면 풀 수 없어야 한다. 단순히 두 번째 anchor의 정의를 새 상황으로 다시 말하면 안 된다.
-정답이 '분류/종류/기준/…에 따라' 같은 짧은 분류명인 경우, 그 분류명을 사실상 번역한 표현을 자료에 쓰지 말고 실제 사례의 관찰값·조건·결과로 우회한다.
-기출 4점처럼 한 문장 안의 두 단서를 조합해 기준을 선택하거나, 조건 변화 전후를 비교하거나, 계산·수치·원인·결과 중 하나를 적용하도록 만든다. source가 이를 뒷받침하지 못하면 억지로 만들지 말고 omissions로 보낸다.
-source_plan의 binding quote를 12자 이상 연속 복사하지 않는다. 정답 명칭뿐 아니라 근거 문장 전체를 그대로 옮기는 것도 금지한다.
-정답이 둘 이상의 핵심어로 이루어졌다면 그 핵심어들을 나누어 지문·학생 판단·작성 요구에 재노출하지 않는다. 정답 전체를 쓰지 않았더라도 핵심어 대부분이 보이면 직접 노출로 처리된다.
-고정 정답이나 근거가 문장 중간에서 잘린 경우에는 해당 bundle을 반드시 omissions로 보낸다. 잘린 표현을 상식으로 복원하지 않는다.
-두 소문항이 모두 자료의 정의·수치 목록과 명칭을 일대일 대응하는 구조라면 작성하지 않는다. 최소 한 소문항은 조건 변화에 따른 결과, 원인 진단, 절차 교정, 수치 관계의 적용 중 하나를 실제로 수행해야 한다.
-①은 오류 판단+수정+근거를 요구한다. ②는 ①의 수정 결과를 입력으로 사용하여 다른 조건에서 후속 결과+근거를 요구한다.
-고정된 task1.result와 task2.result의 정답 문자열은 intro·clues·student_claim·transfer_case·tasks 어디에도 그대로 쓰지 않는다.
-특히 ②의 자료가 ①의 정답 명칭을 포함해야 의미가 통하는 경우에는 그 명칭 대신 ‘①에서 판별한 대상/과정/기법’처럼 선행 판단을 참조하도록 표현한다.
-정답 명칭을 지운 뒤에도 원문 근거의 조건·성질을 이용해 추론할 수 있어야 한다. 새 숫자·효과·기술 사실을 발명하지 않는다.
-계획을 충족할 수 없으면 해당 bundle은 생략하고 omissions에 이유를 기록한다.
+        payload.append({'bundle_id':i,'selector_relation':b.get('selector_relation'),'provisional_source_plan':b.get('source_plan'),'anchors':b.get('anchors')})
+    return f"""대한민국 중등 기술 임용 4점 문항의 자료 구성 Writer다. 영역: {domain}
+실제 기출 구조 참고(기술 사실/정답 복사 금지): {json.dumps(official,ensure_ascii=False)[:5200]}
+검증된 SOURCE PACKET: {json.dumps(payload,ensure_ascii=False)}
+R70에서는 provisional_source_plan의 두 제목을 그대로 정답으로 쓸 의무가 없다. 각 bundle anchors 안에서 실제 채점할 서로 다른 두 anchor를 고르고, 각 evidence 안에 문자 그대로 존재하는 80자 이하의 짧은 결과/조건/오차/효과/명칭을 task1_result/task2_result로 선택한다. 동의어·요약·새 기술 사실은 금지하며 Python이 exact substring을 재검사한다.
+자유도는 시험 상황 구성에만 있다. 학생 오판, 관찰 순서, 조건 변화, 비교 대상 배치는 새로 구성할 수 있지만 source에 없는 작동 원리·효과·수치·법칙·재료 특성·장치 기능을 기술 사실처럼 추가하지 않는다. source에 없는 숫자를 판단 근거로 발명하지 않는다.
+①은 source의 둘 이상의 단서를 조합해 잘못 적용된 기준/결과를 판정하고, ②는 ① 결과를 필수 입력으로 사용해 조건이 달라진 상황을 판단한다. ① 없이 ②가 독립적으로 풀리면 안 된다. 두 문항 모두 정의→명칭 찾기가 되면 안 되고 최소 한 문항은 조건 비교/원인 진단/절차 교정/관계·수치 적용/범위 변화 중 하나를 수행한다.
+정답/result phrase를 공개 지문에 그대로 쓰지 않는다. source 안의 경쟁 단서 또는 조건 차이를 함께 배치한다. task1_anchor_id/task2_anchor_id는 packet에 실제 존재하고 서로 달라야 한다. dependency_reason에는 왜 ①의 결과가 ②에 필수인지 구체적으로 쓴다. 근거를 요구하면 선택한 evidence가 실제 채점 가능해야 한다. binding quote 12자 이상 연속 복사, 원자료에 없는 번호/보기/표 항목 발명은 금지한다. clues는 비운다. 충분한 비회상형 문항을 만들 수 없으면 omissions로 보낸다.
 JSON 객체만 출력:
-{{"contracts":[{{"bundle_id":0,"topic":"문항 주제","clues":[],
-"student_claim":"검토할 학생 판단","transfer_case":"계획에 고정된 추가 조건의 상황화",
-"tasks":["① 판단과 근거 요구","② ① 결과를 사용하는 후속 요구"],
-"reasoning_chain":["자료 분석","중간 판단","후속 적용"],"task2_uses_task1":true}}],
-"omissions":[{{"bundle_id":0,"reason":"작성 불가 이유"}}]}}
-clues는 비워 둔다. 학생에게 보일 source clue는 Python이 검증된 source_plan binding에서 직접 구성한다. Writer는 clue를 재작성하지 않는다. 별도의 exact_answers를 출력하지 않는다.
+{{"contracts":[{{"bundle_id":0,"topic":"문항 주제","clues":[],"task1_anchor_id":123,"task1_result":"evidence의 정확한 짧은 문자열","task2_anchor_id":124,"task2_result":"evidence의 정확한 짧은 문자열","dependency_reason":"①에서 확정한 기준을 적용해야 ②의 바뀐 조건을 판정할 수 있다.","student_claim":"검토할 학생 판단","transfer_case":"① 결과를 사용해야 하는 후속 상황","tasks":["① 판단·결과·근거 요구","② ① 결과를 사용하는 후속 판단·근거 요구"],"reasoning_chain":["자료 분석","중간 판단","후속 적용"],"task2_uses_task1":true}}],"omissions":[{{"bundle_id":0,"reason":"작성 불가 이유"}}]}}
 """
-
-
 
 
 # R68 persisted-contract source integrity. Historical Judge PASS evidence is never
@@ -2047,80 +2013,69 @@ def _r68_build_composed_relation(plan, cluster):
             'relation_type':rtype,'contract_type':typ,'source_plan':source_plan,'fixed_answers':val['answers'],
             'master_relation':'R68 semantic multi-anchor composed relation','selector_support_anchors':support,'semantic_assessment':assessment}
 
-def _r67_selector_prompt(domain,candidates,wanted,preferred_types=None,clusters=None):
-    """Batch semantic quality gate over Python-grounded candidates.
+def _r70_assessment_pass(row):
+    """R70: selector certifies source-packet usability, not final item quality."""
+    if not isinstance(row,dict): return False
+    if row.get('selection_stage')=='SOURCE_PACKET':
+        try:
+            return (float(row.get('source_support',0))>=4 and float(row.get('construction_potential',0))>=4 and
+                    float(row.get('evidence_diversity',0))>=3 and float(row.get('source_hygiene',0))>=4 and
+                    float(row.get('rote_risk',9))<=3 and str(row.get('verdict','')).upper()=='SELECT')
+        except (TypeError,ValueError): return False
+    return _r67_assessment_pass(row)
 
-    The model is a selector/critic only. It may score and return candidate ids but
-    may never rewrite source facts, fixed answers, anchor order, or source plans.
-    """
+
+def _r70_rebuild_plan_from_writer(raw_c,bundle,forbidden_anchor_pairs=None):
+    """Validate Writer-selected scoring results as exact source fragments."""
+    if not isinstance(raw_c,dict) or not isinstance(bundle,dict): return None
+    amap={int(a['id']):a for a in (bundle.get('anchors') or []) if type(a.get('id')) is int}
+    a1=raw_c.get('task1_anchor_id'); a2=raw_c.get('task2_anchor_id')
+    if type(a1) is not int or type(a2) is not int or a1==a2 or a1 not in amap or a2 not in amap: return None
+    forbidden={tuple(sorted(map(int,x))) for x in (forbidden_anchor_pairs or []) if isinstance(x,(list,tuple,set)) and len(x)>=2}
+    if tuple(sorted((a1,a2))) in forbidden: return None
+    first,second=amap[a1],amap[a2]
+    if any(_obviously_incomplete_evidence(a.get('evidence')) or _obviously_incomplete_answer(a.get('answer')) or _r64_fragment_answer(a.get('answer')) for a in (first,second)): return None
+    r1=_r69_exact_result(raw_c.get('task1_result'),first); r2=_r69_exact_result(raw_c.get('task2_result'),second)
+    if not r1 or not r2 or _norm(r1)==_norm(r2): return None
+    fev=_clean(first.get('evidence')); sev=_clean(second.get('evidence')); dep=_clean(raw_c.get('dependency_reason'))
+    if len(_norm(dep))<12: dep='①에서 판별한 기준 또는 결과를 사용해야 ②의 조건 변화에 따른 판단을 결정할 수 있다.'
+    plan={'schema':'SOURCE_BOUND_TASK_PLAN_V1','criterion':{'text':fev,'binding':{'anchor_id':a1,'quote':fev}},
+          'transfer_condition':{'text':sev,'binding':{'anchor_id':a2,'quote':sev}},
+          'task1':{'result':{'value':r1,'binding':{'anchor_id':a1,'quote':fev}},'reason':{'text':fev,'binding':{'anchor_id':a1,'quote':fev}}},
+          'task2':{'result':{'value':r2,'binding':{'anchor_id':a2,'quote':sev}},'reason':{'text':sev,'binding':{'anchor_id':a2,'quote':sev}}},
+          'dependency':{'input':'task1.result','output':'task2.result','required_result':{'anchor_id':a1,'quote':fev},'why_required':dep}}
+    from question_plans import validate_plan
+    rtype='contrast' if bundle.get('contract_type')=='contrastive_error_transfer' else 'conditional_choice'
+    ok,val=validate_plan(plan,[first,second],relation_type=rtype)
+    if not ok: return None
+    return {'source_plan':plan,'fixed_answers':val['answers'],'anchor_ids':[a1,a2],'relation_type':rtype}
+
+
+def _r67_selector_prompt(domain,candidates,wanted,preferred_types=None,clusters=None):
+    """R70 source-packet selector: source usability only, not final question quality."""
     payload=[]
     for i,r in enumerate(candidates):
         pair=r.get('anchors') or []
-        payload.append({
-            'candidate_id':i,
-            'relation_type':r.get('relation_type'),
-            'contract_type':r.get('contract_type'),
-            'reasoning_viability':r.get('reasoning_viability'),
-            'operation_score':r.get('operation_score'),
-            'page_span':r.get('page_span'),
-            'anchors':[{
-                'id':a.get('id'),'answer':_clean(a.get('answer')),
-                'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))
-            } for a in pair],
-            'support_context':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))}
-                               for a in (r.get('selector_support_anchors') or [])]
-        })
+        payload.append({'candidate_id':i,'relation_type':r.get('relation_type'),'contract_type':r.get('contract_type'),'reasoning_viability':r.get('reasoning_viability'),'operation_score':r.get('operation_score'),'page_span':r.get('page_span'),'anchors':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))} for a in pair],'support_context':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))} for a in (r.get('selector_support_anchors') or [])]})
     cluster_payload=[]
     for ci,c in enumerate(clusters or []):
         cluster_payload.append({'cluster_id':ci,'anchors':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence')),'page_no':a.get('page_no')} for a in c.get('anchors',[])]})
     preferred_types=list(preferred_types or R59_ALLOWED_TYPES)
-    return f"""중등 기술 임용 4점 문항용 source-relation 후보를 전수 평가하는 품질 선별자다. 영역: {domain}
-Python이 제공한 후보의 기술 사실·정답·anchor 순서·source_plan은 절대 수정하지 않는다. candidate_id와 평가만 반환한다. support_context는 같은 원자료의 인접 근거이며 문항 상황의 보조 근거로만 사용할 수 있고, 채점 정답을 바꾸는 데 사용할 수 없다.
-
-각 후보를 아래 5축으로 0~5점 평가한다.
-- source_support: 두 정답과 후속 판단을 source만으로 충분히 뒷받침하는가.
-- dependency: ①에서 얻은 판단/기준이 ②의 필수 입력인가. ②를 두 번째 anchor만 읽고 독립적으로 풀 수 있으면 2 이하.
-- inferential_distance: 정의/목록→명칭 회상을 넘어 조건 비교, 원인 진단, 절차 교정, 수치·관계 적용이 필요한가.
-- transferability: ①의 기준을 조건이 달라진 후속 상황에 실제로 적용할 수 있는가.
-- rote_risk: 0이 최상, 5가 최악. 두 정의를 각각 이름 맞히기, 인접 분류표 두 칸 대응, 특징을 거의 그대로 재진술하면 4~5.
-
-SELECT 기준은 엄격하다: source_support>=4, dependency>=4, inferential_distance>=4, transferability>=4, rote_risk<=1을 모두 만족해야 한다.
-특히 다음은 REJECT한다.
-1) 소모성/비소모성, LCD/LED, 절연형/비절연형처럼 두 정의를 상황 문장으로 바꾼 뒤 각각 명칭만 맞히는 구조.
-2) 숫자·조건이 source의 분류표와 일대일 대응하여 명칭만 찾는 구조.
-3) 번호/목록/표가 source에 실제로 없는데 Writer가 새 목록이나 번호를 만들어야 성립하는 구조.
-4) ① 없이도 ②의 anchor 정의만으로 답이 정해지는 구조.
-5) source 밖 원리·효과·사례를 발명해야 난도를 올릴 수 있는 구조.
-좋은 예는 한 관측 조건에서 소거되는 오차를 판정한 뒤 다른 관측 절차로 범위를 확장하거나, 한 분류 기준으로 장치를 판별한 뒤 상위 분류 기준으로 전환하는 것처럼 ①의 기준을 실제로 재사용하는 구조다.
-
-현재 coverage에서 우선 필요한 contract_type: {json.dumps(preferred_types,ensure_ascii=False)}. 가능하면 이 유형부터 채운다. 기존에 이미 인증된 유형을 다시 선택해 coverage를 낭비하지 않는다.
-
-R69 추가 규칙: composed_plans의 task1_result/task2_result에는 anchor 제목을 그대로 쓸 필요가 없다. evidence 안에 실제로 존재하는 짧고 채점 가능한 결과·조건·오차·효과 표현을 정확히 복사하여 쓸 수 있다. 단, source 문구의 정확한 부분문자열이어야 하고 새 사실/동의어/요약을 만들면 안 된다. 이 기능은 정의명 두 개를 맞히는 구조를 피하고 조건 판단의 실제 결과를 채점하기 위한 것이다. 가능하면 넓은 제목보다 evidence의 구체적 결과를 선택한다.
-
-R68 추가 규칙: 아래 cluster_packet에서는 Python이 관계를 미리 정하지 않았다. 같은 cluster 안에서 실제로 ①→② 의존성이 성립하는 두 scored anchor를 직접 선택할 수 있다. 나머지는 support_anchor_ids로만 사용한다. source 밖 사실을 만들 수 없고, task1_anchor_id와 task2_anchor_id는 반드시 같은 cluster에 실제 존재해야 한다. 두 정답 anchor만으로 약해도 support가 경쟁 기준·원인·조건을 제공하여 ①의 판단을 만들고 그 판단이 ②의 필수 입력이 된다면 composed_plans로 SELECT할 수 있다. 반대로 support를 장식으로만 붙이는 것은 REJECT한다.
-
-최대 {wanted}개의 selected_ids와 추가 예비 reserve_ids 최대 2개를 반환한다. reserve도 SELECT 기준을 모두 만족해야 한다. pair 후보만으로 부족하면 composed_plans를 사용해 전체 SELECT 수를 보충한다. 동일 scored anchor쌍의 중복 plan은 만들지 않는다.
-적합한 후보가 하나도 없으면 selected_ids, reserve_ids, composed_plans를 모두 빈 배열로 반환한다. 이것은 정상 결과이며 억지 대체 후보를 넣지 않는다.
+    return f"""중등 기술 임용 문항 생성을 위한 SOURCE PACKET 선별자다. 영역: {domain}
+너는 최종 4점 문항의 난도/완성도를 인증하는 Judge가 아니다. 여기서는 원자료 안에 안전하게 재구성할 수 있는 기술 사실이 충분한지만 판정한다.
+평가축: source_support, construction_potential, evidence_diversity, source_hygiene, rote_risk.
+SELECT 기준: source_support>=4, construction_potential>=4, evidence_diversity>=3, source_hygiene>=4, rote_risk<=3.
+construction_potential은 서로 다른 조건·원인·효과·절차·수치·분류 기준 중 최소 두 가지를 이용해 학생 오판/조건 변화 자료를 구성할 여지를 뜻한다. source 안에 이미 완성된 ①→② dependency가 존재할 필요는 없다. R69의 NO_4PT_WORTHY_PAIR 병목을 반복하지 않는다.
+반드시 REJECT: source 잘림/불완전, 사실 하나뿐, 사실상 동일 문구 중복, 새 기술 사실을 발명해야만 성립. raw source가 정의/목록 중심이어도 support와 결합해 비회상형 자료를 만들 수 있으면 rote_risk 3까지 허용한다.
+현재 coverage에서 우선 필요한 contract_type: {json.dumps(preferred_types,ensure_ascii=False)}. pair가 약해도 support_context에 충분한 사실이 있으면 SELECT 가능하다. cluster_packet은 pair가 부족할 때만 composed_plans로 보충하고 task1_result/task2_result는 evidence의 정확한 부분문자열만 허용한다.
+최대 {wanted} selected_ids, reserve_ids 최대 2개. 적합한 source packet이 정말 없을 때만 빈 배열.
 후보: {json.dumps(payload,ensure_ascii=False)}
 cluster_packet: {json.dumps(cluster_payload,ensure_ascii=False)}
 JSON 객체만 출력:
-{{"assessments":[{{"candidate_id":0,"source_support":5,"dependency":4,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","reason":"짧은 이유"}}],"selected_ids":[0],"reserve_ids":[2],"composed_plans":[{{"cluster_id":0,"task1_anchor_id":1,"task2_anchor_id":2,"task1_result":"source evidence의 정확한 부분문자열","task2_result":"source evidence의 정확한 부분문자열","support_anchor_ids":[3],"contract_type":"contrastive_error_transfer","relation_type":"contrast","source_support":5,"dependency":5,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","dependency_reason":"①에서 판별한 기준이 ②의 달라진 조건에서 어떤 판단을 내려야 하는지 결정하는 데 반드시 필요한 이유","reason":"짧은 이유"}}],"rejected":{{"1":"짧은 이유"}}}}"""
+{{"assessments":[{{"candidate_id":0,"selection_stage":"SOURCE_PACKET","source_support":5,"construction_potential":4,"evidence_diversity":4,"source_hygiene":5,"rote_risk":2,"verdict":"SELECT","reason":"재구성 가능한 source packet"}}],"selected_ids":[0],"reserve_ids":[],"composed_plans":[]}}
+"""
 
 
-def _r67_assessment_pass(row):
-    if not isinstance(row,dict) or str(row.get('verdict','')).upper()!='SELECT':
-        return False
-    try:
-        return (float(row.get('source_support',0))>=4 and
-                float(row.get('dependency',0))>=4 and
-                float(row.get('inferential_distance',0))>=4 and
-                float(row.get('transferability',0))>=4 and
-                float(row.get('rote_risk',9))<=1)
-    except (TypeError,ValueError):
-        return False
-
-
-# Compatibility name retained for older regression/import callers.
 _r65_selector_prompt = _r67_selector_prompt
 
 
@@ -2135,7 +2090,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=180,max_candidates=max(48,wanted*12))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R69-EXTRACTIVE-RESULT-DIVERSITY-GATE-1'
+    diag['selector_diagnostic_version']='R70-SOURCE-PACKET-SEPARATED-CERTIFICATION-1'
     forbidden_anchor_pairs={tuple(sorted(map(int,x))) for x in (forbidden_anchor_pairs or []) if isinstance(x,(list,tuple,set)) and len(x)>=2}
     diag['preferred_contract_types']=list(preferred_types or R59_ALLOWED_TYPES)
     diag['selector_model']=model if api_key else 'PYTHON_FALLBACK_NO_KEY'
@@ -2210,18 +2165,20 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
             seen=set(); primary_count=0
             for x in ids:
                 if (type(x) is int and 0<=x<len(shortlist) and x not in seen and
-                        _r67_assessment_pass(assessment_by_id.get(x)) and
-                        (not preferred_types or shortlist[x].get('contract_type') in preferred_types)):
-                    seen.add(x); r=copy.deepcopy(shortlist[x]); r['semantic_assessment']=copy.deepcopy(assessment_by_id[x]); selected.append(r); primary_count+=1
+                        _r70_assessment_pass(assessment_by_id.get(x))):
+                    seen.add(x); r=copy.deepcopy(shortlist[x]); r['semantic_assessment']=copy.deepcopy(assessment_by_id[x]);
+                    if preferred_types: r['contract_type']=preferred_types[0]; r['relation_type']='contrast' if r['contract_type']=='contrastive_error_transfer' else 'conditional_choice'
+                    selected.append(r); primary_count+=1
                     if primary_count>=wanted: break
             reserves=raw.get('reserve_ids') if isinstance(raw,dict) else []
             reserve_count=0
             if primary_count>0 and isinstance(reserves,list):
                 for x in reserves:
                     if (type(x) is int and 0<=x<len(shortlist) and x not in seen and
-                            _r67_assessment_pass(assessment_by_id.get(x)) and
-                            (not preferred_types or shortlist[x].get('contract_type') in preferred_types)):
-                        seen.add(x); r=copy.deepcopy(shortlist[x]); r['semantic_assessment']=copy.deepcopy(assessment_by_id[x]); selected.append(r); reserve_count+=1
+                            _r70_assessment_pass(assessment_by_id.get(x))):
+                        seen.add(x); r=copy.deepcopy(shortlist[x]); r['semantic_assessment']=copy.deepcopy(assessment_by_id[x]);
+                        if preferred_types: r['contract_type']=preferred_types[0]; r['relation_type']='contrast' if r['contract_type']=='contrastive_error_transfer' else 'conditional_choice'
+                        selected.append(r); reserve_count+=1
                         if reserve_count>=2: break
             composed_count=0
             if len(selected)<wanted and isinstance(raw.get('composed_plans'),list):
@@ -2242,8 +2199,8 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
             diag['semantic_selector_reserve_count']=reserve_count
             diag['semantic_selector_valid_primary']=primary_count
             if not selected:
-                diag['selector_empty_reason']='SEMANTICALLY_NO_4PT_WORTHY_PAIR'
-                _generation_reject(diag,'semantic_selector',['NO_4PT_WORTHY_PAIR'])
+                diag['selector_empty_reason']='NO_SOURCE_PACKET_CONSTRUCTION_POTENTIAL'
+                _generation_reject(diag,'semantic_selector',['NO_SOURCE_PACKET_CONSTRUCTION_POTENTIAL'])
         except Exception as ex:
             diag.setdefault('selector_retry_reasons',[]).append(type(ex).__name__)
             _generation_reject(diag,'semantic_selector',[type(ex).__name__])
@@ -2256,7 +2213,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     if api_key and not selector_completed:
         diag['selector_technical_failure']=True
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R69_EXTRACTIVE_RESULT_DIVERSITY_NO_REJECTED_FALLBACK'
+    diag['selection_strategy']='R70_SOURCE_PACKET_THEN_WRITER_CONSTRUCTION'
 
     seen=set()
     for r in selected:
@@ -2286,6 +2243,9 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None,preferr
     size=int(pool_size or (4 if need<=1 else 6))
     bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size,preferred_types=preferred_types,forbidden_anchor_pairs=forbidden_anchor_pairs)
     out=GenerationPool(diagnostics=getattr(bundles,'diagnostics',None));diag=out.diagnostics
+    diag['architecture']='R70_SOURCE_FACT_CERTIFICATION__WRITER_PUBLIC_FORM__JUDGE_INSTANCE'
+    diag['writer_result_ownership']='EXACT_SOURCE_FRAGMENT_ONLY'
+    diag['contract_type_ownership']='COVERAGE_TARGET_NOT_PYTHON_MINER_LABEL'
     if not bundles:return out
     from openai import OpenAI
     official=_r59_official_examples(db_path,2)
@@ -2318,13 +2278,16 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None,preferr
             if type(bi) is not int or not 0<=bi<len(chunk) or bi in seen:
                 _generation_reject(diag,'writer_schema',['INVALID_OR_DUPLICATE_BUNDLE_ID'],raw_c);continue
             seen.add(bi);b=chunk[bi]
-            if 'exact_answers' in raw_c and raw_c['exact_answers']!=b['fixed_answers']:
-                _generation_reject(diag,'writer_schema',['WRITER_CHANGED_FIXED_ANSWERS'],raw_c);continue
-            c=copy.deepcopy(raw_c)
-            c.update(domain=domain,cited_anchor_ids=[a['id'] for a in b['anchors']],
-                     source_plan=copy.deepcopy(b['source_plan']),exact_answers=copy.deepcopy(b['fixed_answers']),
-                     selector_relation=copy.deepcopy(b['selector_relation']),contract_type=b['contract_type'],
+            rebuilt=_r70_rebuild_plan_from_writer(raw_c,b,forbidden_anchor_pairs=forbidden_anchor_pairs)
+            if not rebuilt:
+                _generation_reject(diag,'writer_source_plan',['R70_WRITER_RESULT_NOT_EXACT_SOURCE_OR_FORBIDDEN_PAIR'],raw_c);continue
+            c=copy.deepcopy(raw_c); sr=copy.deepcopy(b['selector_relation'])
+            sr['anchor_ids']=list(rebuilt['anchor_ids']); sr['source_plan']=copy.deepcopy(rebuilt['source_plan']); sr['relation_type']=rebuilt['relation_type']
+            sr['source_packet_anchor_ids']=[int(a['id']) for a in b.get('anchors',[]) if type(a.get('id')) is int]
+            c.update(domain=domain,cited_anchor_ids=[a['id'] for a in b['anchors']],source_plan=copy.deepcopy(rebuilt['source_plan']),
+                     exact_answers=copy.deepcopy(rebuilt['fixed_answers']),selector_relation=sr,contract_type=b['contract_type'],
                      status='R59_RAW',schema_version=R59_SCHEMA_VERSION,public_clues=False)
+            for k in ('task1_anchor_id','task1_result','task2_anchor_id','task2_result','dependency_reason'): c.pop(k,None)
             # Grounding ownership belongs to Python.  Discard Writer-authored clues
             # and derive them only from exact source_plan bindings.
             c['clues']=[]
@@ -2348,7 +2311,7 @@ def r59_prejudge_errors(c,q):
     # R67: a production semantic selector is an explicit precondition for spending
     # Writer/Judge budget. Offline regression candidates may omit this field.
     sem=(c.get('selector_relation') or {}).get('semantic_assessment')
-    if sem is not None and not _r67_assessment_pass(sem):
+    if sem is not None and not _r70_assessment_pass(sem):
         errors.append('R67_SEMANTIC_GATE_NOT_MET')
     # R67: Writer must not invent a numbered/listed public structure that the
     # source-bound plan never supplied. Diagnostics 16 produced a biology item

@@ -11,7 +11,7 @@ class R65Diagnostics14Regression(unittest.TestCase):
             self.assertGreater(len(pool),0,domain)
             self.assertEqual(pool.diagnostics.get('selector_calls'),0)
             self.assertEqual(pool.diagnostics.get('selector_fallback'),'PYTHON_OFFLINE_TEST_ONLY')
-            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R69_EXTRACTIVE_RESULT_DIVERSITY_NO_REJECTED_FALLBACK')
+            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R70_SOURCE_PACKET_THEN_WRITER_CONSTRUCTION')
 
     def test_fixed_answers_and_source_plan_remain_python_owned(self):
         pool=cc._r59_select_bundles('', 'gpt-5.6-luna', DB, '건설기술', wanted=3)

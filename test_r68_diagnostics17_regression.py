@@ -103,7 +103,7 @@ class R68Diagnostics17Regression(unittest.TestCase):
         self.assertNotIn('criterion_conflict_resolution',calls[0][2])
 
     def test_versions_are_r68(self):
-        self.assertEqual(eb.BUILDER_API_VERSION,'ACTUAL-EXAM-TRANSFER-R69-20260907')
+        self.assertEqual(eb.BUILDER_API_VERSION,'ACTUAL-EXAM-TRANSFER-R70-20260908')
 
 
 if __name__=='__main__':
