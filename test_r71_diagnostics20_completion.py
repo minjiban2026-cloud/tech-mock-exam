@@ -47,4 +47,4 @@ def test_r71_writer_prompt_contains_atomic_whitelist_and_anti_predecision_rules(
     assert 'variant_id 0,1' in w
 
 def test_r71_version():
-    assert eb.BUILDER_API_VERSION=='ACTUAL-EXAM-TRANSFER-R72-20260908'
+    assert eb.BUILDER_API_VERSION=='ACTUAL-EXAM-TRANSFER-R73-20260908'

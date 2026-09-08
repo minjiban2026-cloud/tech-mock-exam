@@ -45,4 +45,4 @@ def test_r70_prompt_separates_source_packet_from_final_quality():
     assert 'task1_result' in w and 'allowed_results' in w
 
 def test_r70_version():
-    assert eb.BUILDER_API_VERSION=='ACTUAL-EXAM-TRANSFER-R72-20260908'
+    assert eb.BUILDER_API_VERSION=='ACTUAL-EXAM-TRANSFER-R73-20260908'

@@ -1499,11 +1499,11 @@ def _r59_prompt(domain,bundles,official):
     return f"""대한민국 중등 기술 임용 4점 문항의 자료 구성 Writer다. 영역: {domain}
 실제 기출 구조 참고(기술 사실/정답 복사 금지): {json.dumps(official,ensure_ascii=False)[:5200]}
 검증된 SOURCE PACKET: {json.dumps(payload,ensure_ascii=False)}
-R71에서는 각 anchor의 allowed_results가 Python이 미리 검증한 채점 가능한 exact source fragment다. task1_result/task2_result는 반드시 선택한 anchor의 allowed_results 중 하나를 글자 그대로 복사한다. allowed_results 밖 문자열, 동의어, 요약, 임의 부분문자열은 금지한다. 가능하면 broad heading/항목명보다 실제 조건·결과·오차·효과·범위·절차를 나타내는 concrete allowed_result를 우선한다.
+R73에서는 각 anchor의 allowed_results가 Python이 미리 검증한 채점 가능한 exact source fragment다. task1_result/task2_result는 반드시 선택한 anchor의 allowed_results 중 하나를 글자 그대로 복사한다. allowed_results 밖 문자열, 동의어, 요약, 임의 부분문자열은 금지한다. 가능하면 broad heading/항목명보다 실제 조건·결과·오차·효과·범위·절차를 나타내는 concrete allowed_result를 우선한다.
 자유도는 시험 상황 구성에만 있다. 학생 오판, 관찰 순서, 조건 변화, 비교 대상 배치는 새로 구성할 수 있지만 source에 없는 작동 원리·효과·수치·법칙·재료 특성·장치 기능을 기술 사실처럼 추가하지 않는다. source에 없는 숫자를 판단 근거로 발명하지 않는다.
 ①은 source의 둘 이상의 단서를 조합해 잘못 적용된 기준/결과를 판정하고, ②는 ① 결과를 필수 입력으로 사용해 조건이 달라진 상황을 판단한다. ① 없이 ②가 독립적으로 풀리면 안 된다. 두 문항 모두 정의→명칭 찾기가 되면 안 되고 최소 한 문항은 조건 비교/원인 진단/절차 교정/관계·수치 적용/범위 변화 중 하나를 수행한다.
 정답/result phrase뿐 아니라 그 핵심 토큰을 공개 지문이나 task에서 사실상 재진술하지 않는다. 특히 'X가 잘못되었다/틀렸다/오류다'처럼 ① 또는 ②의 판정을 자료가 미리 확정하는 문장을 쓰지 않는다. 학생은 하나의 주장을 해야 하지만, 그 주장이 틀렸다는 평가는 수험생이 내려야 한다. 추가 상황에도 정답 판정이나 정답 범주를 미리 선언하지 않는다.
-4점 난도를 위해 최소 한 소문항은 두 source 사실의 비교, 수치/범위 적용, 조건 변화, 원인-결과 연결, 절차 선택 중 하나를 실제로 수행해야 한다. 단순히 source 문장을 다른 말로 바꾸거나 두 명칭을 각각 찾는 구조는 omissions로 보낸다.
+4점 난도를 위해 최소 한 소문항은 두 source 사실의 비교, 수치/범위 적용, 조건 변화, 원인-결과 연결, 절차 선택 중 하나를 실제로 수행해야 한다. 단순히 source 문장을 다른 말로 바꾸거나 두 명칭을 각각 찾는 구조는 omissions로 보낸다. 특히 ①을 한 source 단서만 보고 바로 명칭화할 수 있게 만들지 말고, 최소 두 개의 source-supported 관찰/조건을 함께 판별해야 결과가 정해지게 한다. ②도 단순히 시험 조건명이나 분류명을 회상하는 데서 끝내지 말고, ①에서 확정한 기준을 바뀐 조건에 적용해 선택·수정·비교 결과가 달라지도록 구성한다. Judge 기준상 inferential_distance와 difficulty_fit이 각각 4 이상이 될 정도의 실제 판단 단계를 목표로 한다.
 정답/result phrase를 공개 지문에 그대로 쓰지 않는다. source 안의 경쟁 단서 또는 조건 차이를 함께 배치한다. task1_anchor_id/task2_anchor_id는 packet에 실제 존재하고 서로 달라야 한다. dependency_reason에는 왜 ①의 결과가 ②에 필수인지 구체적으로 쓴다. 근거를 요구하면 선택한 evidence가 실제 채점 가능해야 한다. binding quote 12자 이상 연속 복사, 원자료에 없는 번호/보기/표 항목 발명은 금지한다. clues는 비운다. 각 bundle에서 서로 다른 scored anchor pair/result 조합으로 고품질 후보를 만들 수 있으면 variant_id 0,1로 최대 2개까지 출력한다. 같은 pair/result의 말바꾸기 변형은 금지한다. 충분한 비회상형 문항을 만들 수 없으면 omissions로 보낸다.
 JSON 객체만 출력:
 {{"contracts":[{{"bundle_id":0,"variant_id":0,"topic":"문항 주제","clues":[],"task1_anchor_id":123,"task1_result":"evidence의 정확한 짧은 문자열","task2_anchor_id":124,"task2_result":"evidence의 정확한 짧은 문자열","dependency_reason":"①에서 확정한 기준을 적용해야 ②의 바뀐 조건을 판정할 수 있다.","student_claim":"검토할 학생 판단","transfer_case":"① 결과를 사용해야 하는 후속 상황","tasks":["① 판단·결과·근거 요구","② ① 결과를 사용하는 후속 판단·근거 요구"],"reasoning_chain":["자료 분석","중간 판단","후속 적용"],"task2_uses_task1":true}}],"omissions":[{{"bundle_id":0,"reason":"작성 불가 이유"}}]}}
@@ -2143,7 +2143,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=180,max_candidates=max(48,wanted*12))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R72-BOUNDED-ATOMIC-CERTIFICATION-1'
+    diag['selector_diagnostic_version']='R73-DIVERSITY-ATOMIC-CERTIFICATION-1'
     forbidden_anchor_pairs={tuple(sorted(map(int,x))) for x in (forbidden_anchor_pairs or []) if isinstance(x,(list,tuple,set)) and len(x)>=2}
     diag['preferred_contract_types']=list(preferred_types or R59_ALLOWED_TYPES)
     diag['selector_model']=model if api_key else 'PYTHON_FALLBACK_NO_KEY'
@@ -2266,7 +2266,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     if api_key and not selector_completed:
         diag['selector_technical_failure']=True
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R72_SOURCE_PACKET_ATOMIC_RESULT_BOUNDED_WRITER'
+    diag['selection_strategy']='R73_SOURCE_PACKET_ATOMIC_RESULT_DIFFICULTY_WRITER'
 
     seen=set()
     for r in selected:
@@ -2296,14 +2296,14 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None,preferr
     size=int(pool_size or (4 if need<=1 else 6))
     bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size,preferred_types=preferred_types,forbidden_anchor_pairs=forbidden_anchor_pairs)
     out=GenerationPool(diagnostics=getattr(bundles,'diagnostics',None));diag=out.diagnostics
-    diag['architecture']='R72_BOUNDED_SOURCE_FACT__ATOMIC_RESULT__WRITER_INSTANCE__JUDGE'
+    diag['architecture']='R73_BOUNDED_DIVERSITY_SOURCE_FACT__ATOMIC_RESULT__WRITER_INSTANCE__JUDGE'
     diag['writer_result_ownership']='PYTHON_ATOMIC_SOURCE_CANDIDATE_ONLY'
     diag['contract_type_ownership']='COVERAGE_TARGET_NOT_PYTHON_MINER_LABEL'
     if not bundles:return out
     from openai import OpenAI
     official=_r59_official_examples(db_path,2)
     client=OpenAI(api_key=api_key,timeout=45,max_retries=0)
-    # R72: fewer, larger Writer batches.  Long serial writer chains were the main
+    # R73: fewer, larger Writer batches.  Long serial writer chains were the main
     # cause of Streamlit requests remaining open for tens of minutes.
     writer_batch_size=3
     for start in range(0,len(bundles),writer_batch_size):

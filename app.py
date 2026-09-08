@@ -36,7 +36,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: R72 · bounded one-domain run · immediate PASS checkpoint · atomic result whitelist · broken PASS quarantine · real Judge-PASS only")
+st.caption("배포 버전: R73 · bounded 1-domain · Judge 최대 2후보 · reject-pair diversity memory · atomic source result · real Judge-PASS checkpoint")
 
 def secret(name, default=""):
     try:
@@ -356,22 +356,31 @@ with tabs[2]:
             st.error("인증에는 AI Writer, AI Judge, OPENAI_API_KEY가 모두 필요합니다.")
         else:
             _progress=st.empty()
-            def _r72_progress(evt):
+            def _r73_progress(evt):
                 _domain=evt.get("domain") or ""
                 _stage=evt.get("stage") or ""
                 _elapsed=evt.get("elapsed_seconds",0)
-                _progress.info(f"R72 진행: {_domain} · {_stage} · {_elapsed}초")
-            def _r72_checkpoint(_contracts_now,_inventory_now,_accepted_contract):
+                _progress.info(f"R73 진행: {_domain} · {_stage} · {_elapsed}초")
+            def _r73_checkpoint(_contracts_now,_inventory_now,_accepted_contract):
                 st.session_state["R59_CONTRACTS"]=_contracts_now
                 if archive_is_configured(url,skey) and has_service:
                     save_certification_state(url,skey,_contracts_now,_inventory_now)
-            with st.spinner("한 번에 부족 영역 1개만 처리합니다. PASS는 즉시 저장되며 다음 클릭에서 이어집니다..."):
+            with st.spinner("한 번에 부족 영역 1개를 처리합니다. 유효 후보는 최대 2개 Judge하고, REJECT된 source pair는 다음 클릭에서 제외합니다..."):
                 try:
                     _run=certify_r59_missing_slots(DB,_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed),
-                                                   time_budget_seconds=300,max_domains_per_run=1,
-                                                   progress_callback=_r72_progress,checkpoint_callback=_r72_checkpoint)
+                                                   time_budget_seconds=240,max_domains_per_run=1,max_judge_per_domain=2,
+                                                   progress_callback=_r73_progress,checkpoint_callback=_r73_checkpoint,
+                                                   forbidden_attempts=st.session_state.get('R73_REJECTED_PAIRS',{}))
                     st.session_state["R59_CONTRACTS"]=_run.get("contracts",st.session_state.get("R59_CONTRACTS",_contracts))
                     st.session_state["R59_CERT_RUN"]=_run
+                    _rej=st.session_state.get("R73_REJECTED_PAIRS",{})
+                    if not isinstance(_rej,dict): _rej={}
+                    for _d,_pairs in (_run.get("rejected_pairs") or {}).items():
+                        _seen={tuple(x) for x in (_rej.get(_d) or []) if isinstance(x,(list,tuple)) and len(x)>=2}
+                        for _p in (_pairs or []):
+                            if isinstance(_p,(list,tuple)) and len(_p)>=2: _seen.add(tuple(_p[:2]))
+                        _rej[_d]=[list(x) for x in sorted(_seen)]
+                    st.session_state["R73_REJECTED_PAIRS"]=_rej
                     if archive_is_configured(url,skey) and has_service:
                         try:
                             save_certification_state(url,skey,st.session_state["R59_CONTRACTS"],_run.get("after_inventory",{}))

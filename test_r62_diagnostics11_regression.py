@@ -85,7 +85,7 @@ class Diagnostics11Regression(unittest.TestCase):
         pairs=[tuple(b["selector_relation"]["anchor_ids"]) for b in bundles]
         unordered=[frozenset(x) for x in pairs]
         self.assertEqual(len(unordered),len(set(unordered)))
-        self.assertEqual(bundles.diagnostics.get("selection_strategy"),"R72_SOURCE_PACKET_ATOMIC_RESULT_BOUNDED_WRITER")
+        self.assertEqual(bundles.diagnostics.get("selection_strategy"),"R73_SOURCE_PACKET_ATOMIC_RESULT_DIFFICULTY_WRITER")
 
     def test_archive_state_uses_hidden_row_without_schema_change(self):
         calls=[]

@@ -4738,9 +4738,9 @@ certify_r57_missing_slots = certify_r58_missing_slots
 
 # ========================= R59 actual-exam transfer certification =========================
 def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',judge_model=None,domains=None,seed=None,
-                               time_budget_seconds=300,max_domains_per_run=1,
-                               progress_callback=None,checkpoint_callback=None):
-    """R72 bounded incremental certification.
+                               time_budget_seconds=240,max_domains_per_run=1,max_judge_per_domain=2,
+                               progress_callback=None,checkpoint_callback=None,forbidden_attempts=None):
+    """R73 bounded incremental certification with reject diversity memory.
 
     A Streamlit request must return predictably.  Therefore one click processes at
     most ``max_domains_per_run`` missing domains (default 1), uses one generation
@@ -4760,8 +4760,9 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
     if not domains or any(d not in DOMAINS for d in domains): raise ValueError('유효한 출제 영역을 선택하세요.')
     if not api_key: raise ValueError('R59 인증에는 API key가 필요합니다.')
     existing=copy.deepcopy(list(contracts or [])); jm=judge_model or model; style=official_style_profile(db_path)
+    forbidden_attempts=forbidden_attempts if isinstance(forbidden_attempts,dict) else {}
     before=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)
-    logs=[]; reviews=[]; accepted=[]
+    logs=[]; reviews=[]; accepted=[]; rejected_pairs_out={}
     started=time.monotonic(); deadline=started+max(90,int(time_budget_seconds or 300)); processed_domains=0
 
     def progress(stage,domain=None,detail=None):
@@ -4787,6 +4788,12 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
         processed_domains+=1; progress('domain_start',d,{'need':need})
         initial_need=need
         persisted_pairs={p for p in (pair_sig(ec) for ec in existing if ec.get('domain')==d) if p}
+        prior_rejected=set()
+        for raw_pair in (forbidden_attempts.get(d) or []):
+            if isinstance(raw_pair,(list,tuple)) and len(raw_pair)>=2:
+                try: prior_rejected.add(tuple(sorted((int(raw_pair[0]),int(raw_pair[1])))))
+                except Exception: pass
+        forbidden_pairs=persisted_pairs | prior_rejected
         preferred_types=[t for t in ('contrastive_error_transfer','criterion_conflict_resolution') if t not in set(inv['domains'][d].get('r59_ai_verified_contract_types',[]) or [])]
         # Keep the pool deliberately small: selector returns reserves in the same call,
         # so a second selector round inside one HTTP request is unnecessary.
@@ -4795,22 +4802,40 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
         try:
             progress('generation_start',d,{'pool_size':pool_size,'preferred_types':preferred_types})
             pool=synthesize_r59_pool(api_key,model,db_path,d,need,pool_size=pool_size,
-                                     preferred_types=preferred_types,forbidden_anchor_pairs=sorted(persisted_pairs))
+                                     preferred_types=preferred_types,forbidden_anchor_pairs=sorted(forbidden_pairs))
             generation=copy.deepcopy(getattr(pool,'diagnostics',{})); generation['round_index']=1
             progress('generation_done',d,{'writer_returned':generation.get('writer_returned',0),'python_validated':generation.get('python_validated',0)})
         except Exception as ex:
             logs.append({'domain':d,'need_before':initial_need,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'missing_after':need,'generation_error':type(ex).__name__+': '+str(ex)})
             progress('domain_error',d,type(ex).__name__); continue
-        if seed is not None: random.Random(str(seed)+':'+d).shuffle(pool)
-        # At most two Judge calls for a domain.  This is enough to exploit Writer
-        # diversity while preventing one weak domain from monopolising the request.
-        judge_cap=1
+        def candidate_priority(c):
+            sr=c.get('selector_relation') or {}; sa=sr.get('semantic_assessment') or {}
+            score=0.0
+            score += float(sa.get('construction_potential',0) or 0)*4
+            score += float(sa.get('evidence_diversity',0) or 0)*2
+            score += float(sr.get('reasoning_viability',0) or 0)*0.15
+            score += float(sr.get('operation_score',0) or 0)*0.12
+            text=' '.join((c.get('tasks') or []))+ ' '+str(c.get('student_claim',''))+' '+str(c.get('transfer_case',''))
+            score += 2*len(set(re.findall(r'비교|적용|변화|바뀌|달라|수정|계산|산출|조건|범위|원인|결과|절차',text)))
+            score -= 2*len(re.findall(r'명칭을 쓰|명칭과|용어를 쓰|해당 .*명칭',text))
+            return score
+        pool=sorted(list(pool),key=candidate_priority,reverse=True)
+        if seed is not None and len(pool)>1:
+            # deterministic tie-break only; do not destroy quality ranking
+            rnd=random.Random(str(seed)+':'+d); keyed=[]
+            for i,c in enumerate(pool): keyed.append((-candidate_priority(c),rnd.random(),i,c))
+            pool=[x[-1] for x in sorted(keyed)]
+        judge_cap=max(1,min(2,int(max_judge_per_domain or 2)))
+        pair_outcomes={}
+        attempted_contracts=set()
         for c in pool:
             if tested>=judge_cap or time.monotonic()>=deadline: break
             ps=pair_sig(c)
-            if ps:
-                if ps in attempted_pairs: continue
-                attempted_pairs.add(ps)
+            cid=str(c.get('contract_id') or '')
+            variant_sig=(ps,cid)
+            if variant_sig in attempted_contracts: continue
+            attempted_contracts.add(variant_sig)
+            if ps: attempted_pairs.add(ps)
             ok,validation=validate_r59_contract(db_path,d,c)
             if not ok: continue
             validated+=1; c=copy.deepcopy(c); c['validation']=validation
@@ -4824,8 +4849,11 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
                 rv=dict(rv, **{'pass':False,'fatal_flags':['INVALID_JUDGE_EVIDENCE'],'reason':'Judge PASS evidence is incomplete or below threshold'})
             sig=_coverage_failure_signals(rv,q)
             reviews.append({'domain':d,'round':1,'contract_type':c.get('contract_type'),'topic':c.get('topic'),'pass':rv.get('pass'),'reason':rv.get('reason',''),'scores':rv.get('scores',{}),'fatal_flags':rv.get('fatal_flags',[]),'failure_signals':sig,'question':copy.deepcopy(q),'judge_review':copy.deepcopy(rv),'contract_id':c.get('contract_id')})
-            progress('judge_done',d,{'pass':bool(review_passes(rv)),'topic':c.get('topic')})
-            if review_passes(rv):
+            _passed=bool(review_passes(rv))
+            progress('judge_done',d,{'pass':_passed,'topic':c.get('topic')})
+            if ps:
+                pair_outcomes.setdefault(ps,[]).append(_passed)
+            if _passed:
                 passed+=1; cc=copy.deepcopy(c); cc['status']='R59_AI_VERIFIED'; cc['ai_quality']=copy.deepcopy(rv); cc['judge_model']=jm
                 attach_receipt(cc); existing=upsert_contracts(existing,[cc]); accepted.append(cc); kept+=1
                 if callable(checkpoint_callback):
@@ -4838,11 +4866,15 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
                 # Once the current type is filled, let the next click target the other
                 # missing type rather than spending more calls in this request.
                 if c.get('contract_type') in set(inv_now.get('r59_ai_verified_contract_types',[]) or []): break
+        for ps, outcomes in pair_outcomes.items():
+            if outcomes and not any(outcomes):
+                rejected_pairs_out.setdefault(d,[]).append(list(ps))
         missing_after=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing']
         logs.append({'domain':d,'need_before':initial_need,'pool_constructed':generation.get('writer_returned',0),'python_validated':validated,
                      'judge_tested':tested,'judge_pass':passed,'accepted':kept,'missing_after':missing_after,
                      'accepted_types':[x.get('contract_type') for x in accepted if x.get('domain')==d],
-                     'generation':generation,'pre_judge_rejections':pre_judge_rejections,'attempted_pair_count':len(attempted_pairs),
+                     'generation':generation,'pre_judge_rejections':pre_judge_rejections,'attempted_pair_count':len(attempted_pairs),'prior_rejected_pair_count':len(prior_rejected),
+                     'rejected_pairs_next_run':rejected_pairs_out.get(d,[]),'candidate_priority_policy':'R73_DIFFICULTY_FIRST',
                      'elapsed_seconds':round(time.monotonic()-started,1)})
         progress('domain_done',d,{'missing_after':missing_after,'accepted':kept})
     after=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS); fc={}
@@ -4851,7 +4883,7 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
             for z in r.get('failure_signals',[]): fc[z]=fc.get(z,0)+1
     elapsed=round(time.monotonic()-started,1)
     progress('run_done',detail={'elapsed_seconds':elapsed,'after_verified':after.get('verified_slots',0)})
-    return {'mode':'R72_BOUNDED_CHECKPOINTED_ATOMIC_GATE','builder_api_version':'ACTUAL-EXAM-TRANSFER-R72-20260908','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,
-            'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two')),'elapsed_seconds':elapsed,'processed_domains':processed_domains,'bounded_run':True}}
+    return {'mode':'R73_BOUNDED_DIVERSITY_CHECKPOINT_GATE','builder_api_version':'ACTUAL-EXAM-TRANSFER-R73-20260908','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'rejected_pairs':rejected_pairs_out,
+            'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two')),'elapsed_seconds':elapsed,'processed_domains':processed_domains,'bounded_run':True,'max_judge_per_domain':max(1,min(2,int(max_judge_per_domain or 2)))}}
 
-BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R72-20260908'
+BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R73-20260908'
