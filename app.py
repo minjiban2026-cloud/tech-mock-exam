@@ -36,7 +36,7 @@ DB=ROOT/"knowledge.db"
 st.set_page_config(page_title="기술 임용 자동검증 모의고사",layout="wide")
 st.title("기술 임용 A/B 자동검증 모의고사 생성기")
 st.caption("서브노트=정답 근거 · 실제 기출=문항 구조 · Python=계산/검증 · AI=표현만 담당 · Supabase=모의고사 영구 보관")
-st.caption("배포 버전: R71 · source-fact/instance 분리 · Python atomic result whitelist · bounded diversity retry · broken PASS quarantine · real Judge-PASS only")
+st.caption("배포 버전: R72 · bounded one-domain run · immediate PASS checkpoint · atomic result whitelist · broken PASS quarantine · real Judge-PASS only")
 
 def secret(name, default=""):
     try:
@@ -355,23 +355,36 @@ with tabs[2]:
         if not (use_ai and use_ai_judge and key):
             st.error("인증에는 AI Writer, AI Judge, OPENAI_API_KEY가 모두 필요합니다.")
         else:
-            with st.spinner("실제 기출 구조 참조 → 고정 후보 풀 생성 → Python hard gate → source context 포함 Judge 인증 중..."):
+            _progress=st.empty()
+            def _r72_progress(evt):
+                _domain=evt.get("domain") or ""
+                _stage=evt.get("stage") or ""
+                _elapsed=evt.get("elapsed_seconds",0)
+                _progress.info(f"R72 진행: {_domain} · {_stage} · {_elapsed}초")
+            def _r72_checkpoint(_contracts_now,_inventory_now,_accepted_contract):
+                st.session_state["R59_CONTRACTS"]=_contracts_now
+                if archive_is_configured(url,skey) and has_service:
+                    save_certification_state(url,skey,_contracts_now,_inventory_now)
+            with st.spinner("한 번에 부족 영역 1개만 처리합니다. PASS는 즉시 저장되며 다음 클릭에서 이어집니다..."):
                 try:
-                    _run=certify_r59_missing_slots(DB,_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed))
-                    st.session_state["R59_CONTRACTS"]=_run.get("contracts",_contracts)
+                    _run=certify_r59_missing_slots(DB,_contracts,domains=domains,api_key=key,model=model,judge_model=judge_model,seed=int(seed),
+                                                   time_budget_seconds=300,max_domains_per_run=1,
+                                                   progress_callback=_r72_progress,checkpoint_callback=_r72_checkpoint)
+                    st.session_state["R59_CONTRACTS"]=_run.get("contracts",st.session_state.get("R59_CONTRACTS",_contracts))
                     st.session_state["R59_CERT_RUN"]=_run
                     if archive_is_configured(url,skey) and has_service:
                         try:
                             save_certification_state(url,skey,st.session_state["R59_CONTRACTS"],_run.get("after_inventory",{}))
                         except Exception as _persist_ex:
-                            st.warning("Judge-PASS 상태의 Supabase 저장 실패: "+str(_persist_ex))
+                            st.warning("Judge-PASS 상태의 Supabase 최종 저장 실패: "+str(_persist_ex))
                     st.rerun()
                 except Exception as _ex:
+                    st.session_state["R59_CERT_LAST_ERROR"]=str(_ex)
                     st.error("인증 실패: "+str(_ex))
     if "R59_CERT_RUN" in st.session_state:
         _rr=st.session_state["R59_CERT_RUN"]; _sm=_rr.get("summary",{})
         st.markdown("### 🧪 실제기출 기반 인증 결과")
-        st.caption(f"시작 {_sm.get('before_verified',0)}/18 → 현재 {_sm.get('after_verified',0)}/18 · Judge {_sm.get('judge_tested',0)}회 · PASS {_sm.get('judge_pass',0)} · REJECT {_sm.get('judge_reject',0)}")
+        st.caption(f"시작 {_sm.get('before_verified',0)}/18 → 현재 {_sm.get('after_verified',0)}/18 · 처리 영역 {_sm.get('processed_domains',0)}개 · {_sm.get('elapsed_seconds',0)}초 · Judge {_sm.get('judge_tested',0)}회 · PASS {_sm.get('judge_pass',0)} · REJECT {_sm.get('judge_reject',0)}")
         with st.expander("영역별 생성/검증 로그", expanded=True): st.json(_rr.get("domain_logs",[]))
         with st.expander("Judge 실패 유형", expanded=True): st.json(_rr.get("failure_class_counts",{}))
         with st.expander("Judge 원본 결과", expanded=False): st.json(_rr.get("reviews",[]))

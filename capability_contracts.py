@@ -2143,7 +2143,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=180,max_candidates=max(48,wanted*12))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R71-ATOMIC-RESULT-ADAPTIVE-CERTIFICATION-1'
+    diag['selector_diagnostic_version']='R72-BOUNDED-ATOMIC-CERTIFICATION-1'
     forbidden_anchor_pairs={tuple(sorted(map(int,x))) for x in (forbidden_anchor_pairs or []) if isinstance(x,(list,tuple,set)) and len(x)>=2}
     diag['preferred_contract_types']=list(preferred_types or R59_ALLOWED_TYPES)
     diag['selector_model']=model if api_key else 'PYTHON_FALLBACK_NO_KEY'
@@ -2232,7 +2232,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
                         seen.add(x); r=copy.deepcopy(shortlist[x]); r['semantic_assessment']=copy.deepcopy(assessment_by_id[x]);
                         if preferred_types: r['contract_type']=preferred_types[0]; r['relation_type']='contrast' if r['contract_type']=='contrastive_error_transfer' else 'conditional_choice'
                         selected.append(r); reserve_count+=1
-                        if reserve_count>=2: break
+                        if reserve_count>=1: break
             composed_count=0
             if len(selected)<wanted and isinstance(raw.get('composed_plans'),list):
                 used_pairs={tuple(r.get('anchor_ids') or []) for r in selected}
@@ -2266,7 +2266,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     if api_key and not selector_completed:
         diag['selector_technical_failure']=True
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R71_SOURCE_PACKET_ATOMIC_RESULT_THEN_WRITER'
+    diag['selection_strategy']='R72_SOURCE_PACKET_ATOMIC_RESULT_BOUNDED_WRITER'
 
     seen=set()
     for r in selected:
@@ -2296,24 +2296,21 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None,preferr
     size=int(pool_size or (4 if need<=1 else 6))
     bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size,preferred_types=preferred_types,forbidden_anchor_pairs=forbidden_anchor_pairs)
     out=GenerationPool(diagnostics=getattr(bundles,'diagnostics',None));diag=out.diagnostics
-    diag['architecture']='R71_SOURCE_FACT__ATOMIC_RESULT__WRITER_INSTANCE__JUDGE'
+    diag['architecture']='R72_BOUNDED_SOURCE_FACT__ATOMIC_RESULT__WRITER_INSTANCE__JUDGE'
     diag['writer_result_ownership']='PYTHON_ATOMIC_SOURCE_CANDIDATE_ONLY'
     diag['contract_type_ownership']='COVERAGE_TARGET_NOT_PYTHON_MINER_LABEL'
     if not bundles:return out
     from openai import OpenAI
     official=_r59_official_examples(db_path,2)
-    client=OpenAI(api_key=api_key,timeout=75,max_retries=0)
-    for start in range(0,len(bundles),2):
-        chunk=bundles[start:start+2];diag['writer_calls']+=1
+    client=OpenAI(api_key=api_key,timeout=45,max_retries=0)
+    # R72: fewer, larger Writer batches.  Long serial writer chains were the main
+    # cause of Streamlit requests remaining open for tens of minutes.
+    writer_batch_size=3
+    for start in range(0,len(bundles),writer_batch_size):
+        chunk=bundles[start:start+writer_batch_size];diag['writer_calls']+=1
         try:
             prompt=_r59_prompt(domain,chunk,official)
-            try:
-                rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'high'})
-            except Exception as first_ex:
-                if type(first_ex).__name__ not in ('APITimeoutError','APIConnectionError'):
-                    raise
-                diag.setdefault('writer_retry_reasons',[]).append(type(first_ex).__name__)
-                rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'medium'})
+            rr=client.responses.create(model=model,input=prompt,reasoning={'effort':'medium'})
             raw=json.loads(_strip_json(rr.output_text))
             if not isinstance(raw,dict) or not isinstance(raw.get('contracts'),list):raise ValueError('CONTRACTS_ARRAY_REQUIRED')
             arr=raw['contracts']

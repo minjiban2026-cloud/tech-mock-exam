@@ -39,4 +39,4 @@ def test_r69_prompt_requests_extractive_results():
     assert '정확한 부분문자열' in prompt
 
 def test_r69_versions():
-    assert eb.BUILDER_API_VERSION=='ACTUAL-EXAM-TRANSFER-R71-20260908'
+    assert eb.BUILDER_API_VERSION=='ACTUAL-EXAM-TRANSFER-R72-20260908'
