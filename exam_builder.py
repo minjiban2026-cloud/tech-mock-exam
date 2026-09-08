@@ -4755,7 +4755,16 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
             logs.append({'domain':d,'need_before':0,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'skipped':'already_verified'}); continue
         try:
             preferred_types=[t for t in ('contrastive_error_transfer','criterion_conflict_resolution') if t not in set(inv['domains'][d].get('r59_ai_verified_contract_types',[]) or [])]
-            pool=synthesize_r59_pool(api_key,model,db_path,d,need,pool_size=(4 if need==1 else 6),preferred_types=preferred_types)
+            # R69: never spend another selector/Writer/Judge attempt on a scored
+            # anchor pair already present in persisted history, even when that old
+            # contract is quarantined or merely a different wording of the same pair.
+            used_pairs=[]
+            for ec in existing:
+                if ec.get('domain')!=d: continue
+                ids=((ec.get('selector_relation') or {}).get('anchor_ids') or ec.get('cited_anchor_ids') or [])
+                ids=[x for x in ids if type(x) is int][:2]
+                if len(ids)>=2: used_pairs.append(tuple(sorted(ids)))
+            pool=synthesize_r59_pool(api_key,model,db_path,d,need,pool_size=(4 if need==1 else 6),preferred_types=preferred_types,forbidden_anchor_pairs=used_pairs)
         except Exception as ex:
             logs.append({'domain':d,'need_before':need,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'missing_after':need,'generation_error':str(ex)})
             continue
@@ -4791,6 +4800,6 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
     for r in reviews:
         if r.get('pass') is False:
             for z in r.get('failure_signals',[]): fc[z]=fc.get(z,0)+1
-    return {'mode':'R68_MULTI_ANCHOR_COVERAGE_AWARE_GATE','builder_api_version':'ACTUAL-EXAM-TRANSFER-R68-20260907','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
+    return {'mode':'R69_EXTRACTIVE_RESULT_DIVERSITY_GATE','builder_api_version':'ACTUAL-EXAM-TRANSFER-R69-20260907','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
 
-BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R68-20260907'
+BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R69-20260907'

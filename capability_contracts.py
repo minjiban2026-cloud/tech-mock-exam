@@ -1508,7 +1508,7 @@ anchors에는 채점용 2개 anchor 외에 같은 원자료의 인접 support an
 추가 상황은 ①의 결과를 단순 재진술하지 말고, ①에서 바로잡은 대상/기준을 사용해야만 후속 판단이 가능하도록 조건을 바꾼다.
 ②가 단지 '추가 조건 한 줄을 보고 하위 명칭 맞히기'가 되면 작성하지 않는다. contract_type이 contrastive_error_transfer이면 ①에서 두 기준/대상을 대조해 오류를 판별하고, ②에서는 그 대조 기준을 조건이 바뀐 사례에 전이한다. criterion_conflict_resolution이면 서로 충돌하는 기준 중 적용 기준을 ①에서 결정하고 ②에서 다른 조건에 재적용한다. ②에는 ①의 결과를 전제로 효과·조건·원리·수치·적용 여부 중 하나를 판단하는 실제 전이를 우선한다.
 두 소문항 모두 '정의의 특징을 그대로 주고 명칭을 쓰기' 형태면 해당 bundle을 생략한다. 최소 한 소문항은 서로 경쟁하는 두 기준·두 조건·두 해석 중 무엇을 적용할지 판단해야 한다.
-selector_relation의 semantic_assessment가 있으면 그것이 4점 가치의 최소 조건이다. R68에서는 semantic_assessment가 inferential_distance 4 이상이어도 공개 문항을 너무 직접적으로 쓰면 Judge에서 3점으로 떨어질 수 있으므로, 정답을 가리기만 하는 것이 아니라 source 안의 경쟁 단서·조건 차이·원인/결과 중 최소 하나를 함께 제시하여 한 단계 이상의 판별을 거치게 한다. source_support·dependency·inferential_distance·transferability를 실제 공개 문항에서도 유지하고 rote_risk를 다시 높이는 단순 정의 변환을 하지 않는다.
+selector_relation의 semantic_assessment가 있으면 그것이 4점 가치의 최소 조건이다. R69에서는 semantic_assessment가 inferential_distance 4 이상이어도 공개 문항을 너무 직접적으로 쓰면 Judge에서 3점으로 떨어질 수 있으므로, 정답을 가리기만 하는 것이 아니라 source 안의 경쟁 단서·조건 차이·원인/결과 중 최소 하나를 함께 제시하여 한 단계 이상의 판별을 거치게 한다. source_support·dependency·inferential_distance·transferability를 실제 공개 문항에서도 유지하고 rote_risk를 다시 높이는 단순 정의 변환을 하지 않는다.
 selector_relation의 operation_score/reasoning_viability를 높게 만든 조건·인과·절차·관계 단서를 실제 판단에 사용한다. 단순 명칭 A와 명칭 B를 각각 맞히는 문항으로 바꾸지 않는다.
 ①과 ② 중 적어도 하나는 정답 명칭 외에 조건 변화, 원인-결과, 절차 순서, 수치/관계 해석 중 하나를 실제로 조작해야 한다. source가 그런 조작을 지원하지 않으면 omissions로 보낸다.
 작성 요구에 근거·이유·설명을 넣었다면 고정 source_plan에 그 설명을 채점할 구체적 근거가 있어야 한다. 명칭만 고정되어 있는데 장문의 설명을 요구하지 않는다.
@@ -1986,6 +1986,14 @@ def _r68_cluster_packets(anchors,max_clusters=8,max_anchors=8):
     return packets[:max_clusters]
 
 
+def _r69_exact_result(value, anchor):
+    v=_clean(value)
+    if not v or len(_norm(v))<2 or len(v)>80: return None
+    ev=_clean(anchor.get('evidence')); ans=_clean(anchor.get('answer')); topic=_clean(anchor.get('topic'))
+    nv=_norm(v)
+    if nv in _norm(ev) or nv==_norm(ans) or nv==_norm(topic): return v
+    return None
+
 def _r68_build_composed_relation(plan, cluster):
     if not isinstance(plan,dict) or str(plan.get('verdict','')).upper()!='SELECT': return None
     try:
@@ -2007,11 +2015,18 @@ def _r68_build_composed_relation(plan, cluster):
         return None
     rtype=str(plan.get('relation_type') or ('contrast' if typ=='contrastive_error_transfer' else 'conditional_choice'))
     fev=_clean(first.get('evidence')); sev=_clean(second.get('evidence'))
+    # R69: the scored result may be an exact source-extractive phrase from the
+    # evidence rather than the anchor heading. This removes the old pressure to
+    # turn every 4-point item into a pair of definition/label lookups. No model
+    # paraphrase is accepted: both values must occur literally in their source.
+    r1=_r69_exact_result(plan.get('task1_result'),first) or _clean(first.get('answer'))
+    r2=_r69_exact_result(plan.get('task2_result'),second) or _clean(second.get('answer'))
+    if _norm(r1)==_norm(r2): return None
     source_plan={'schema':'SOURCE_BOUND_TASK_PLAN_V1',
       'criterion':{'text':fev,'binding':{'anchor_id':a1,'quote':fev}},
       'transfer_condition':{'text':sev,'binding':{'anchor_id':a2,'quote':sev}},
-      'task1':{'result':{'value':_clean(first.get('answer')),'binding':{'anchor_id':a1,'quote':fev}},'reason':{'text':fev,'binding':{'anchor_id':a1,'quote':fev}}},
-      'task2':{'result':{'value':_clean(second.get('answer')),'binding':{'anchor_id':a2,'quote':sev}},'reason':{'text':sev,'binding':{'anchor_id':a2,'quote':sev}}},
+      'task1':{'result':{'value':r1,'binding':{'anchor_id':a1,'quote':fev}},'reason':{'text':fev,'binding':{'anchor_id':a1,'quote':fev}}},
+      'task2':{'result':{'value':r2,'binding':{'anchor_id':a2,'quote':sev}},'reason':{'text':sev,'binding':{'anchor_id':a2,'quote':sev}}},
       'dependency':{'input':'task1.result','output':'task2.result','required_result':{'anchor_id':a1,'quote':fev},
                     'why_required':(_clean(plan.get('dependency_reason')) if len(_norm(plan.get('dependency_reason') or ''))>=12 else '①에서 판별한 기준을 적용해야 ②의 조건 변화에 따른 결과를 결정할 수 있다.')}}
     from question_plans import validate_plan
@@ -2080,6 +2095,8 @@ SELECT 기준은 엄격하다: source_support>=4, dependency>=4, inferential_dis
 
 현재 coverage에서 우선 필요한 contract_type: {json.dumps(preferred_types,ensure_ascii=False)}. 가능하면 이 유형부터 채운다. 기존에 이미 인증된 유형을 다시 선택해 coverage를 낭비하지 않는다.
 
+R69 추가 규칙: composed_plans의 task1_result/task2_result에는 anchor 제목을 그대로 쓸 필요가 없다. evidence 안에 실제로 존재하는 짧고 채점 가능한 결과·조건·오차·효과 표현을 정확히 복사하여 쓸 수 있다. 단, source 문구의 정확한 부분문자열이어야 하고 새 사실/동의어/요약을 만들면 안 된다. 이 기능은 정의명 두 개를 맞히는 구조를 피하고 조건 판단의 실제 결과를 채점하기 위한 것이다. 가능하면 넓은 제목보다 evidence의 구체적 결과를 선택한다.
+
 R68 추가 규칙: 아래 cluster_packet에서는 Python이 관계를 미리 정하지 않았다. 같은 cluster 안에서 실제로 ①→② 의존성이 성립하는 두 scored anchor를 직접 선택할 수 있다. 나머지는 support_anchor_ids로만 사용한다. source 밖 사실을 만들 수 없고, task1_anchor_id와 task2_anchor_id는 반드시 같은 cluster에 실제 존재해야 한다. 두 정답 anchor만으로 약해도 support가 경쟁 기준·원인·조건을 제공하여 ①의 판단을 만들고 그 판단이 ②의 필수 입력이 된다면 composed_plans로 SELECT할 수 있다. 반대로 support를 장식으로만 붙이는 것은 REJECT한다.
 
 최대 {wanted}개의 selected_ids와 추가 예비 reserve_ids 최대 2개를 반환한다. reserve도 SELECT 기준을 모두 만족해야 한다. pair 후보만으로 부족하면 composed_plans를 사용해 전체 SELECT 수를 보충한다. 동일 scored anchor쌍의 중복 plan은 만들지 않는다.
@@ -2087,7 +2104,7 @@ R68 추가 규칙: 아래 cluster_packet에서는 Python이 관계를 미리 정
 후보: {json.dumps(payload,ensure_ascii=False)}
 cluster_packet: {json.dumps(cluster_payload,ensure_ascii=False)}
 JSON 객체만 출력:
-{{"assessments":[{{"candidate_id":0,"source_support":5,"dependency":4,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","reason":"짧은 이유"}}],"selected_ids":[0],"reserve_ids":[2],"composed_plans":[{{"cluster_id":0,"task1_anchor_id":1,"task2_anchor_id":2,"support_anchor_ids":[3],"contract_type":"contrastive_error_transfer","relation_type":"contrast","source_support":5,"dependency":5,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","dependency_reason":"①에서 판별한 기준이 ②의 달라진 조건에서 어떤 판단을 내려야 하는지 결정하는 데 반드시 필요한 이유","reason":"짧은 이유"}}],"rejected":{{"1":"짧은 이유"}}}}"""
+{{"assessments":[{{"candidate_id":0,"source_support":5,"dependency":4,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","reason":"짧은 이유"}}],"selected_ids":[0],"reserve_ids":[2],"composed_plans":[{{"cluster_id":0,"task1_anchor_id":1,"task2_anchor_id":2,"task1_result":"source evidence의 정확한 부분문자열","task2_result":"source evidence의 정확한 부분문자열","support_anchor_ids":[3],"contract_type":"contrastive_error_transfer","relation_type":"contrast","source_support":5,"dependency":5,"inferential_distance":4,"transferability":4,"rote_risk":1,"verdict":"SELECT","dependency_reason":"①에서 판별한 기준이 ②의 달라진 조건에서 어떤 판단을 내려야 하는지 결정하는 데 반드시 필요한 이유","reason":"짧은 이유"}}],"rejected":{{"1":"짧은 이유"}}}}"""
 
 
 def _r67_assessment_pass(row):
@@ -2107,7 +2124,7 @@ def _r67_assessment_pass(row):
 _r65_selector_prompt = _r67_selector_prompt
 
 
-def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=None):
+def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=None,forbidden_anchor_pairs=None):
     """R67 full-path selector: broad Python recall -> strict batched semantic quality gate.
 
     R64 proved that a strict lexical/operation threshold both missed usable relations
@@ -2118,7 +2135,8 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=180,max_candidates=max(48,wanted*12))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R68-MULTI-ANCHOR-COVERAGE-AWARE-GATE-1'
+    diag['selector_diagnostic_version']='R69-EXTRACTIVE-RESULT-DIVERSITY-GATE-1'
+    forbidden_anchor_pairs={tuple(sorted(map(int,x))) for x in (forbidden_anchor_pairs or []) if isinstance(x,(list,tuple,set)) and len(x)>=2}
     diag['preferred_contract_types']=list(preferred_types or R59_ALLOWED_TYPES)
     diag['selector_model']=model if api_key else 'PYTHON_FALLBACK_NO_KEY'
     diag['selector_calls']=0
@@ -2131,6 +2149,8 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     # quality is intentionally NOT decided by these numeric proxies anymore.
     eligible=[]
     for r in ranked:
+        if tuple(sorted(map(int,r.get('anchor_ids') or []))) in forbidden_anchor_pairs:
+            continue
         prof=r.get('operation_profiles') or []
         pair=r.get('anchors') or []
         if any(_obviously_incomplete_evidence(a.get('evidence') or '') for a in pair):
@@ -2211,6 +2231,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
                     if not isinstance(cp,dict) or type(cp.get('cluster_id')) is not int or not 0<=cp['cluster_id']<len(clusters): continue
                     row=_r68_build_composed_relation(cp,clusters[cp['cluster_id']])
                     if not row: continue
+                    if tuple(sorted(map(int,row.get('anchor_ids') or []))) in forbidden_anchor_pairs: continue
                     pair=tuple(row.get('anchor_ids') or [])
                     if pair in used_pairs: continue
                     if preferred_types and row.get('contract_type') not in preferred_types: continue
@@ -2235,7 +2256,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     if api_key and not selector_completed:
         diag['selector_technical_failure']=True
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R68_COVERAGE_AWARE_PAIR_PLUS_MULTI_ANCHOR_NO_REJECTED_FALLBACK'
+    diag['selection_strategy']='R69_EXTRACTIVE_RESULT_DIVERSITY_NO_REJECTED_FALLBACK'
 
     seen=set()
     for r in selected:
@@ -2261,9 +2282,9 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
 
 
 # Override pool synthesis: relation selector -> actual-exam guided writer -> Python hard gate. No low-quality deterministic fallback.
-def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None,preferred_types=None):
+def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None,preferred_types=None,forbidden_anchor_pairs=None):
     size=int(pool_size or (4 if need<=1 else 6))
-    bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size,preferred_types=preferred_types)
+    bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size,preferred_types=preferred_types,forbidden_anchor_pairs=forbidden_anchor_pairs)
     out=GenerationPool(diagnostics=getattr(bundles,'diagnostics',None));diag=out.diagnostics
     if not bundles:return out
     from openai import OpenAI

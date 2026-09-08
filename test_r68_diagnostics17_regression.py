@@ -91,7 +91,7 @@ class R68Diagnostics17Regression(unittest.TestCase):
         if self.diag is None: self.skipTest('diagnostics17 not available')
         existing=self.diag['contracts']
         calls=[]
-        def fake_pool(key,model,db,domain,need,pool_size=None,preferred_types=None):
+        def fake_pool(key,model,db,domain,need,pool_size=None,preferred_types=None,forbidden_anchor_pairs=None):
             calls.append((domain,need,tuple(preferred_types or [])))
             return cc.GenerationPool()
         with patch.object(cc,'synthesize_r59_pool',side_effect=fake_pool):
@@ -103,7 +103,7 @@ class R68Diagnostics17Regression(unittest.TestCase):
         self.assertNotIn('criterion_conflict_resolution',calls[0][2])
 
     def test_versions_are_r68(self):
-        self.assertEqual(eb.BUILDER_API_VERSION,'ACTUAL-EXAM-TRANSFER-R68-20260907')
+        self.assertEqual(eb.BUILDER_API_VERSION,'ACTUAL-EXAM-TRANSFER-R69-20260907')
 
 
 if __name__=='__main__':
