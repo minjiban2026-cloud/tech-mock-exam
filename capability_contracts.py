@@ -1492,16 +1492,21 @@ def r59_contract_to_question(c):
 def _r59_prompt(domain,bundles,official):
     payload=[]
     for i,b in enumerate(bundles):
-        payload.append({'bundle_id':i,'selector_relation':b.get('selector_relation'),'provisional_source_plan':b.get('source_plan'),'anchors':b.get('anchors')})
+        anchors=[]
+        for a in (b.get('anchors') or []):
+            aa=copy.deepcopy(a); aa['allowed_results']=_r71_atomic_result_candidates(a); anchors.append(aa)
+        payload.append({'bundle_id':i,'selector_relation':b.get('selector_relation'),'provisional_source_plan':b.get('source_plan'),'anchors':anchors})
     return f"""대한민국 중등 기술 임용 4점 문항의 자료 구성 Writer다. 영역: {domain}
 실제 기출 구조 참고(기술 사실/정답 복사 금지): {json.dumps(official,ensure_ascii=False)[:5200]}
 검증된 SOURCE PACKET: {json.dumps(payload,ensure_ascii=False)}
-R70에서는 provisional_source_plan의 두 제목을 그대로 정답으로 쓸 의무가 없다. 각 bundle anchors 안에서 실제 채점할 서로 다른 두 anchor를 고르고, 각 evidence 안에 문자 그대로 존재하는 80자 이하의 짧은 결과/조건/오차/효과/명칭을 task1_result/task2_result로 선택한다. 동의어·요약·새 기술 사실은 금지하며 Python이 exact substring을 재검사한다.
+R71에서는 각 anchor의 allowed_results가 Python이 미리 검증한 채점 가능한 exact source fragment다. task1_result/task2_result는 반드시 선택한 anchor의 allowed_results 중 하나를 글자 그대로 복사한다. allowed_results 밖 문자열, 동의어, 요약, 임의 부분문자열은 금지한다. 가능하면 broad heading/항목명보다 실제 조건·결과·오차·효과·범위·절차를 나타내는 concrete allowed_result를 우선한다.
 자유도는 시험 상황 구성에만 있다. 학생 오판, 관찰 순서, 조건 변화, 비교 대상 배치는 새로 구성할 수 있지만 source에 없는 작동 원리·효과·수치·법칙·재료 특성·장치 기능을 기술 사실처럼 추가하지 않는다. source에 없는 숫자를 판단 근거로 발명하지 않는다.
 ①은 source의 둘 이상의 단서를 조합해 잘못 적용된 기준/결과를 판정하고, ②는 ① 결과를 필수 입력으로 사용해 조건이 달라진 상황을 판단한다. ① 없이 ②가 독립적으로 풀리면 안 된다. 두 문항 모두 정의→명칭 찾기가 되면 안 되고 최소 한 문항은 조건 비교/원인 진단/절차 교정/관계·수치 적용/범위 변화 중 하나를 수행한다.
-정답/result phrase를 공개 지문에 그대로 쓰지 않는다. source 안의 경쟁 단서 또는 조건 차이를 함께 배치한다. task1_anchor_id/task2_anchor_id는 packet에 실제 존재하고 서로 달라야 한다. dependency_reason에는 왜 ①의 결과가 ②에 필수인지 구체적으로 쓴다. 근거를 요구하면 선택한 evidence가 실제 채점 가능해야 한다. binding quote 12자 이상 연속 복사, 원자료에 없는 번호/보기/표 항목 발명은 금지한다. clues는 비운다. 충분한 비회상형 문항을 만들 수 없으면 omissions로 보낸다.
+정답/result phrase뿐 아니라 그 핵심 토큰을 공개 지문이나 task에서 사실상 재진술하지 않는다. 특히 'X가 잘못되었다/틀렸다/오류다'처럼 ① 또는 ②의 판정을 자료가 미리 확정하는 문장을 쓰지 않는다. 학생은 하나의 주장을 해야 하지만, 그 주장이 틀렸다는 평가는 수험생이 내려야 한다. 추가 상황에도 정답 판정이나 정답 범주를 미리 선언하지 않는다.
+4점 난도를 위해 최소 한 소문항은 두 source 사실의 비교, 수치/범위 적용, 조건 변화, 원인-결과 연결, 절차 선택 중 하나를 실제로 수행해야 한다. 단순히 source 문장을 다른 말로 바꾸거나 두 명칭을 각각 찾는 구조는 omissions로 보낸다.
+정답/result phrase를 공개 지문에 그대로 쓰지 않는다. source 안의 경쟁 단서 또는 조건 차이를 함께 배치한다. task1_anchor_id/task2_anchor_id는 packet에 실제 존재하고 서로 달라야 한다. dependency_reason에는 왜 ①의 결과가 ②에 필수인지 구체적으로 쓴다. 근거를 요구하면 선택한 evidence가 실제 채점 가능해야 한다. binding quote 12자 이상 연속 복사, 원자료에 없는 번호/보기/표 항목 발명은 금지한다. clues는 비운다. 각 bundle에서 서로 다른 scored anchor pair/result 조합으로 고품질 후보를 만들 수 있으면 variant_id 0,1로 최대 2개까지 출력한다. 같은 pair/result의 말바꾸기 변형은 금지한다. 충분한 비회상형 문항을 만들 수 없으면 omissions로 보낸다.
 JSON 객체만 출력:
-{{"contracts":[{{"bundle_id":0,"topic":"문항 주제","clues":[],"task1_anchor_id":123,"task1_result":"evidence의 정확한 짧은 문자열","task2_anchor_id":124,"task2_result":"evidence의 정확한 짧은 문자열","dependency_reason":"①에서 확정한 기준을 적용해야 ②의 바뀐 조건을 판정할 수 있다.","student_claim":"검토할 학생 판단","transfer_case":"① 결과를 사용해야 하는 후속 상황","tasks":["① 판단·결과·근거 요구","② ① 결과를 사용하는 후속 판단·근거 요구"],"reasoning_chain":["자료 분석","중간 판단","후속 적용"],"task2_uses_task1":true}}],"omissions":[{{"bundle_id":0,"reason":"작성 불가 이유"}}]}}
+{{"contracts":[{{"bundle_id":0,"variant_id":0,"topic":"문항 주제","clues":[],"task1_anchor_id":123,"task1_result":"evidence의 정확한 짧은 문자열","task2_anchor_id":124,"task2_result":"evidence의 정확한 짧은 문자열","dependency_reason":"①에서 확정한 기준을 적용해야 ②의 바뀐 조건을 판정할 수 있다.","student_claim":"검토할 학생 판단","transfer_case":"① 결과를 사용해야 하는 후속 상황","tasks":["① 판단·결과·근거 요구","② ① 결과를 사용하는 후속 판단·근거 요구"],"reasoning_chain":["자료 분석","중간 판단","후속 적용"],"task2_uses_task1":true}}],"omissions":[{{"bundle_id":0,"reason":"작성 불가 이유"}}]}}
 """
 
 
@@ -2013,8 +2018,53 @@ def _r68_build_composed_relation(plan, cluster):
             'relation_type':rtype,'contract_type':typ,'source_plan':source_plan,'fixed_answers':val['answers'],
             'master_relation':'R68 semantic multi-anchor composed relation','selector_support_anchors':support,'semantic_assessment':assessment}
 
+
+
+def _r71_atomic_result_candidates(anchor, limit=10):
+    """Return conservative, exact source-substring scoring candidates for Writer.
+
+    R71 moves result extraction to Python so Writer chooses from vetted atomic
+    source facts rather than inventing arbitrary substrings.  Every returned
+    candidate is an exact substring of evidence (or the exact complete anchor
+    answer when that answer itself occurs in evidence).
+    """
+    if not isinstance(anchor,dict): return []
+    ev=_clean(anchor.get('evidence')); ans=_clean(anchor.get('answer'))
+    if not ev or _obviously_incomplete_evidence(ev): return []
+    raw=[]
+    # Keep source-contiguous clauses only; no paraphrase or recombination.
+    pieces=[_clean(x).strip(' ·-:;()[]') for x in re.split(r'[\n•▶■□★※]|(?<=[.!?])\s+|\s+-\s+',ev)]
+    for part in pieces:
+        if not part: continue
+        # RHS of a definition/list line is often the most useful concrete result.
+        if ':' in part:
+            rhs=_clean(part.split(':',1)[1]).strip(' ·-:;')
+            if rhs: raw.append(rhs)
+        raw.append(part)
+        # Exact comma-separated subclauses are useful atomic conditions/effects.
+        for sub in re.split(r'[;]',part):
+            sub=_clean(sub).strip(' ·-:;')
+            if sub: raw.append(sub)
+    if ans and not _obviously_incomplete_answer(ans) and not _r64_fragment_answer(ans) and _norm(ans) in _norm(ev):
+        raw.append(ans)
+    out=[]; seen=set()
+    generic={'정의','특징','종류','기준','방법','과정','절차','관계','비교','결과','원인','효과','조건','분류'}
+    for x in raw:
+        x=_clean(x).strip(' ·-:;')
+        nx=_norm(x)
+        if not (2<=len(nx)<=80): continue
+        if nx in generic: continue
+        if _r64_fragment_answer(x) or _obviously_incomplete_answer(x): continue
+        if nx not in _norm(ev): continue
+        # Avoid whole long evidence sentences; Writer needs a scoreable result.
+        if len(x)>72: continue
+        if nx in seen: continue
+        seen.add(nx); out.append(x)
+        if len(out)>=limit: break
+    return out
+
 def _r70_assessment_pass(row):
-    """R70: selector certifies source-packet usability, not final item quality."""
+    """R71: selector certifies source-packet usability, not final item quality."""
     if not isinstance(row,dict): return False
     if row.get('selection_stage')=='SOURCE_PACKET':
         try:
@@ -2035,7 +2085,10 @@ def _r70_rebuild_plan_from_writer(raw_c,bundle,forbidden_anchor_pairs=None):
     if tuple(sorted((a1,a2))) in forbidden: return None
     first,second=amap[a1],amap[a2]
     if any(_obviously_incomplete_evidence(a.get('evidence')) or _obviously_incomplete_answer(a.get('answer')) or _r64_fragment_answer(a.get('answer')) for a in (first,second)): return None
-    r1=_r69_exact_result(raw_c.get('task1_result'),first); r2=_r69_exact_result(raw_c.get('task2_result'),second)
+    allowed1=_r71_atomic_result_candidates(first); allowed2=_r71_atomic_result_candidates(second)
+    want1=_norm(raw_c.get('task1_result')); want2=_norm(raw_c.get('task2_result'))
+    r1=next((x for x in allowed1 if _norm(x)==want1),None)
+    r2=next((x for x in allowed2 if _norm(x)==want2),None)
     if not r1 or not r2 or _norm(r1)==_norm(r2): return None
     fev=_clean(first.get('evidence')); sev=_clean(second.get('evidence')); dep=_clean(raw_c.get('dependency_reason'))
     if len(_norm(dep))<12: dep='①에서 판별한 기준 또는 결과를 사용해야 ②의 조건 변화에 따른 판단을 결정할 수 있다.'
@@ -2056,10 +2109,10 @@ def _r67_selector_prompt(domain,candidates,wanted,preferred_types=None,clusters=
     payload=[]
     for i,r in enumerate(candidates):
         pair=r.get('anchors') or []
-        payload.append({'candidate_id':i,'relation_type':r.get('relation_type'),'contract_type':r.get('contract_type'),'reasoning_viability':r.get('reasoning_viability'),'operation_score':r.get('operation_score'),'page_span':r.get('page_span'),'anchors':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))} for a in pair],'support_context':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence'))} for a in (r.get('selector_support_anchors') or [])]})
+        payload.append({'candidate_id':i,'relation_type':r.get('relation_type'),'contract_type':r.get('contract_type'),'reasoning_viability':r.get('reasoning_viability'),'operation_score':r.get('operation_score'),'page_span':r.get('page_span'),'anchors':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence')),'allowed_results':_r71_atomic_result_candidates(a)} for a in pair],'support_context':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence')),'allowed_results':_r71_atomic_result_candidates(a)} for a in (r.get('selector_support_anchors') or [])]})
     cluster_payload=[]
     for ci,c in enumerate(clusters or []):
-        cluster_payload.append({'cluster_id':ci,'anchors':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence')),'page_no':a.get('page_no')} for a in c.get('anchors',[])]})
+        cluster_payload.append({'cluster_id':ci,'anchors':[{'id':a.get('id'),'answer':_clean(a.get('answer')),'topic':_clean(a.get('topic')),'evidence':_clean(a.get('evidence')),'page_no':a.get('page_no'),'allowed_results':_r71_atomic_result_candidates(a)} for a in c.get('anchors',[])]})
     preferred_types=list(preferred_types or R59_ALLOWED_TYPES)
     return f"""중등 기술 임용 문항 생성을 위한 SOURCE PACKET 선별자다. 영역: {domain}
 너는 최종 4점 문항의 난도/완성도를 인증하는 Judge가 아니다. 여기서는 원자료 안에 안전하게 재구성할 수 있는 기술 사실이 충분한지만 판정한다.
@@ -2090,7 +2143,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     out=GenerationPool(); diag=out.diagnostics
     anchors,candidates=_r60_python_relation_candidates(db_path,domain,limit=180,max_candidates=max(48,wanted*12))
     diag['retrieved_anchors']=len(anchors)
-    diag['selector_diagnostic_version']='R70-SOURCE-PACKET-SEPARATED-CERTIFICATION-1'
+    diag['selector_diagnostic_version']='R71-ATOMIC-RESULT-ADAPTIVE-CERTIFICATION-1'
     forbidden_anchor_pairs={tuple(sorted(map(int,x))) for x in (forbidden_anchor_pairs or []) if isinstance(x,(list,tuple,set)) and len(x)>=2}
     diag['preferred_contract_types']=list(preferred_types or R59_ALLOWED_TYPES)
     diag['selector_model']=model if api_key else 'PYTHON_FALLBACK_NO_KEY'
@@ -2213,7 +2266,7 @@ def _r59_select_bundles(api_key,model,db_path,domain,wanted=6,preferred_types=No
     if api_key and not selector_completed:
         diag['selector_technical_failure']=True
     diag['selector_returned']=len(selected)
-    diag['selection_strategy']='R70_SOURCE_PACKET_THEN_WRITER_CONSTRUCTION'
+    diag['selection_strategy']='R71_SOURCE_PACKET_ATOMIC_RESULT_THEN_WRITER'
 
     seen=set()
     for r in selected:
@@ -2243,8 +2296,8 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None,preferr
     size=int(pool_size or (4 if need<=1 else 6))
     bundles=_r59_select_bundles(api_key,model,db_path,domain,wanted=size,preferred_types=preferred_types,forbidden_anchor_pairs=forbidden_anchor_pairs)
     out=GenerationPool(diagnostics=getattr(bundles,'diagnostics',None));diag=out.diagnostics
-    diag['architecture']='R70_SOURCE_FACT_CERTIFICATION__WRITER_PUBLIC_FORM__JUDGE_INSTANCE'
-    diag['writer_result_ownership']='EXACT_SOURCE_FRAGMENT_ONLY'
+    diag['architecture']='R71_SOURCE_FACT__ATOMIC_RESULT__WRITER_INSTANCE__JUDGE'
+    diag['writer_result_ownership']='PYTHON_ATOMIC_SOURCE_CANDIDATE_ONLY'
     diag['contract_type_ownership']='COVERAGE_TARGET_NOT_PYTHON_MINER_LABEL'
     if not bundles:return out
     from openai import OpenAI
@@ -2270,24 +2323,30 @@ def synthesize_r59_pool(api_key,model,db_path,domain,need,pool_size=None,preferr
         if isinstance(omissions,list):diag['omissions'].extend(copy.deepcopy(omissions[:6]))
         diag['writer_returned']+=len(arr)
         if not arr:_generation_reject(diag,'writer',['NO_QUESTION_WRITTEN'])
-        seen=set()
+        seen=set(); per_bundle_count={}
         for raw_c in arr:
             if not isinstance(raw_c,dict):
                 _generation_reject(diag,'writer_schema',['BAD_CONTRACT_OBJECT']);continue
             bi=raw_c.get('bundle_id')
-            if type(bi) is not int or not 0<=bi<len(chunk) or bi in seen:
-                _generation_reject(diag,'writer_schema',['INVALID_OR_DUPLICATE_BUNDLE_ID'],raw_c);continue
-            seen.add(bi);b=chunk[bi]
+            if type(bi) is not int or not 0<=bi<len(chunk):
+                _generation_reject(diag,'writer_schema',['INVALID_BUNDLE_ID'],raw_c);continue
+            if per_bundle_count.get(bi,0)>=2:
+                _generation_reject(diag,'writer_schema',['TOO_MANY_VARIANTS_FOR_BUNDLE'],raw_c);continue
+            b=chunk[bi]
             rebuilt=_r70_rebuild_plan_from_writer(raw_c,b,forbidden_anchor_pairs=forbidden_anchor_pairs)
             if not rebuilt:
-                _generation_reject(diag,'writer_source_plan',['R70_WRITER_RESULT_NOT_EXACT_SOURCE_OR_FORBIDDEN_PAIR'],raw_c);continue
+                _generation_reject(diag,'writer_source_plan',['R71_WRITER_RESULT_NOT_ATOMIC_SOURCE_OR_FORBIDDEN_PAIR'],raw_c);continue
+            sig=(bi,tuple(sorted(rebuilt['anchor_ids'])),tuple(_norm(x.split('\n',1)[0]) for x in rebuilt['fixed_answers']))
+            if sig in seen:
+                _generation_reject(diag,'writer_schema',['DUPLICATE_VARIANT'],raw_c);continue
+            seen.add(sig); per_bundle_count[bi]=per_bundle_count.get(bi,0)+1
             c=copy.deepcopy(raw_c); sr=copy.deepcopy(b['selector_relation'])
             sr['anchor_ids']=list(rebuilt['anchor_ids']); sr['source_plan']=copy.deepcopy(rebuilt['source_plan']); sr['relation_type']=rebuilt['relation_type']
             sr['source_packet_anchor_ids']=[int(a['id']) for a in b.get('anchors',[]) if type(a.get('id')) is int]
             c.update(domain=domain,cited_anchor_ids=[a['id'] for a in b['anchors']],source_plan=copy.deepcopy(rebuilt['source_plan']),
                      exact_answers=copy.deepcopy(rebuilt['fixed_answers']),selector_relation=sr,contract_type=b['contract_type'],
                      status='R59_RAW',schema_version=R59_SCHEMA_VERSION,public_clues=False)
-            for k in ('task1_anchor_id','task1_result','task2_anchor_id','task2_result','dependency_reason'): c.pop(k,None)
+            for k in ('task1_anchor_id','task1_result','task2_anchor_id','task2_result','dependency_reason','variant_id'): c.pop(k,None)
             # Grounding ownership belongs to Python.  Discard Writer-authored clues
             # and derive them only from exact source_plan bindings.
             c['clues']=[]
@@ -2380,7 +2439,17 @@ def r59_prejudge_errors(c,q):
     # "...로 판단하였다" sentence.  Python should require a real judgment act,
     # while Judge remains responsible for deciding whether that judgment is truly
     # wrong and sufficiently demanding.
-    claim=_clean(c.get('student_claim'))
+    claim=_clean(c.get('student_claim')); transfer=_clean(c.get('transfer_case'))
+    # R71: the material may contain a student's claim, but must not itself reveal
+    # the evaluator's verdict. Diagnostics20 had Judge rejects where the transfer
+    # case explicitly said a sign treatment was wrong before asking the candidate.
+    if re.search(r'(?:잘못되었|틀렸|오류(?:이다|임)|옳지\s*않|부적절하)', transfer):
+        errors.append('R71_TRANSFER_PREDECIDES_VERDICT')
+    # Require an actual transformation/application operation somewhere in the two
+    # scored tasks; pure parallel identification remains a low-value 4-point form.
+    task_text=' '.join(q.get('tasks') or [])
+    if not re.search(r'비교|적용|변화|바뀌|달라|수정|개선|계산|산출|순서|원인|결과|범위|초과|미만|이상|이하|조건', task_text):
+        errors.append('R71_NO_REAL_APPLICATION_OPERATION')
     judgment_markers=r'판단|판정|주장|분류|기록|결론|해석|보았다|간주|해당|충분|옳|타당|적절|잘못|오류|아니|않'
     if not claim or not re.search(judgment_markers,claim):
         errors.append('CLAIM_LACKS_JUDGMENT')

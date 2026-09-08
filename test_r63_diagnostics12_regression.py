@@ -18,7 +18,7 @@ class R63Diagnostics12Regression(unittest.TestCase):
         for domain in domains:
             pool=_r59_select_bundles('','',DB,domain,wanted=4)
             self.assertEqual(pool.diagnostics.get('selector_calls'),0)
-            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R70_SOURCE_PACKET_THEN_WRITER_CONSTRUCTION')
+            self.assertEqual(pool.diagnostics.get('selection_strategy'),'R71_SOURCE_PACKET_ATOMIC_RESULT_THEN_WRITER')
             for b in pool:
                 rel=b['selector_relation']
                 self.assertGreater(rel['operation_score'],-25,(domain,rel))

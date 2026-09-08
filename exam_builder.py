@@ -4738,6 +4738,13 @@ certify_r57_missing_slots = certify_r58_missing_slots
 
 # ========================= R59 actual-exam transfer certification =========================
 def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',judge_model=None,domains=None,seed=None):
+    """R71 incremental certification with one bounded diversity retry.
+
+    Existing clean Judge-PASS coverage is never regenerated.  A missing domain gets
+    one normal generation round and, only when coverage is still missing, one
+    diversity retry that forbids every scored anchor pair already persisted or
+    attempted in the first round.  Only real Judge PASS is persisted.
+    """
     from capability_contracts import combined_coverage_inventory, synthesize_r59_pool, validate_r59_contract, r59_contract_to_question, r59_prejudge_errors
     from certification_state import attach_receipt, review_passes, upsert_contracts
     if domains is None: domains=list(DEFAULT_DOMAINS)
@@ -4745,61 +4752,111 @@ def certify_r59_missing_slots(db_path,contracts,api_key,model='gpt-5.6-luna',jud
     if not domains or any(d not in DOMAINS for d in domains): raise ValueError('유효한 출제 영역을 선택하세요.')
     if not api_key: raise ValueError('R59 인증에는 API key가 필요합니다.')
     existing=copy.deepcopy(list(contracts or [])); jm=judge_model or model; style=official_style_profile(db_path)
-    # Only historical certified + R59 AI verified count. Older Python-only contracts never count.
     before=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)
     logs=[]; reviews=[]; accepted=[]
+
+    def pair_sig(contract):
+        ids=((contract.get('selector_relation') or {}).get('anchor_ids') or contract.get('cited_anchor_ids') or [])
+        ids=[x for x in ids if type(x) is int][:2]
+        return tuple(sorted(ids)) if len(ids)>=2 else None
+
+    def merge_generation(total,row):
+        if not total:
+            total=copy.deepcopy(row or {})
+            total['rounds']=[]
+        r=copy.deepcopy(row or {})
+        total['rounds'].append(r)
+        for k in ('selector_calls','selector_returned','selector_accepted','writer_calls','writer_returned','python_rejected','python_validated'):
+            if len(total['rounds'])==1:
+                total[k]=int(r.get(k,0) or 0)
+            else:
+                total[k]=int(total.get(k,0) or 0)+int(r.get(k,0) or 0)
+        if len(total['rounds'])>1:
+            fc=total.setdefault('failure_counts',{})
+            for k,v in (r.get('failure_counts') or {}).items(): fc[k]=int(fc.get(k,0) or 0)+int(v or 0)
+            total.setdefault('rejections',[]).extend(copy.deepcopy(r.get('rejections') or []))
+            total.setdefault('omissions',[]).extend(copy.deepcopy(r.get('omissions') or []))
+        total['adaptive_rounds_used']=len(total['rounds'])
+        return total
+
     for d in domains:
         inv=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)
         need=int(inv['domains'][d].get('missing',0))
         if need<=0:
             logs.append({'domain':d,'need_before':0,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'skipped':'already_verified'}); continue
-        try:
-            preferred_types=[t for t in ('contrastive_error_transfer','criterion_conflict_resolution') if t not in set(inv['domains'][d].get('r59_ai_verified_contract_types',[]) or [])]
-            # R70: never spend another selector/Writer/Judge attempt on a scored
-            # anchor pair already present in persisted history, even when that old
-            # contract is quarantined or merely a different wording of the same pair.
-            used_pairs=[]
-            for ec in existing:
-                if ec.get('domain')!=d: continue
-                ids=((ec.get('selector_relation') or {}).get('anchor_ids') or ec.get('cited_anchor_ids') or [])
-                ids=[x for x in ids if type(x) is int][:2]
-                if len(ids)>=2: used_pairs.append(tuple(sorted(ids)))
-            pool=synthesize_r59_pool(api_key,model,db_path,d,need,pool_size=(4 if need==1 else 6),preferred_types=preferred_types,forbidden_anchor_pairs=used_pairs)
-        except Exception as ex:
-            logs.append({'domain':d,'need_before':need,'pool_constructed':0,'python_validated':0,'judge_tested':0,'judge_pass':0,'accepted':0,'missing_after':need,'generation_error':str(ex)})
-            continue
-        if seed is not None: random.Random(str(seed)+':'+d).shuffle(pool)
-        generation=copy.deepcopy(getattr(pool,'diagnostics',{}))
-        pre_judge_rejections=[]
+        initial_need=need
+        persisted_pairs={p for p in (pair_sig(ec) for ec in existing if ec.get('domain')==d) if p}
+        attempted_pairs=set(); generation_total={}; pre_judge_rejections=[]
         tested=passed=kept=validated=0
-        for c in pool:
-            ok,validation=validate_r59_contract(db_path,d,c)
-            if not ok: continue
-            validated+=1
-            c=copy.deepcopy(c); c['validation']=validation
-            q=r59_contract_to_question(c)
-            errors=r59_prejudge_errors(c,q)
-            if errors:
-                pre_judge_rejections.append({'contract_id':c.get('contract_id'),'errors':errors,'question':copy.deepcopy(q)})
-                continue
-            tested+=1
-            try: rv=judge_question(api_key,jm,q,q.get('source_context_override',''),style)
-            except Exception as ex: rv={'pass':False,'reason':'Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
-            if rv.get('pass') is True and not review_passes(rv):
-                rv=dict(rv, **{'pass':False,'fatal_flags':['INVALID_JUDGE_EVIDENCE'],'reason':'Judge PASS evidence is incomplete or below threshold'})
-            sig=_coverage_failure_signals(rv,q)
-            reviews.append({'domain':d,'contract_type':c.get('contract_type'),'topic':c.get('topic'),'pass':rv.get('pass'),'reason':rv.get('reason',''),'scores':rv.get('scores',{}),'fatal_flags':rv.get('fatal_flags',[]),'failure_signals':sig,'question':copy.deepcopy(q),'judge_review':copy.deepcopy(rv),'contract_id':c.get('contract_id')})
-            if review_passes(rv):
-                passed+=1; cc=copy.deepcopy(c); cc['status']='R59_AI_VERIFIED'; cc['ai_quality']=copy.deepcopy(rv); cc['judge_model']=jm
-                attach_receipt(cc)
-                existing=upsert_contracts(existing,[cc])
-                accepted.append(cc); kept+=1
-                if combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing']<=0: break
-        logs.append({'domain':d,'need_before':need,'pool_constructed':generation.get('writer_returned',len(pool)),'python_validated':validated,'judge_tested':tested,'judge_pass':passed,'accepted':kept,'missing_after':combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing'],'accepted_types':[x.get('contract_type') for x in accepted if x.get('domain')==d],'generation':generation,'pre_judge_rejections':pre_judge_rejections})
+
+        for round_idx in range(2):
+            current_inv=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)
+            current_need=int(current_inv['domains'][d].get('missing',0))
+            if current_need<=0: break
+            preferred_types=[t for t in ('contrastive_error_transfer','criterion_conflict_resolution') if t not in set(current_inv['domains'][d].get('r59_ai_verified_contract_types',[]) or [])]
+            forbidden=sorted(persisted_pairs|attempted_pairs)
+            try:
+                pool=synthesize_r59_pool(api_key,model,db_path,d,current_need,
+                                         pool_size=((4 if current_need==1 else 6) if round_idx==0 else (3 if current_need==1 else 4)),
+                                         preferred_types=preferred_types,forbidden_anchor_pairs=forbidden)
+            except Exception as ex:
+                generation_total=merge_generation(generation_total,{'round_index':round_idx+1,'generation_error':str(ex)})
+                break
+            if seed is not None: random.Random(str(seed)+':'+d+':'+str(round_idx)).shuffle(pool)
+            gd=copy.deepcopy(getattr(pool,'diagnostics',{})); gd['round_index']=round_idx+1; gd['forbidden_pair_count']=len(forbidden)
+            generation_total=merge_generation(generation_total,gd)
+
+            round_judge_tested=0
+            for c in pool:
+                ps=pair_sig(c)
+                if ps: attempted_pairs.add(ps)
+                ok,validation=validate_r59_contract(db_path,d,c)
+                if not ok: continue
+                validated+=1
+                c=copy.deepcopy(c); c['validation']=validation
+                q=r59_contract_to_question(c)
+                errors=r59_prejudge_errors(c,q)
+                if errors:
+                    pre_judge_rejections.append({'round':round_idx+1,'contract_id':c.get('contract_id'),'errors':errors,'question':copy.deepcopy(q)})
+                    continue
+                tested+=1; round_judge_tested+=1
+                try: rv=judge_question(api_key,jm,q,q.get('source_context_override',''),style)
+                except Exception as ex: rv={'pass':False,'reason':'Judge 호출 실패: '+str(ex),'fatal_flags':['JUDGE_CALL_ERROR'],'scores':{}}
+                if rv.get('pass') is True and not review_passes(rv):
+                    rv=dict(rv, **{'pass':False,'fatal_flags':['INVALID_JUDGE_EVIDENCE'],'reason':'Judge PASS evidence is incomplete or below threshold'})
+                sig=_coverage_failure_signals(rv,q)
+                reviews.append({'domain':d,'round':round_idx+1,'contract_type':c.get('contract_type'),'topic':c.get('topic'),'pass':rv.get('pass'),'reason':rv.get('reason',''),'scores':rv.get('scores',{}),'fatal_flags':rv.get('fatal_flags',[]),'failure_signals':sig,'question':copy.deepcopy(q),'judge_review':copy.deepcopy(rv),'contract_id':c.get('contract_id')})
+                if review_passes(rv):
+                    passed+=1; cc=copy.deepcopy(c); cc['status']='R59_AI_VERIFIED'; cc['ai_quality']=copy.deepcopy(rv); cc['judge_model']=jm
+                    attach_receipt(cc)
+                    existing=upsert_contracts(existing,[cc])
+                    accepted.append(cc); kept+=1
+                    p=pair_sig(cc)
+                    if p: persisted_pairs.add(p)
+                    inv_now=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]
+                    if inv_now['missing']<=0: break
+                    # If this PASS filled the current R59 type but another slot/type
+                    # is still missing, stop judging same-type siblings and let the
+                    # diversity round target the newly missing type instead.
+                    if c.get('contract_type') in set(inv_now.get('r59_ai_verified_contract_types',[]) or []):
+                        remaining=[t for t in ('contrastive_error_transfer','criterion_conflict_resolution') if t not in set(inv_now.get('r59_ai_verified_contract_types',[]) or [])]
+                        if remaining: break
+            # R71 bounded retry: run round 2 only while still missing.  It uses new
+            # pairs, so even a round with zero Judge-tested candidates can recover
+            # from Python/public-form rejection without looping the same source.
+            if combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing']<=0: break
+
+        logs.append({'domain':d,'need_before':initial_need,
+                     'pool_constructed':generation_total.get('writer_returned',0),'python_validated':validated,
+                     'judge_tested':tested,'judge_pass':passed,'accepted':kept,
+                     'missing_after':combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS)['domains'][d]['missing'],
+                     'accepted_types':[x.get('contract_type') for x in accepted if x.get('domain')==d],
+                     'generation':generation_total,'pre_judge_rejections':pre_judge_rejections,
+                     'attempted_pair_count':len(attempted_pairs)})
     after=combined_coverage_inventory(db_path,existing,domains,FORMULA_DOMAINS); fc={}
     for r in reviews:
         if r.get('pass') is False:
             for z in r.get('failure_signals',[]): fc[z]=fc.get(z,0)+1
-    return {'mode':'R70_SOURCE_FACT_INSTANCE_SEPARATED_GATE','builder_api_version':'ACTUAL-EXAM-TRANSFER-R70-20260908','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
+    return {'mode':'R71_ATOMIC_RESULT_ADAPTIVE_INSTANCE_GATE','builder_api_version':'ACTUAL-EXAM-TRANSFER-R71-20260908','contracts':existing,'accepted_contracts':accepted,'before_inventory':before,'after_inventory':after,'domain_logs':logs,'reviews':reviews,'failure_class_counts':fc,'summary':{'before_verified':before.get('verified_slots',0),'after_verified':after.get('verified_slots',0),'target':after.get('target',18),'judge_tested':len(reviews),'judge_pass':sum(1 for x in reviews if x.get('pass') is True),'judge_reject':sum(1 for x in reviews if x.get('pass') is False),'coverage_ready':bool(after.get('all_domains_two'))}}
 
-BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R70-20260908'
+BUILDER_API_VERSION = 'ACTUAL-EXAM-TRANSFER-R71-20260908'

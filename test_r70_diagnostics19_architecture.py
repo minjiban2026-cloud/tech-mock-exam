@@ -26,8 +26,8 @@ def test_r70_source_packet_assessment_is_not_old_final_item_gate():
     assert not cc._r70_assessment_pass(row)
 
 def test_r70_writer_result_must_be_exact_source_and_pair_not_reused():
-    a1={'id':1,'answer':'기준 A','topic':'기준 A','evidence':'조건 X에서는 시준축 오차를 제거한다.'}
-    a2={'id':2,'answer':'기준 B','topic':'기준 B','evidence':'후속 절차에서는 관측자의 읽기 오차도 소거한다.'}
+    a1={'id':1,'answer':'시준축 오차','topic':'기준 A','evidence':'조건 X에서는 시준축 오차를 제거한다.'}
+    a2={'id':2,'answer':'관측자의 읽기 오차','topic':'기준 B','evidence':'후속 절차에서는 관측자의 읽기 오차도 소거한다.'}
     bundle={'anchors':[a1,a2],'contract_type':'contrastive_error_transfer','selector_relation':{'relation_type':'conditional_choice'}}
     raw={'task1_anchor_id':1,'task1_result':'시준축 오차','task2_anchor_id':2,'task2_result':'관측자의 읽기 오차',
          'dependency_reason':'①에서 확인한 소거 기준을 바탕으로 ②에서 추가되는 오차를 비교해야 한다.'}
@@ -42,7 +42,7 @@ def test_r70_prompt_separates_source_packet_from_final_quality():
     assert 'SOURCE PACKET' in text
     assert '완성된 ①→② dependency가 존재할 필요는 없다' in text
     w=cc._r59_prompt('제조기술',[],[])
-    assert 'task1_result' in w and 'exact substring' in w
+    assert 'task1_result' in w and 'allowed_results' in w
 
 def test_r70_version():
-    assert eb.BUILDER_API_VERSION=='ACTUAL-EXAM-TRANSFER-R70-20260908'
+    assert eb.BUILDER_API_VERSION=='ACTUAL-EXAM-TRANSFER-R71-20260908'
